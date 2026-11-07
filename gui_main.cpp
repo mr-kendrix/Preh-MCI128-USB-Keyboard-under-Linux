@@ -32,6 +32,7 @@
 #include <cstdlib>
 #include <cstring>
 #include "pmap.h"
+#include "upload.h"
 
 static const char *ROWS[] = {"H", "G", "F", "E", "D", "C", "B", "A"}; // top row first
 static const int ROWS_N[] = {15, 16, 13, 12, 12, 12, 16, 14};
@@ -205,6 +206,10 @@ static int parse_cell(const QString &spec) { // "H12" -> POSKey
 }
 
 static int gate_smoke(const Model &m) {
+    // LB5 gate: what one Upload click would push, plus the board probe
+    const auto frames = compile_frames(payload_of(m.pm, QString()));
+    std::printf("upload_frames=%zu board=%s\n", frames.size(),
+                device_present() ? "present" : transfer_error_message(device_last_status()));
     std::printf("%s name=%s maps=%d\n", grid_stats().toUtf8().constData(),
                 m.pm.name.toUtf8().constData(), (int)m.pm.maps.size());
     return 0;
@@ -281,8 +286,8 @@ public:
 int main(int argc, char **argv) {
     Model m;
     QStringList cells;
-    QString path, shot, setv, addv, out, mode;
-    bool del = false, have_set = false, have_add = false;
+    QString path, shot, setv, addv, out, mode, mwx;
+    bool del = false, have_set = false, have_add = false, up_arm = false;
     for (int i = 1; i < argc; ++i) {
         const QString a = argv[i];
         auto next = [&](QString &dst) { if (i + 1 < argc) dst = argv[++i]; };
@@ -296,6 +301,8 @@ int main(int argc, char **argv) {
         else if (a == "--set") { mode = "click"; next(setv); have_set = true; }
         else if (a == "--add") { mode = "click"; next(addv); have_add = true; }
         else if (a == "--del") { mode = "click"; del = true; }
+        else if (a == "--arm-upload") up_arm = true;
+        else if (a == "--mwx") next(mwx);
         else if (a == "--save") next(out);
         else if (!a.startsWith("--")) path = a;
     }
@@ -344,6 +351,9 @@ int main(int argc, char **argv) {
     QPushButton setbtn(QStringLiteral("Set"), &win);
     QPushButton delbtn(QStringLiteral("Layer lösch"), &win);
     QPushButton savebtn(QStringLiteral("Speich"), &win);
+    // LB5: button + QProgressDialog + mapped errors, one mount (upload.h)
+    UploadPanel upload(&win, &pm->pm, mwx,
+                       up_arm || getenv("PKT_UPLOAD_ARM") != nullptr);
 
     QString save_note;
     auto refresh = [&](bool saved) {
