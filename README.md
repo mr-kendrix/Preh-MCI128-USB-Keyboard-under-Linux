@@ -19,7 +19,20 @@ Install (AUR): see `PKGBUILD` — `makepkg -si` gives `/usr/bin/pkteditor`.
 - Serializer (LB4): `serialize_pmap()` writes vendor tags (`<POSKeyMapper><MAPPING><LAYOUT>`,
   mixed-case `<POSKey>/<Type>/<Value>/<Name>`) and hex-cp1252 POSKeys, so save→reload round-trips.
   The old form wrote `<POSKEY>` as raw 16-bit hex, which its own parser read back as POSKey 0.
-- Gate test: `./b/pktest <pmap> <mwx>` → `maps=32 name=MCI 128 frames=182`
+- Upload (LB5): `upload.h/cpp` = the loop — `compile_frames()` → one `device_send()` per code,
+  driven by a `QProgressDialog` (Cancel aborts, `LIBUSB_ERROR_*` mapped to human reasons in the
+  status line). Mountable in one line (`UploadPanel upload(&win, &pm->pm, mwx, up_arm);`), already
+  inside `gui_main.cpp`; `transport.h` adds `device_present()` (probe without writing),
+  `device_last_status()` and `transfer_error_message()`.
+  Gate: `./b/pktup <pmap> [mwx] [--upload] [--arm-upload] [--cancel-at N] [--map-table] [--fail-text] [--shot f.png]`
+  → `payload=1480 frames=182 first=04 armed=0 board=1`; unarmed run says
+  `Upload NOT ARMED — 182 frames compiled, nothing sent`, cancel run says
+  `upload cancelled at frame 8/182 — nothing was sent`. The board is **only** written with
+  `--arm-upload` (or `PKT_UPLOAD_ARM=1`), and `EF 12` (finalising) is never sent.
+- Endpoint probe fix (LB5): `find_control_ep` walked only interface 0's altsettings, so it never
+  saw iface 1 and always returned -1; it now walks all `bNumInterfaces` and falls back to the
+  HID-class descriptor the kernel hands back (`0x82` = report type 2 = OUT), verified on the
+  plugged MCI 3100 (`b/probe_if` → `iface=1 nEP=1 ep=0x82 attr=0x03`).`
 - Gate compiler: `./b/pktxc fixtures/uploads/pos_mci128.MWF out.mwx` → `byte-equal-fixture=True` (exit 0);
   C++ port of `pkt-linux-editor/src/pktxc.py` semantics (MWF POS ids, header-derived store bytes
   0x0004/0x0135/0x0136, SOUND quad 0x0124, RATE 0x0007) — training pair `fixtures/uploads/` is self-contained
