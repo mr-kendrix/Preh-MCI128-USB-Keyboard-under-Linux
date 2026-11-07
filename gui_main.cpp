@@ -167,7 +167,7 @@ static QString describe_cell(int poskey) {
     if (poskey < 1 || poskey > NROWS * SLOTS) return {};
     const int r = NROWS - 1 - (poskey - 1) / SLOTS;
     const int slot = (poskey - 1) % SLOTS + 1;
-    if (r < 0 || r >= NROWS || slot > ROWS_N[r]) return {};
+    if (r < 0 || r >= NROWS || slot < 1 || slot > SLOTS) return {};
     return QStringLiteral("%1%2").arg(ROWS[r]).arg(slot, 2, 10, QChar('0'));
 }
 
@@ -366,7 +366,8 @@ int main(int argc, char **argv) {
         const QString a = argv[i];
         auto next = [&](QString &dst) { if (i + 1 < argc) dst = argv[++i]; };
         if (a == "--smoke") mode = "smoke";
-        else if (a == "--shot") { mode = "shot"; next(shot); }
+        else if (a == "--clicktest") mode = "clicktest";
+        else if (a == "--shot") { next(shot); if (mode != "clicktest") mode = "shot"; }
         else if (a == "--cells") { QString v; next(v);
             // ';' separates cells when raw board coords are used (px:X,Y keeps
             // its own comma); otherwise plain ',' lists work as before.
@@ -441,9 +442,19 @@ int main(int argc, char **argv) {
                           del, out);
 
     // live window
-    QApplication app(argc, argv);
+    static char off1[] = "--platform";
+    static char off2[] = "offscreen";
+    static char *cargv[16];
+    for (int i = 0; i < argc && i < 13; ++i) cargv[i] = argv[i];
+    int cargc = qMin(argc, 13);
+    if (mode == "clicktest") {
+        cargv[cargc++] = off1;
+        cargv[cargc++] = off2;
+        cargv[cargc] = nullptr;
+    }
+    QApplication app(cargc, cargv);
     Model *pm = &m;
-    if (pm->sel < 0) pm->sel = 7 * 16 + 1;   // default A01 (row A, slot 1)
+    if (pm->sel < 0) pm->sel = 1;   // default A01 (bottom-left cap)
 
     QWidget win;
     win.setFixedSize(1180, 740);
@@ -546,6 +557,23 @@ int main(int argc, char **argv) {
     refresh(false);
     pm->notify = [&]() { refresh(false); };
     poll.start();
+    if (mode == "clicktest") {
+        const QPoint target(900, 300);   // board-local target (widget coords)
+        QMouseEvent ev(QEvent::MouseButtonPress, QPointF(target), QPointF(target),
+                       Qt::LeftButton, Qt::LeftButton, Qt::KeyboardModifiers());
+        board.mousePressEvent(&ev);      // direct handler call (Qt6 dropped QMeta GUI)
+        pm->cells = layout_cells(board.size());  // paintEvent not run in clicktest
+        board.mousePressEvent(&ev);
+        std::printf("clicktest sel=%d target=(900,300) cell=%s\n",
+                    pm->sel, describe_cell(pm->sel).toUtf8().constData());
+        const auto screens = QGuiApplication::screens();
+        if (!screens.isEmpty()) {
+            const QPixmap pm_img = screens.first()->grabWindow(0);
+            pm_img.save(shot.isEmpty() ? QStringLiteral("/tmp/wshot.png") : shot);
+            std::printf("shot saved %s\n", shot.isEmpty() ? "/tmp/wshot.png" : shot.toUtf8().constData());
+        }
+        return 0;
+    }
     win.show();
     return app.exec();
 }
