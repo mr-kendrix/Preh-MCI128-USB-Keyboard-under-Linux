@@ -458,8 +458,8 @@ int main(int argc, char **argv) {
     stat.move(10, 690);
     QPushButton addbtn(QStringLiteral("+ Layer"), &win);
     QPushButton setbtn(QStringLiteral("Set"), &win);
-    QPushButton delbtn(QStringLiteral("Layer lösch"), &win);
-    QPushButton savebtn(QStringLiteral("Speich"), &win);
+    QPushButton delbtn(QStringLiteral("Delete Layer"), &win);
+    QPushButton savebtn(QStringLiteral("Save"), &win);
     addbtn.move(260, 662);
     setbtn.move(384, 662);
     delbtn.move(508, 662);
