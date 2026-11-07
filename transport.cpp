@@ -1,8 +1,12 @@
 #include "transport.h"
 #include <libusb-1.0/libusb.h>
 #include <hidapi/hidapi.h>
+#include <hidapi/hidapi_libusb.h>
+#include <cstdlib>
 #include <vector>
 #include <cstring>
+#include <cstdio>
+#include <fcntl.h>
 #include <QFile>
 #include <QRegularExpression>
 
@@ -33,20 +37,59 @@ uint8_t expected_ack(size_t i) { return 0x20 | static_cast<uint8_t>((i + 1) & 3)
 static hid_device *board = nullptr;
 static int last_status = 0;
 
-static bool board_open_locked() {
-    if (!board) {
-        board = hid_open(0x053a, 0x0b01, nullptr);
-        if (!board) { last_status = LIBUSB_ERROR_NO_DEVICE; return false; }
+// resolve bus node path of 053a:0b01 via libusb, then wrap per interface exactly
+// like the proven python path (hid_libusb_wrap_sys_device(fd, iface)).
+static QString find_bus_path() {
+    if (const char *pp = getenv("PKT_HID_PATH"))
+        return pp;
+    static libusb_context *cx = nullptr;
+    if (!cx && libusb_init(&cx) < 0)
+        return QString();
+    libusb_device **devs = nullptr;
+    const int n = libusb_get_device_list(cx, &devs);
+    QString path;
+    for (int i = 0; i < n; ++i) {
+        libusb_device_descriptor d;
+        if (libusb_get_device_descriptor(devs[i], &d) < 0)
+            continue;
+        if (d.idVendor == 0x053a && d.idProduct == 0x0b01) {
+            const int bus = libusb_get_bus_number(devs[i]);
+            const int dev = libusb_get_device_address(devs[i]);
+            path = QStringLiteral("/dev/bus/usb/%1/%2")
+                       .arg(bus, 3, 10, QChar('0')).arg(dev, 3, 10, QChar('0'));
+            break;
+        }
     }
+    libusb_free_device_list(devs, 1);
+    return path;
+}
+
+static bool board_open_locked() {
+    if (board)
+        return true;
+    const QString p = find_bus_path();
+    if (p.isEmpty()) { last_status = LIBUSB_ERROR_NO_DEVICE; return false; }
+    const int fd = ::open(p.toUtf8().constData(), O_RDWR);
+    if (fd < 0) { last_status = LIBUSB_ERROR_ACCESS; return false; }
+    int iface = getenv("PKT_HID_IFACE") ? atoi(getenv("PKT_HID_IFACE")) : -1;
+    if (iface < 0) iface = 1;   // vendor interface of the combi keyboard
+    board = hid_libusb_wrap_sys_device(fd, iface);
+    if (!board) { last_status = LIBUSB_ERROR_NOT_FOUND; return false; }
     return true;
 }
 
+static int drain_one(int ms, std::vector<int> &out);
 static bool send_one(uint8_t code) {
     if (!board_open_locked()) return false;
     const unsigned char r[2] = {0x04, code};
-    const int rc = hid_write(board, r, 2);
-    if (rc != 0) { last_status = LIBUSB_ERROR_IO; return false; }
-    return true;
+    std::vector<int> junk;
+    for (int attempt = 0; attempt < 8; ++attempt) {
+        const int rc = hid_write(board, r, 2);
+        if (rc == 0 || rc == 2) return true;
+        drain_one(50, junk);   // board full: let its OUT queue drain
+    }
+    last_status = -1;
+    return false;
 }
 
 static int drain_one(int ms, std::vector<int> &out) {

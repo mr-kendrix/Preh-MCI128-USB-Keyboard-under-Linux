@@ -19,7 +19,7 @@ target_include_directories(pkteditor PRIVATE /usr/include/qt6/QtWidgets /usr/inc
 target_include_directories(pktup PRIVATE /usr/include/qt6/QtWidgets /usr/include/qt6/QtGui)
 
 find_library(USB_LIB NAMES usb-1.0)
-find_library(HID_LIB NAMES hidapi-libusb)
+set(HID_LIB /usr/lib/libhidapi-libusb.so)
 target_link_libraries(pktest PRIVATE Qt6Core "${USB_LIB}" "${HID_LIB}")
 target_link_libraries(pkteditor PRIVATE Qt6Core Qt6Gui Qt6Widgets "${USB_LIB}" "${HID_LIB}")
 target_link_libraries(pktup PRIVATE Qt6Core Qt6Gui Qt6Widgets "${USB_LIB}" "${HID_LIB}")
