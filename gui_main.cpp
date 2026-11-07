@@ -31,6 +31,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <QHash>
 #include <QSet>
 #include <QTimer>
@@ -57,7 +58,8 @@ struct Cell {
 struct Model {
     Pmap pm;
     int sel = -1;             // selected POSKey
-    QSet<int> pressed;        // POSKeys currently held down on the real board
+    QSet<int> pressed;        // POSKeys held down on the real board
+    std::function<void()> notify;  // refresh UI after selection change
     QString path;             // source file (save target)
     QVector<Cell> cells;      // board-local geometry
 };
@@ -335,7 +337,11 @@ static int gate_shot(Model &m, const QString &file) {
 class MapView : public QWidget {
 public:
     Model *m_ = nullptr;
-    MapView(QWidget *parent = nullptr) : QWidget(parent) {}
+    QTimer rt;                                   // steady repaint heartbeat
+    MapView(QWidget *parent = nullptr) : QWidget(parent), rt(this) {
+        rt.setInterval(40);
+    }
+    void start_heartbeat() { rt.start(); }
     void paintEvent(QPaintEvent *) override {   // QPainter paint of the grid
         m_->cells = layout_cells(size());
         QPainter pt(this);
@@ -344,7 +350,7 @@ public:
     void mousePressEvent(QMouseEvent *ev) override {
         const int pk = cell_at(*m_, ev->pos());   // click-to-edit entry point
         if (pk >= 0) m_->sel = pk;
-        static bool focus_flip = false;
+        if (m_->notify) m_->notify();             // refresh head/layers text
     }
 };
 
@@ -445,6 +451,7 @@ int main(int argc, char **argv) {
     board.m_ = pm;
     board.move(8, 64);
     board.setFixedSize(QSize(1164, 560));
+    board.start_heartbeat();
 
     QLabel head(&win);
     head.move(10, 10);
@@ -537,6 +544,7 @@ int main(int argc, char **argv) {
         save_note = save_pmap(*pm, pm->path.isEmpty() ? out : pm->path); refresh(true); });
 
     refresh(false);
+    pm->notify = [&]() { refresh(false); };
     poll.start();
     win.show();
     return app.exec();
