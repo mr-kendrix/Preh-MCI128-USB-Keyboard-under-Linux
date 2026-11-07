@@ -17,6 +17,7 @@
 #include <QApplication>
 #include <QWidget>
 #include <QLabel>
+#include <QPoint>
 #include <QLineEdit>
 #include <QPushButton>
 #include <QRegularExpression>
@@ -62,6 +63,7 @@ struct Model {
     std::function<void()> notify;  // refresh UI after selection change
     QString path;             // source file (save target)
     QVector<Cell> cells;      // board-local geometry
+    QPoint dbg;               // last click point (debug)
 };
 
 // physical truth (user 2026-11-06): 110 caps in 128 slots
@@ -349,6 +351,7 @@ public:
     }
     void mousePressEvent(QMouseEvent *ev) override {
         const int pk = cell_at(*m_, ev->pos());   // click-to-edit entry point
+        m_->dbg = ev->pos();                      // debug echo for head text
         if (pk >= 0) m_->sel = pk;
         if (m_->notify) m_->notify();             // refresh head/layers text
     }
@@ -522,11 +525,14 @@ int main(int argc, char **argv) {
     QString save_note;
     auto refresh = [&](bool saved) {
         const int pk = pm->sel;
-        head.setText(QStringLiteral("%1  maps=%2  sel=%3")
+        head.setText(QStringLiteral("%1  maps=%2  sel=%3  dbg=%4,%5  pressed=%6")
                          .arg(pm->pm.name.isEmpty() ? QStringLiteral("no pmap loaded")
                                                     : pm->pm.name)
                          .arg(pm->pm.maps.size())
-                         .arg(pk >= 0 ? describe_cell(pk) : QStringLiteral("—")));
+                         .arg(pk >= 0 ? describe_cell(pk) : QStringLiteral("-"))
+                         .arg(pm->dbg.x())
+                         .arg(pm->dbg.y())
+                         .arg(pm->pressed.size()));
         const Map *mp = find_map_c(pm->pm, pk);
         if (mp && !mp->layers.isEmpty()) {
             QStringList ls;
