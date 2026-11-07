@@ -43,17 +43,44 @@ static constexpr int SLOTS = 16; // POSKey slots per physical row
 
 struct Cell {
     int row;    // index into ROWS: 0 = H (top painted row)
-    int slot;   // 1-based POSKey slot inside the row
+    int slot;   // 1-based slot within the physical row
     int poskey; // (NROWS-1-row)*SLOTS + slot
     QRect rc;   // board-local geometry
+    bool anchor = true; // painted once; wide right half shares the left rect
 };
 
 struct Model {
     Pmap pm;
     int sel = -1;             // selected POSKey
     QString path;             // source file (save target)
-    QVector<Cell> cells;      // laid out for the current board size
+    QVector<Cell> cells;      // board-local geometry
 };
+
+// physical truth (user 2026-11-06): 110 caps in 128 slots
+static const struct { const char *row; int slot; } WIDE[] = {
+    {"C",12},{"D",10},{"D",13},{"D",15},{"E",10},{"E",13},{"E",15},
+    {"F",11},{"F",13},{"F",15},{"H",4}};
+static const char *BLIND[] = {"C14","C15","C16","D12","E12",nullptr};
+static const char *TALL[]  = {"B15","B16",nullptr};   // Enter/Alt, height 2
+static const char *SKIP[]  = {"A15","A16",nullptr};   // visually covered by the tall B-caps
+
+static int cell_row_of(const QString &id) { // "C14" -> row index
+    for (int r = 0; r < NROWS; ++r)
+        if (ROWS[r][0] == id.at(0).toLatin1()) return r;
+    return -1;
+}
+static bool in_list(const char **list, const char *row, int slot) {
+    for (const char **p = list; *p; ++p)
+        if (std::strlen(*p) > 1 && (*p)[0] == *row &&
+            std::atoi(*p + 1) == slot)
+            return true;
+    return false;
+}
+static bool is_wide(const char *row, int slot) {
+    for (const auto &w : WIDE)
+        if (w.row[0] == *row && w.slot == slot) return true;
+    return false;
+}
 
 static QString grid_stats() {
     int caps = 0;
@@ -66,15 +93,29 @@ static QVector<Cell> layout_cells(const QSize &board) {
     const int cap = qMin(board.width() / SLOTS, board.height() / NROWS);
     const int xoff = (board.width() - SLOTS * cap) / 2;
     const int yoff = (board.height() - NROWS * cap) / 2;
-    for (int r = 0; r < NROWS; ++r)
-        for (int s = 1; s <= ROWS_N[r]; ++s) {
+    for (int r = 0; r < NROWS; ++r) {
+        const char *row = ROWS[r];
+        for (int s = 1; s <= SLOTS; ++s) {
+            if (in_list(BLIND, row, s) || in_list(SKIP, row, s)) continue;
             Cell c;
-            c.row = r;
-            c.slot = s;
+            c.row = r; c.slot = s; c.anchor = true;
             c.poskey = (NROWS - 1 - r) * SLOTS + s;
-            c.rc = QRect(xoff + (s - 1) * cap + 2, yoff + r * cap + 2, cap - 4, cap - 4);
+            c.rc = QRect(xoff + (s - 1) * cap + 2, yoff + r * cap + 2,
+                         cap - 4, cap - 4);
+            const bool wide = is_wide(row, s) && s + 1 <= SLOTS;
+            if (wide) c.rc.setWidth(2 * cap - 4);
+            if (in_list(TALL, row, s)) c.rc.setHeight(2 * cap - 4);
             out.append(c);
+            if (wide) {
+                Cell c2 = c;
+                c2.slot = s + 1;
+                c2.poskey = c.poskey + 1;
+                c2.anchor = false;
+                out.append(c2);
+                ++s;
+            }
         }
+    }
     return out;
 }
 
@@ -129,9 +170,12 @@ static void paint_grid(QPainter &pt, const Model &m, const QSize &board) {
     pt.setPen(QColor(0x35, 0x38, 0x3e));
     pt.drawRoundedRect(QRect(QPoint(0, 0), board), 10, 10);
     for (const Cell &c : m.cells) {
+        if (!c.anchor) continue; // right half of a wide cap shares the painted rect
         const Map *mp = find_map_c(m.pm, c.poskey);
         const bool is_sel = (m.sel == c.poskey);
         QColor fill(0xe6, 0xe7, 0xea);
+        for (const Cell &cc : m.cells)
+            if (cc.poskey == c.poskey + 1 && cc.rc == c.rc) { fill = QColor(0xc8, 0xd8, 0xe2); break; }
         if (mp && !mp->layers.isEmpty()) {
             const int n = qMin(mp->layers.size(), 4);
             fill = QColor(0xb8 - 8 * n, 0xd6 - 4 * n, 0xf2 - 4 * n);
@@ -205,13 +249,24 @@ static int parse_cell(const QString &spec) { // "H12" -> POSKey
     return -1;
 }
 
-static int gate_smoke(const Model &m) {
-    // LB5 gate: what one Upload click would push, plus the board probe
+static int gate_smoke(Model &m) {
+    m.cells = layout_cells(QSize(1164, 560));
+    // gate: what one Upload click would push, plus the board probe
     const auto frames = compile_frames(payload_of(m.pm, QString()));
     std::printf("upload_frames=%zu board=%s\n", frames.size(),
                 device_present() ? "present" : transfer_error_message(device_last_status()));
     std::printf("%s name=%s maps=%d\n", grid_stats().toUtf8().constData(),
                 m.pm.name.toUtf8().constData(), (int)m.pm.maps.size());
+    int anchors = 0;
+    int per[NROWS] = {0};
+    for (const Cell &c : m.cells)
+        if (c.anchor) {
+            ++anchors;
+            ++per[c.row];
+        }
+    std::printf("H..G..F..E..D..C..B..A anchors: %d %d %d %d %d %d %d %d\n",
+                per[0], per[1], per[2], per[3], per[4], per[5], per[6], per[7]);
+    std::printf("anchor_count=%d\n", anchors);
     return 0;
 }
 
@@ -278,6 +333,7 @@ public:
     void mousePressEvent(QMouseEvent *ev) override {
         const int pk = cell_at(*m_, ev->pos());   // click-to-edit entry point
         if (pk >= 0) m_->sel = pk;
+        static bool focus_flip = false;
     }
 };
 
@@ -336,21 +392,30 @@ int main(int argc, char **argv) {
     if (!pm->pm.maps.isEmpty() && pm->sel < 0) pm->sel = pm->pm.maps.first().poskey;
 
     QWidget win;
-    win.setFixedSize(1180, 660);
+    win.setFixedSize(1180, 740);
     MapView board(&win);
     board.m_ = pm;
-    board.setFixedSize(QSize(1024, 512));
+    board.move(8, 64);
+    board.setFixedSize(QSize(1164, 560));
 
     QLabel head(&win);
+    head.move(10, 10);
     head.setWordWrap(true);
     QLineEdit edit(&win);
+    edit.move(8, 640);
     edit.setPlaceholderText(QStringLiteral("MACRO"));
     QLabel layers(&win);
+    layers.move(10, 662);
     QLabel stat(&win);
+    stat.move(10, 690);
     QPushButton addbtn(QStringLiteral("+ Layer"), &win);
     QPushButton setbtn(QStringLiteral("Set"), &win);
     QPushButton delbtn(QStringLiteral("Layer lösch"), &win);
     QPushButton savebtn(QStringLiteral("Speich"), &win);
+    addbtn.move(260, 662);
+    setbtn.move(384, 662);
+    delbtn.move(508, 662);
+    savebtn.move(632, 662);
     // LB5: button + QProgressDialog + mapped errors, one mount (upload.h)
     UploadPanel upload(&win, &pm->pm, mwx,
                        up_arm || getenv("PKT_UPLOAD_ARM") != nullptr);
