@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 project(pkteditor LANGUAGES CXX)
-find_package(Qt6 REQUIRED COMPONENTS Core Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Core Widgets Gui)
 set(CMAKE_CXX_COMPILER /usr/sbin/clang++)
 set(CMAKE_CXX_STANDARD 20)
 
@@ -8,12 +8,17 @@ set(PKT_SRC pmap.cpp transport.cpp)
 
 add_executable(pktest test_main.cpp ${PKT_SRC})
 add_executable(pkteditor gui_main.cpp ${PKT_SRC})
+add_executable(pktxc pktxc_main.cpp pktxc.cpp)
+# LB5 upload engine + gate (own target: upload.cpp needs Qt6 Widgets, pktest must not)
+add_executable(pktup upload_main.cpp upload.cpp pmap.cpp transport.cpp)
 
-foreach(t IN ITEMS pktest pkteditor)
+foreach(t IN ITEMS pktest pkteditor pktup)
   target_include_directories(${t} PRIVATE /usr/include/qt6 /usr/include/qt6/QtCore)
 endforeach()
-target_include_directories(pkteditor PRIVATE /usr/include/qt6/QtWidgets)
+target_include_directories(pkteditor PRIVATE /usr/include/qt6/QtWidgets /usr/include/qt6/QtGui)
+target_include_directories(pktup PRIVATE /usr/include/qt6/QtWidgets /usr/include/qt6/QtGui)
 
 find_library(USB_LIB NAMES usb-1.0)
 target_link_libraries(pktest PRIVATE Qt6Core "${USB_LIB}")
-target_link_libraries(pkteditor PRIVATE Qt6Core Qt6Widgets "${USB_LIB}")
+target_link_libraries(pkteditor PRIVATE Qt6Core Qt6Gui Qt6Widgets "${USB_LIB}")
+target_link_libraries(pktup PRIVATE Qt6Core Qt6Gui Qt6Widgets "${USB_LIB}")

@@ -49,7 +49,7 @@ Pmap parse_pmap(const QString &xml) {
                     {
                         QRegularExpressionMatch tm = typeRe.match(lb);
                         if (tm.isValid())
-                            la.type = (int)tm.captured(1).toUInt(nullptr, 16);
+                            la.type = unhex_local(tm.captured(1)).trimmed();
                     }
                     {
                         QRegularExpressionMatch vm = valRe.match(lb);
@@ -73,18 +73,21 @@ QString to_hex_cp1252(const QString &s) {
 }
 
 QString serialize_pmap(const Pmap &p) {
-    QString x = "<PMAP><NAME>" + to_hex_cp1252(p.name) + "</NAME>";
+    // vendor shape (Mr.Kendrix.pmap): <POSKeyMapper><MAPPING><MAP><POSKey>..
+    // ..</POSKey><LAYER><Type>..</Type><Value>..</Value></LAYER></MAP></MAPPING>
+    // <LAYOUT><Name>..</Name></LAYOUT></POSKeyMapper>; every text field is
+    // hex-encoded cp1252, so POSKey is the hex of the DECIMAL DIGITS string.
+    QString x = "<POSKeyMapper><MAPPING>";
     for (const Map &m : p.maps) {
-        x += "<MAP><POSKEY>"
-           + QString("%1").arg(m.poskey, 4, 16, QLatin1Char('0')).toUpper()
-           + "</POSKEY>";
+        x += "<MAP><POSKey>" + to_hex_cp1252(QString::number(m.poskey)) + "</POSKey>";
         for (const Layer &l : m.layers)
-            x += "<LAYER><TYPE>"
-               + QString("%1").arg(l.type, 2, 16, QLatin1Char('0')).toUpper()
-               + "</TYPE><VALUE>" + to_hex_cp1252(l.value) + "</VALUE></LAYER>";
+            x += "<LAYER><Type>" + to_hex_cp1252(l.type)
+               + "</Type><Value>" + to_hex_cp1252(l.value) + "</Value></LAYER>";
         x += "</MAP>";
     }
-    return x + "</PMAP>";
+    x += "</MAPPING><LAYOUT><Name>" + to_hex_cp1252(p.name)
+       + "</Name></LAYOUT></POSKeyMapper>";
+    return x;
 }
 
 QString unhex_cp1252(const QString &h) { return unhex_local(h); }

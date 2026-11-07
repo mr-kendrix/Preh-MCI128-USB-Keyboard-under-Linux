@@ -1,7 +1,7 @@
 #pragma once
 #include <QString>
 #include <QVector>
-struct Layer { int type = 0; QString value; };
+struct Layer { QString type = QStringLiteral("TEXT"); QString value; };
 struct Map  { int poskey = 0; QVector<Layer> layers; };
 struct Pmap { QString name; QVector<Map> maps; };
 
