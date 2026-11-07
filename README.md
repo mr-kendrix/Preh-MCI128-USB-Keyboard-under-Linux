@@ -40,7 +40,7 @@ Install (AUR): see `PKGBUILD` — `makepkg -si` gives `/usr/bin/pkteditor`.
 ## Install (Arch/CachyOS)
 
 ```bash
-curl -O https://raw.githubusercontent.com/mr-kendrix/pkt-editor-cpp/main/PKGBUILD
+curl -O https://raw.githubusercontent.com/mr-kendrix/Preh-MCI128-USB-Keyboard-under-Linux/main/PKGBUILD
 makepkg -si            # → /usr/bin/pkteditor
 ```
 
