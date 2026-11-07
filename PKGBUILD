@@ -1,0 +1,21 @@
+# Maintainer: Hermes <hermes@users.noreply.github.com>
+pkgname=pkteditor
+pkgver=0.1.0
+pkgdesc="Editor for PrehKeyTec MCI-3100 mapping lists (.pmap), incl. native board upload"
+url="https://github.com/mr-kendrix/pkt-editor-cpp"
+license=('MIT')
+arch=('x86_64')
+depends=('qt6-base' 'libusb')
+makedepends=('cmake' 'clang')
+source=("https://github.com/mr-kendrix/pkt-editor-cpp/archive/refs/heads/main.tar.gz")
+
+build() {
+  cmake -B b -S . -DCMAKE_BUILD_TYPE=Release
+  cmake --build b
+}
+
+package_pkg() {
+  install -Dm755 b/pkteditor "$pkgdir/usr/bin/$pkgname"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 LICENSE "$pkgdir/usr/share/doc/$pkgname/LICENSE"
+}

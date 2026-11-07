@@ -1,0 +1,32 @@
+Pmap parse_pmap(const QString &xml) {
+    Pmap p;
+    QRegularExpression nameRe("<NAME>(.*?)</NAME>");
+    if (auto m = nameRe.match(xml); m.matched())
+        p.name = unhex_local(m.captured(1));
+
+    QRegularExpression mapRe("<MAP>(.*?)</MAP>",
+                             QRegularExpression::DotMatchesEverythingOption);
+    QRegularExpression pkRe("<POSKEY>(.*?)</POSKEY>");
+    QRegularExpression layerRe("<LAYER>(.*?)</LAYER>",
+                               QRegularExpression::DotMatchesEverythingOption);
+    QRegularExpression typeRe("<TYPE>(.*?)</TYPE>");
+    QRegularExpression valRe("<VALUE>(.*?)</VALUE>");
+
+    for (auto it = mapRe.globalMatch(xml); it != mapRe.end(); ++it) {
+        const QString body = it->captured(1);
+        Map m;
+        if (auto pm = pkRe.match(body); pm.matched())
+            m.poskey = (int)pm.captured(1).toULongLong(nullptr, 16);
+        for (auto lt = layerRe.globalMatch(body); lt != layerRe.end(); ++lt) {
+            const QString lb = lt->captured(1);
+            Layer la;
+            if (auto tm = typeRe.match(lb); tm.matched())
+                la.type = (int)tm.captured(1).toUInt(nullptr, 16);
+            if (auto vm = valRe.match(lb); vm.matched())
+                la.value = unhex_local(vm.captured(1));
+            m.layers.append(la);
+        }
+        p.maps.append(m);
+    }
+    return p;
+}
