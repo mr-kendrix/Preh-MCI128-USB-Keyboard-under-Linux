@@ -1,0 +1,6 @@
+/home/nonrmy/hermes-workspace/pkt-editor-cpp/b2/CMakeFiles/pktest.dir
+/home/nonrmy/hermes-workspace/pkt-editor-cpp/b2/CMakeFiles/pkteditor.dir
+/home/nonrmy/hermes-workspace/pkt-editor-cpp/b2/CMakeFiles/pktxc.dir
+/home/nonrmy/hermes-workspace/pkt-editor-cpp/b2/CMakeFiles/pktup.dir
+/home/nonrmy/hermes-workspace/pkt-editor-cpp/b2/CMakeFiles/edit_cache.dir
+/home/nonrmy/hermes-workspace/pkt-editor-cpp/b2/CMakeFiles/rebuild_cache.dir

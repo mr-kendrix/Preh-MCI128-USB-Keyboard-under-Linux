@@ -14,10 +14,16 @@ bool device_send(uint8_t code);
 
 // raw LIBUSB_ERROR_* of the last device_send() (0 = ok)
 int device_last_status();
-// board on a bus + control endpoint there, without sending anything
+// board on a bus + HID interface there, without sending anything
 bool device_present();
 // human-readable reason for a status code ("" when ok)
 const char *transfer_error_message(int status);
+// one 2-byte OUT report [04 code] via hidapi
+bool send_code(uint8_t code);
+// vendor wire dialect (WinProg 2.5 / Mwxusb 4.6): 18 codes per 8-byte block
+std::vector<uint8_t> vendor_frame(int addr, const uint8_t *p, int seq);
+// drain IN reports for ms (0 = non-blocking), nonzero bytes only
+int drain_ms(int ms, std::vector<int> &out);
 
 // IN stream: raw hidapi read of one 5-byte report [0x04 …]; ms=0 non-blocking
 int poll_in(unsigned char *buf, int len, int ms);

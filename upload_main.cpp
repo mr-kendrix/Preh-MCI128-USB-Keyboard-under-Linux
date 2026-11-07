@@ -16,7 +16,7 @@
 int main(int argc, char **argv) {
     QString path, container, shot;
     bool armed = false, upload = false, table = false, fail_text = false;
-    int cancel_at = -1;
+    int cancel_at = -1, dump_frames = 0;
     for (int i = 1; i < argc; ++i) {
         const QString a = argv[i];
         if (a == "--upload") upload = true;
@@ -25,8 +25,20 @@ int main(int argc, char **argv) {
         else if (a == "--fail-text") fail_text = true;
         else if (a == "--shot") { if (i + 1 < argc) shot = argv[++i]; }
         else if (a == "--cancel-at") { if (i + 1 < argc) cancel_at = QString(argv[++i]).toInt(); }
+        else if (a == "--dump-frames") { if (i + 1 < argc) dump_frames = QString(argv[++i]).toInt(); }
         else if (path.isEmpty()) path = a;
         else container = a;
+    }
+    if (dump_frames > 0) {
+        // byte-identical check against the python vendor_frame oracle (no board)
+        std::vector<uint8_t> body(8 * dump_frames, 0x5A);
+        for (int i = 0; i < dump_frames; ++i) {
+            const auto f = vendor_frame(4 + 8 * i, body.data() + 8 * i, (i + 1) & 3);
+            for (size_t k = 0; k < f.size(); ++k)
+                std::printf("%02x%s", f[k], k + 1 == f.size() ? "\n" : " ");
+        }
+        std::printf("frames=%d\n", dump_frames);
+        return 0;
     }
     if (getenv("PKT_UPLOAD_ARM")) armed = true;
 

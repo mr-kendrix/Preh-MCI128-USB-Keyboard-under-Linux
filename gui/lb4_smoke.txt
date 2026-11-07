@@ -1,0 +1,1 @@
+rows=8 caps=110 slots=128 name=MCI 128 maps=32

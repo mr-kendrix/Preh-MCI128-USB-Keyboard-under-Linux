@@ -1,0 +1,4 @@
+# Preh MCI USB keyboards — let the desktop session (uaccess) own the device
+SUBSYSTEM=="usb", ATTRS{idVendor}=="053a", ATTRS{idProduct}=="0b01", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="053a", ATTRS{idProduct}=="0b00", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{"idVendor"}!="", KERNEL=="hidusb*", MODE="0660"

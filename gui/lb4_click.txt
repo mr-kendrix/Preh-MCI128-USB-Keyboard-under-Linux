@@ -1,0 +1,1 @@
+px:32,32 pk=113 layers -1->2 val='SECOND'; px:928,32 pk=127 layers 3->4 val='SECOND'; px:32,480 pk=1 layers -1->2 val='SECOND'; px:992,96 pk=112 layers 1->2 val='SECOND'; saved 34 maps / 54 layers / 4584 bytes -> reload 34 maps name 'MCI 128' STABLE=yes

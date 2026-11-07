@@ -13,13 +13,16 @@
 #include "transport.h"
 
 struct UploadResult {
-    int frames = 0;        // compile_frames() output size
-    int sent = 0;          // frames handed over to device_send()
-    int stopped_at = -1;   // frame index that failed / cancelled (-1 = ran out)
-    int failed_code = -1;  // the code that bounced, -1 = none
+    int frames = 0;        // 8-byte blocks of the container body
+    int sent = 0;          // blocks fully handed to the board
+    int stopped_at = -1;   // block index that failed / cancelled (-1 = ran out)
+    int failed_code = -1;  // wire code whose transfer bounced (-1 = none)
     int status = 0;        // LIBUSB_ERROR_* of the bounce (0 = ok)
+    int acks = 0;          // accepted block ACKs seen (0x20..0x23)
+    int noise = 0;         // nonzero IN bytes that were not block ACKs
     bool canceled = false; // progress callback said stop (cancel button)
-    bool armed = false;    // did we actually write the board?
+    bool armed = false;    // did we actually write the board
+    bool finished = false; // ack tally passed and EF 12 (FinishWrite) was sent
 };
 
 // payload -> report-4 frames -> one device_send() per code; progress(done,total)

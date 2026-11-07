@@ -28,7 +28,14 @@ Install (AUR): see `PKGBUILD` — `makepkg -si` gives `/usr/bin/pkteditor`.
   → `payload=1480 frames=182 first=04 armed=0 board=1`; unarmed run says
   `Upload NOT ARMED — 182 frames compiled, nothing sent`, cancel run says
   `upload cancelled at frame 8/182 — nothing was sent`. The board is **only** written with
-  `--arm-upload` (or `PKT_UPLOAD_ARM=1`), and `EF 12` (finalising) is never sent.
+  `--arm-upload` (or `PKT_UPLOAD_ARM=1`). The upload now follows the vendor protocol end to end:
+  every code is one HID report `04 <code>` via `hid_write` (hidapi issues the SET_REPORT control
+  request itself — no hand-rolled control transfers), blocks are the 18-code vendor frames
+  (WinProg 2.5 / Mwxusb 4.6 dialect, byte-identical against the USBPcap capture — gate
+  `pktup --dump-frames N` vs the python oracle), block ACKs `0x20..0x23` are counted per block
+  and `EF 12` finalises only if nearly every block was accepted. udev: ship
+  `/usr/share/pkteditor/99-prehkeytec.rules` or copy `99-prehkeytec.rules` to
+  `/etc/udev/rules.d/` (uaccess, no group needed on Arch).
 - Endpoint probe fix (LB5): `find_control_ep` walked only interface 0's altsettings, so it never
   saw iface 1 and always returned -1; it now walks all `bNumInterfaces` and falls back to the
   HID-class descriptor the kernel hands back (`0x82` = report type 2 = OUT), verified on the

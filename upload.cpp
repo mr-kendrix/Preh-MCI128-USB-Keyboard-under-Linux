@@ -1,4 +1,5 @@
 #include "upload.h"
+#include <libusb-1.0/libusb.h>
 #include <QFile>
 #include <QLabel>
 #include <QPushButton>
@@ -18,34 +19,62 @@ std::vector<uint8_t> payload_of(const Pmap &pm, const QString &container) {
 
 UploadResult run_upload(const std::vector<uint8_t> &payload, bool armed,
                         const std::function<bool(int, int)> &progress) {
-    const auto frames = compile_frames(payload);
     UploadResult r;
-    r.frames = int(frames.size());
     r.armed = armed;
-    // a board-less run refuses instead of failing on frame one
-    if (armed && !device_present()) {
-        r.status = device_last_status();
+    // container = "Preh" magic + body; blocks of 8 bytes over the body
+    if (payload.size() < 4 || payload[0] != 'P' || payload[1] != 'r' ||
+        payload[2] != 'e' || payload[3] != 'h') {
+        r.status = LIBUSB_ERROR_INVALID_PARAM;
         r.stopped_at = 0;
         return r;
     }
-    for (size_t i = 0; i < frames.size(); ++i) {
-        if (armed) {
-            // frame layout: [0x04 code] x8 — the code is the odd byte
-            for (size_t j = 1; j < frames[i].size(); j += 2) {
-                if (!device_send(frames[i][j])) {
-                    r.failed_code = frames[i][j];
-                    r.status = device_last_status();
-                    r.stopped_at = int(i);
-                    return r;
-                }
+    std::vector<uint8_t> body(payload.begin() + 4, payload.end());
+    while (body.size() % 8) body.push_back(0);   // zero-pad the last block
+    r.frames = int(body.size() / 8);
+    if (!armed)
+        return r;                                // plan only, nothing on the wire
+
+    std::vector<int> junk;
+    // identify: EF 59 31 00 (GetWriteStatus)
+    for (uint8_t c : {0xEF, 0x59, 0x31, 0x00})
+        if (!send_code(c)) { r.failed_code = c; r.status = device_last_status(); return r; }
+    drain_ms(300, junk);
+    // StartWriteDataMWX
+    if (!send_code(0xEF) || !send_code(0x00)) {
+        r.failed_code = 0x00; r.status = device_last_status(); return r;
+    }
+    drain_ms(200, junk);
+
+    for (size_t bi = 0; bi < body.size(); bi += 8) {
+        const int idx = int(bi / 8);
+        const std::vector<uint8_t> frame =
+            vendor_frame(4 + 8 * idx, body.data() + bi, (idx + 1) & 3);
+        for (uint8_t code : frame) {
+            if (!send_code(code)) {
+                r.failed_code = code;
+                r.status = device_last_status();
+                r.stopped_at = idx;
+                return r;
             }
         }
-        r.sent = int(i) + 1;
+        drain_ms(150, junk);
+        for (int a : junk) {
+            if (a >= 0x20 && a <= 0x23) ++r.acks;
+            else if (a) ++r.noise;
+        }
+        r.sent = idx + 1;
         if (progress && !progress(r.sent, r.frames)) {
             r.canceled = true;
-            r.stopped_at = int(i);
+            r.stopped_at = idx;
             return r;
         }
+    }
+    // FinishWriteDataMWX only if the board accepted nearly every block
+    if (r.acks >= r.frames - 2) {
+        send_code(0xEF);
+        send_code(0x12);
+        drain_ms(500, junk);
+        r.finished = true;
     }
     return r;
 }
@@ -66,9 +95,10 @@ QString upload_text(const UploadResult &r) {
                    .arg(r.stopped_at + 1).arg(r.frames).arg(code)
                    .arg(QString::fromUtf8(transfer_error_message(r.status)));
     }
-    return QStringLiteral("upload: %1 frames, %2 sent · EF 12 not sent — verify with "
-                          "tests/keytable_match.py before trusting the table")
-               .arg(r.frames).arg(r.sent);
+    return QStringLiteral("upload: %1 blocks, %2 ACKs (EF 12 %3)")
+               .arg(r.frames).arg(r.acks)
+               .arg(r.finished ? QStringLiteral("sent — table finalised, verify keytable")
+                               : QStringLiteral("NOT sent — board accepted too few blocks"));
 }
 
 UploadPanel::UploadPanel(QWidget *parent, const Pmap *pm, const QString &container, bool armed)
