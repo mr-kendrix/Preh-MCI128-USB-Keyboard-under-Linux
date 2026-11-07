@@ -443,7 +443,7 @@ int main(int argc, char **argv) {
     // live window
     QApplication app(argc, argv);
     Model *pm = &m;
-    if (!pm->pm.maps.isEmpty() && pm->sel < 0) pm->sel = pm->pm.maps.first().poskey;
+    if (pm->sel < 0) pm->sel = 7 * 16 + 1;   // default A01 (row A, slot 1)
 
     QWidget win;
     win.setFixedSize(1180, 740);
