@@ -2,12 +2,12 @@
 pkgname=pkteditor
 pkgver=0.1.0
 pkgdesc="Editor for PrehKeyTec MCI-3100 mapping lists (.pmap), incl. native board upload"
-url="https://github.com/mr-kendrix/pkt-editor-cpp"
+url="https://github.com/mr-kendrix/Preh-MCI128-USB-Keyboard-under-Linux"
 license=('MIT')
 arch=('x86_64')
 depends=('qt6-base' 'libusb')
 makedepends=('cmake' 'clang')
-source=("https://github.com/mr-kendrix/pkt-editor-cpp/archive/refs/heads/main.tar.gz")
+source=("https://github.com/mr-kendrix/Preh-MCI128-USB-Keyboard-under-Linux/archive/refs/heads/main.tar.gz")
 
 build() {
   cmake -B b -S . -DCMAKE_BUILD_TYPE=Release
