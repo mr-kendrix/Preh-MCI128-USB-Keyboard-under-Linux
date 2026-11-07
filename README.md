@@ -36,3 +36,16 @@ Install (AUR): see `PKGBUILD` — `makepkg -si` gives `/usr/bin/pkteditor`.
 - Gate compiler: `./b/pktxc fixtures/uploads/pos_mci128.MWF out.mwx` → `byte-equal-fixture=True` (exit 0);
   C++ port of `pkt-linux-editor/src/pktxc.py` semantics (MWF POS ids, header-derived store bytes
   0x0004/0x0135/0x0136, SOUND quad 0x0124, RATE 0x0007) — training pair `fixtures/uploads/` is self-contained
+
+## Install (Arch/CachyOS)
+
+```bash
+curl -O https://raw.githubusercontent.com/mr-kendrix/pkt-editor-cpp/main/PKGBUILD
+makepkg -si            # → /usr/bin/pkteditor
+```
+
+## Prior art & legal
+
+- PrehKeyTec official Linux-Utility: „on request“ only, no public package.
+- `cevou/preh-keyboard` (hidapi): POSKey-Reader only — no editor/upload.
+- Own RE implementation, MIT; no vendor binaries, no Windows-toolchain circumvention.
