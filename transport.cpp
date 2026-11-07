@@ -126,3 +126,28 @@ const char *transfer_error_message(int status) {
     default: return "libusb failure";
     }
 }
+
+#include <hidapi/hidapi.h>
+#include <QFile>
+#include <QRegularExpression>
+
+int poll_in(unsigned char *buf, int len, int ms) {
+    static hid_device *dev = nullptr;
+    if (!dev) dev = hid_open(0x053a, 0x0b01, nullptr);
+    if (!dev) return -1;
+    return hid_read_timeout(dev, buf, (size_t)len, ms);
+}
+
+QHash<int,int> load_calib(const QString &path) {
+    QHash<int,int> map;
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) return map;
+    const QString j = f.readAll();
+    static const QRegularExpression re(QStringLiteral("\"0x([0-9a-fA-F]+)\"\\s*:\\s*([0-9]+)"));
+
+    for (auto it = re.globalMatch(j); it.hasNext(); ) {
+        const QRegularExpressionMatch mm = it.next();
+        map.insert(mm.captured(1).toInt(nullptr, 16), mm.captured(2).toInt());
+    }
+    return map;
+}

@@ -31,8 +31,13 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <QHash>
+#include <QSet>
+#include <QTimer>
+#include <vector>
 #include "pmap.h"
 #include "upload.h"
+#include "transport.h"
 
 static const char *ROWS[] = {"H", "G", "F", "E", "D", "C", "B", "A"}; // top row first
 static const int ROWS_N[] = {15, 16, 13, 12, 12, 12, 16, 14};
@@ -52,6 +57,7 @@ struct Cell {
 struct Model {
     Pmap pm;
     int sel = -1;             // selected POSKey
+    QSet<int> pressed;        // POSKeys currently held down on the real board
     QString path;             // source file (save target)
     QVector<Cell> cells;      // board-local geometry
 };
@@ -205,6 +211,11 @@ static void paint_grid(QPainter &pt, const Model &m, const QSize &board) {
             pt.setBrush(Qt::NoBrush);
             pt.drawRoundedRect(c.rc.adjusted(-2, -2, 2, 2), 6, 6);
         }
+        if (m.pressed.contains(c.poskey)) {
+            pt.setPen(QPen(QColor(0x2e, 0xd4, 0x74), 3));   // pressed on the real board
+            pt.setBrush(Qt::NoBrush);
+            pt.drawRoundedRect(c.rc.adjusted(-3, -3, 3, 3), 7, 7);
+        }
     }
 }
 
@@ -344,6 +355,7 @@ int main(int argc, char **argv) {
     QStringList cells;
     QString path, shot, setv, addv, out, mode, mwx;
     bool del = false, have_set = false, have_add = false, up_arm = false;
+    QString calib;
     for (int i = 1; i < argc; ++i) {
         const QString a = argv[i];
         auto next = [&](QString &dst) { if (i + 1 < argc) dst = argv[++i]; };
@@ -358,6 +370,8 @@ int main(int argc, char **argv) {
         else if (a == "--add") { mode = "click"; next(addv); have_add = true; }
         else if (a == "--del") { mode = "click"; del = true; }
         else if (a == "--arm-upload") up_arm = true;
+        else if (a == "--calib") next(calib);
+        else if (a == "--watch") { mode = "watch"; }
         else if (a == "--mwx") next(mwx);
         else if (a == "--save") next(out);
         else if (!a.startsWith("--")) path = a;
@@ -374,6 +388,40 @@ int main(int argc, char **argv) {
     }
 
     if (mode == "smoke") return gate_smoke(m);
+    if (mode == "watch") {
+        const QHash<int, int> cal = load_calib(
+            calib.isEmpty() ? QStringLiteral("/home/nonrmy/MK.calib.json") : calib);
+        std::printf("watch 8s — press keys on the board (calib=%d entries)\n",
+                    (int)cal.size()); std::fflush(stdout);
+        QSet<int> pressed;
+        for (int t = 0; t < 8 * 20; ++t) {
+            unsigned char buf[5];
+            const int n = poll_in(buf, 5, 1000 / 20);
+            if (n < 5 || buf[0] != 0x04) continue;
+            std::vector<unsigned char> v;
+            for (int k = 1; k < 5; ++k) if (buf[k]) v.push_back(buf[k]);
+            size_t i = 0;
+            while (i < v.size()) {
+                bool down = true, ext = false;
+                while (i < v.size() && (v[i] == 0xFE || v[i] == 0xE0)) {
+                    if (v[i] == 0xFE) down = false; else ext = true;
+                    ++i;
+                }
+                if (i >= v.size()) break;
+                const int sc = ext ? (0xE000 | v[i]) : v[i];
+                ++i;
+                const int pk = cal.value(sc, -1);
+            std::printf("%s sc=%04x pk=%d\n", down ? "down" : "up", sc, pk); std::fflush(stdout);
+                if (pk >= 0) { if (down) pressed.insert(pk); else pressed.remove(pk); }
+            }
+        }
+        QList<int> pl = pressed.values();
+        std::sort(pl.begin(), pl.end());
+        QString j;
+        for (int p : pl) j += QStringLiteral("%1,").arg(p);
+        std::printf("still pressed: %s\n", (j.isEmpty() ? "-" : j.toUtf8().constData()));
+        return 0;
+    }
     if (mode == "shot") {
         // text needs the QQ platform font engine, so the shot gate runs
         // Qt's own offscreen plugin — same paint code as the live window.
@@ -419,6 +467,39 @@ int main(int argc, char **argv) {
     // LB5: button + QProgressDialog + mapped errors, one mount (upload.h)
     UploadPanel upload(&win, &pm->pm, mwx,
                        up_arm || getenv("PKT_UPLOAD_ARM") != nullptr);
+    upload.move(900, 640);
+    upload.setFixedSize(QSize(260, 90));
+
+    // live board: pressed POSKeys get a green ring (calib maps scancode->POSKey)
+    const QHash<int, int> cal = load_calib(
+        calib.isEmpty() ? QStringLiteral("/home/nonrmy/MK.calib.json") : calib);
+    QTimer poll;
+    poll.setInterval(50);
+    poll.connect(&poll,
+                 static_cast<void (QTimer::*)()>(&QTimer::start), [&]() {
+        unsigned char buf[5];
+        int n;
+        while ((n = poll_in(buf, 5, 0)) > 0) {
+            if (n < 5 || buf[0] != 0x04) continue;
+            std::vector<unsigned char> v;
+            for (int k = 1; k < 5; ++k) if (buf[k]) v.push_back(buf[k]);
+            size_t i = 0;
+            while (i < v.size()) {
+                bool down = true, ext = false;
+                while (i < v.size() && (v[i] == 0xFE || v[i] == 0xE0)) {
+                    if (v[i] == 0xFE) down = false; else ext = true;
+                    ++i;
+                }
+                if (i >= v.size()) break;
+                const int sc = ext ? (0xE000 | v[i]) : v[i];
+                ++i;
+                const int pk = cal.value(sc, -1);
+                if (pk < 0) continue;
+                if (down) pm->pressed.insert(pk);
+                else pm->pressed.remove(pk);
+            }
+        }
+    });
 
     QString save_note;
     auto refresh = [&](bool saved) {
@@ -456,6 +537,7 @@ int main(int argc, char **argv) {
         save_note = save_pmap(*pm, pm->path.isEmpty() ? out : pm->path); refresh(true); });
 
     refresh(false);
+    poll.start();
     win.show();
     return app.exec();
 }
