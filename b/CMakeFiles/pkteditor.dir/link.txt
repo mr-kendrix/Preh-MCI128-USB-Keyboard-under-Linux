@@ -1,1 +1,0 @@
-/usr/sbin/clang++ -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/pkteditor.dir/link.d CMakeFiles/pkteditor.dir/gui_main.cpp.o CMakeFiles/pkteditor.dir/upload.cpp.o CMakeFiles/pkteditor.dir/pmap.cpp.o CMakeFiles/pkteditor.dir/transport.cpp.o -o pkteditor  -lQt6Core -lQt6Gui -lQt6Widgets /usr/lib/libusb-1.0.so /usr/lib/libhidapi-libusb.so

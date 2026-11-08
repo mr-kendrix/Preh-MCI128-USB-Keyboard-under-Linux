@@ -1,1 +1,0 @@
-/usr/sbin/clang++ -Wl,--dependency-file=CMakeFiles/pktest.dir/link.d CMakeFiles/pktest.dir/test_main.cpp.o CMakeFiles/pktest.dir/pmap.cpp.o CMakeFiles/pktest.dir/transport.cpp.o -o pktest  -lQt6Core /usr/lib/libusb-1.0.so /usr/lib/libhidapi-libusb.so
