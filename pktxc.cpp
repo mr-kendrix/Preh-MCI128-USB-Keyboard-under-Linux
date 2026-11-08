@@ -622,9 +622,14 @@ static bool emit_mwf(const std::string &mwf_text, std::vector<uint8_t> &payload)
         for (uint8_t b : {0x01, 0x2e, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00}) payload.push_back(b);
         payload.push_back(flags.empty() ? 1 : flags[0]);  // first ref's -L flag
     } else {
-        // no MSR ": text" block: no global -L consumer byte (oracle probes),
-        // the flag lands on each record's own trailer instead
-        for (uint8_t b : {0x00, 0x00, 0x00, 0x00}) payload.push_back(b);
+        // no MSR ": text" block (gsz 29): the global block is 5 B shorter, so the
+        // -L consumer byte survives as the LAST global at 0x13c (oracle: varsealed4242
+        // MSR-token variants 'MSR NSE' etc. expect the first ref's -L flag there;
+        // varsealed2 base has flag 00 -> same expression, never a constant)
+        payload.push_back(0x00);
+        payload.push_back(0x00);
+        payload.push_back(0x00);
+        payload.push_back(flags.empty() ? 1 : flags[0]);
     }
     payload.insert(payload.end(), stream.begin(), stream.end());
     return payload.size() == total;
