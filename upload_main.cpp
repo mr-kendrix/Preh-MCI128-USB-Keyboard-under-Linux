@@ -90,9 +90,8 @@ int main(int argc, char **argv) {
             body = std::vector<uint8_t>(body.begin() + 4, body.end());
         int lw = -1;
         const int bc = board_checksum16(&lw);
-        const int ln = (body.size() >= 4) ? ((uint16_t(body[2]) << 8) | body[3]) : 0;
         uint32_t sum = 0;
-        for (int i = 0; i + 1 < ln && i < int(body.size()); ++i) sum += body[i];
+        for (uint8_t b : body) sum += b;
         const uint16_t cs = uint16_t(sum & 0xFFFF);
         std::printf("board: len=%d chk=%04X  container chk=%04X  %s  raw=%s\n",
                     lw, bc, cs, (bc >= 0 && bc == cs) ? "MATCH" : "DIFF/unread",
