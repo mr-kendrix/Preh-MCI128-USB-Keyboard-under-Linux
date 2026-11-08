@@ -36,10 +36,6 @@ QString unknown_window();
 // active window's process name via getwindowpid -> /proc/PID/comm (empty if unavailable)
 QString active_process();
 
-// exit sweep: release keys still held by the last ydot_send (install a signal
-// handler in main calling this; also call on normal exit after the live loop)
-void ydot_release_all();
-
 // ---- live IN feed (pktm --live) -------------------------------------
 // port of pktwire's decode_report/split_reports: IN reports are
 // [04 b1 b2 b3 b4]; 0xFE = key-up marker, 0xE0 = extended prefix

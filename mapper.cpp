@@ -151,13 +151,6 @@ int ydot_send(const QString &socket_path, const QVector<QPair<int, int>> &events
         else held_keys.erase(std::remove(held_keys.begin(), held_keys.end(), e.first), held_keys.end());
     return ydot_send_now(socket_path, events);
 }
-void ydot_release_all() {
-    // send up-events for whatever is still held (best-effort, fresh socket each time)
-    QVector<QPair<int, int>> ups;
-    for (int k : held_keys) ups.push_back({k, 0});
-    held_keys.clear();
-    if (!ups.isEmpty()) (void)ydot_send_now(QStringLiteral("/tmp/.ydotool_socket"), ups);
-}
 static int ydot_send_now(const QString &socket_path, const QVector<QPair<int, int>> &events) {
     QByteArray p = socket_path.toUtf8();
     sockaddr_un sa{};
@@ -218,15 +211,25 @@ RuleSet parse_rules(const QString &xml) {
     return rs;
 }
 
-static bool dep_matches(const QString &dep, const QString &process, const QString &window) {
-    if (dep.isEmpty() || window == k_unknown) return false;
-    // vendor <Dependency> = process name (e.g. "soffice.bin"); match it against
-    // the active window's process (getwindowpid -> /proc/PID/comm), and allow a
-    // title-containment fallback ONLY in title direction (never dep-contains-window).
-    if (!process.isEmpty() &&
-        (process.contains(dep, Qt::CaseInsensitive) || dep.contains(process, Qt::CaseInsensitive)))
-        return true;
-    return window.contains(dep, Qt::CaseInsensitive);
+static bool dep_matches(const QString &dep_in, const QString &process, const QString &window) {
+    if (dep_in.isEmpty() || window == k_unknown) return false;
+    // vendor "<Dependency>" may be "process" or "process:title" — split on ':'
+    QString dep_proc = dep_in, dep_title;
+    const int colon = dep_in.indexOf(QLatin1Char(':'));
+    if (colon > 0) { dep_proc = dep_in.left(colon); dep_title = dep_in.mid(colon + 1); }
+    // comm is truncated to 15 chars -> compare shortest-prefix containment
+    auto proc_eq = [](QString a, QString b) {
+        if (a.isEmpty() || b.isEmpty()) return false;
+        const int n = qMin(a.size(), b.size());
+        return a.left(n).compare(b.left(n), Qt::CaseInsensitive) == 0;
+    };
+    if (!process.isEmpty() && proc_eq(dep_proc, process)) {
+        if (dep_title.isEmpty()) return true;
+        return window.contains(dep_title, Qt::CaseInsensitive);
+    }
+    if (dep_title.isEmpty())
+        return window.contains(dep_proc, Qt::CaseInsensitive);  // title-only rule
+    return false;
 }
 
 int match_layer(const Rule &r, const QString &process, const QString &window) {
@@ -245,11 +248,26 @@ QString literal_to_type(const Rule &r, const Layer &l) {
     // not be silently dropped -> refuse (sentinel '#', caller injects nothing + logs).
     // known macro-only Value falls back to cap <Text> (label is the honest stand-in).
     static const auto known = [](const QString &t) {
-        static const QStringList k = {"N1","N2","N3","N4","N5","N6","N7","N8","N9",
+        static const QStringList k = {"N1","N2","N3","N3a","N3b","N4","N5","N6","N7","N8","N9",
             "N10","N11","N12","N13","N14","ESC","TAB","DELAY","POS","POSKEY","MSR"};
-        for (const QString &s : k) if (t.startsWith(s, Qt::CaseInsensitive)) return true;
+        for (const QString &s : k) if (t.compare(s, Qt::CaseInsensitive) == 0) return true;
         return false;
     };
+    // mixed literal+macro ("abc{TAB}def"): the Tab press would be LOST by stripping
+    // -> REFUSE unless the whole Value is one known macro (fallback path).
+    bool any_macro = false;
+    for (const QChar &c : l.value) if (c == QLatin1Char('{')) { any_macro = true; break; }
+    if (any_macro) {
+        QString tok; bool inm = false; bool has_lit = false;
+        for (const QChar &c : l.value) {
+            if (c == QLatin1Char('{')) { if (inm) return QStringLiteral("\x01nested-brace"); inm = true; tok.clear(); }
+            else if (c == QLatin1Char('}')) { inm = false; if (!known(tok)) return QStringLiteral("\x01unsupported-macro"); }
+            else if (inm) tok += c;
+            else if (!c.isSpace()) has_lit = true;
+        }
+        if (inm) return QStringLiteral("\x01unsupported-macro"); // unterminated
+        if (has_lit) return QStringLiteral("\x01mixed-macro-refused");
+    }
     QString v; bool in_macro = false; QString tok;
     for (const QChar &c : l.value) {
         if (c == QLatin1Char('{')) { in_macro = true; tok.clear(); }

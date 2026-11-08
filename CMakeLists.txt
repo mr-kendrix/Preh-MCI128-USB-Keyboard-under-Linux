@@ -22,7 +22,7 @@ target_include_directories(pktup PRIVATE /usr/include/qt6/QtWidgets /usr/include
 # rules layer is pure Qt Core/Gui; --live additionally reuses transport.cpp, so
 # pktm links USB+HID too — link line moved below find_library)
 add_executable(pktm mapper_main.cpp mapper.cpp pmap.cpp transport.cpp)
-target_include_directories(pktm PRIVATE /usr/include/qt6 /usr/include/qt6/QtCore)
+target_include_directories(pktm PRIVATE /usr/include/qt6 /usr/include/qt6/QtCore /usr/include/qt6/QtNetwork)
 
 find_library(USB_LIB NAMES usb-1.0)
 set(HID_LIB /usr/lib/libhidapi-libusb.so)

@@ -10,14 +10,18 @@
 // Every vendor body is cp1252-hexed; mapper.cpp does the rule decode.
 #include "mapper.h"
 #include <QFile>
+#include <QLocalSocket>
 #include <cstdio>
 #include <QByteArray>
 #include <QSet>
 #include <cstring>
 #include <cstdlib>
 #include <csignal>
+#include <atomic>
 #include <ctime>
 #include <cerrno>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include "transport.h"
@@ -98,6 +102,7 @@ static QByteArray hex_to_bytes(const QString &hex) {
 }
 
 int main(int argc, char **argv) {
+    ::setlinebuf(stdout);   // live/daemon mode: every line visible in logs immediately
     QString path;
     QString mode;
     int poskey = -1;
@@ -156,89 +161,147 @@ int main(int argc, char **argv) {
     // --live: vendor IN stream -> calib -> rules -> ydotool socket. Never
     // starts/stops daemons or units; a human decides which reader runs.
     if (mode == "live") {
-        // exit sweep: a TERM/INT mid-sequence must not leave keys stuck
-        std::signal(SIGINT, +[](int) { ydot_release_all(); std::_Exit(0); });
-        std::signal(SIGTERM, +[](int) { ydot_release_all(); std::_Exit(0); });
-        const QString calib_path = calib.isEmpty() ? QStringLiteral("/home/nonrmy/MK.calib.json") : calib;
+        // exit sweep, SIGNAL-SAFE: handler sends up-events over the persistent
+        // socket fd via raw ::send and _Exits; fixed array + atomic counter,
+        // no heap / no stdio inside the handler. Normal exit sweeps via do_sweep().
+        static std::atomic<int> sweep_count{0};
+        static int held_evdev[64];
+        // signal-safe sweep: handler sends up-events over the persistent ydotool
+        // socket fd and _Exits — no heap, no stdio inside the handler.
+        static int g_ydot_fd = -1;
+        std::signal(SIGTERM, [](int) {
+            for (int i = 0; i < sweep_count.load() && i < 64; ++i) {
+                unsigned char rec[24] = {0};
+                // {i64 tv_sec=0, i64 tv_usec=0, u16 type=1, u16 code, i32 val=0(release)}
+                const unsigned code = held_evdev[i] & 0xFFFFu;
+                rec[16] = 1; rec[18] = (unsigned char)code; rec[19] = (unsigned char)(code >> 8);
+                // val=0 -> key-up
+                (void)::send(g_ydot_fd, rec, sizeof rec, 0);
+            }
+            std::_Exit(0);
+        });
+        std::signal(SIGINT, [](int) { std::_Exit(0); });
+
+        const QString calib_path = calib.isEmpty()
+            ? (getenv("PKT_CALIB") ? QString(getenv("PKT_CALIB")) : QStringLiteral("/home/nonrmy/MK.calib.json"))
+            : calib;
         const QHash<int, int> table = load_calib_json(calib_path);
-        const QString win = active_window();
-    const QString proc = active_process();
         const QString sock = getenv("YDOTOOL_SOCKET") ? QString(getenv("YDOTOOL_SOCKET"))
                                                       : QStringLiteral("/tmp/.ydotool_socket");
-        std::printf(">> backend=ydotool calib=%d rules=%d window='%s' socket=%s\n",
-                    int(table.size()), int(rs.rules.size()), win.toUtf8().constData(),
-                    sock.toUtf8().constData());
-
-        QByteArray raw;
-        if (!feed.isEmpty()) {
-            raw = hex_to_bytes(feed);
-            std::printf(">> synthetic feed (--feed-hex): %d bytes\n", int(raw.size()));
-        } else {
-            const QString node = device.isEmpty() ? find_hidraw_node() : device;
-            bool opened = false;
-            if (!node.isEmpty()) {
-                raw = collect_hidraw(node, secs, opened);
-                std::printf(">> reading %s (%ds)\n", node.toUtf8().constData(), secs);
-            }
-            if (raw.isEmpty() && !opened) {   // no hidraw node left after replug
-                raw = collect_bus(secs);
-                std::printf(">> reading bus node via wrapped hidapi (%ds)\n", secs);
+        // persistent socket fd for the signal-safe sweep: raw connect once (no Qt)
+        static char sweep_path[108];
+        snprintf(sweep_path, sizeof sweep_path, "%s", sock.toUtf8().constData());
+        if (g_ydot_fd < 0) {
+            sockaddr_un sa{};
+            sa.sun_family = AF_UNIX;
+            snprintf(sa.sun_path, sizeof sa.sun_path, "%s", sweep_path);
+            g_ydot_fd = -1;
+            int fds[2] = {-1, -1};
+            if (::socketpair(AF_UNIX, 0, 0, fds) == 0) {
+                ::close(fds[1]);
+                sockaddr_un sa{};
+                sa.sun_family = AF_UNIX;
+                snprintf(sa.sun_path, sizeof sa.sun_path, "%s", sweep_path);
+                if (::connect(fds[0], (const sockaddr *)&sa, sizeof sa) == 0) g_ydot_fd = fds[0];
+                else ::close(fds[0]);
             }
         }
 
-        const QVector<KeyEvent> events = decode_stream(raw);
-        QSet<int> held, announced;
+        // one inject path used by BOTH batch-feed and event-loop
+        QSet<int> held;
         int presses = 0, injected = 0, skipped = 0;
-        for (const KeyEvent &ev : events) {
-            if (!ev.down) { held.remove(ev.scancode); continue; }
-            if (held.contains(ev.scancode)) continue;  // auto-repeat while held
-            held.insert(ev.scancode);
+        auto on_event = [&](int scancode, bool down) {
+            if (!down) { held.remove(scancode); return; }
+            if (held.contains(scancode)) return;      // typematic repeat while held
+            held.insert(scancode);
             ++presses;
-            if (!table.contains(ev.scancode)) {
-                if (!announced.contains(ev.scancode)) {
-                    announced.insert(ev.scancode);
-                    std::printf("UNKNOWN scancode 0x%04x -> skipped (not in calib)\n", ev.scancode);
-                }
-                ++skipped;
-                continue;
+            // window/process probed PER PRESS, not once at startup
+            const QString win = active_window();
+            const QString proc = active_process();
+            if (!table.contains(scancode)) {
+                std::printf("UNKNOWN scancode 0x%04x -> skipped (not in calib)\n", scancode);
+                ++skipped; return;
             }
-            const int pk = table.value(ev.scancode);
+            const int pk = table.value(scancode);
             const Rule *hit = nullptr;
             for (const Rule &r : rs.rules)
                 if (r.poskey == pk) { hit = &r; break; }
-            if (!hit) {
-                std::printf("POSKey %d -> no rule for this POSKey -> nothing injected\n", pk);
-                continue;
-            }
+            if (!hit) { std::printf("POSKey %d -> no rule -> nothing injected\n", pk); return; }
             const int sel = match_layer(*hit, proc, win);
             if (sel < 0) {
-                std::printf("POSKey %d -> no rule match (window '%s') -> nothing injected\n",
-                            pk, win.toUtf8().constData());
-                continue;
+                std::printf("POSKey %d -> no rule match (window '%s' proc '%s') -> nothing injected\n",
+                            pk, win.toUtf8().constData(), proc.toUtf8().constData());
+                return;
             }
             const QString typed = literal_to_type(*hit, hit->layers[sel]);
             if (typed.startsWith(QStringLiteral("\x01"))) {
                 std::printf("POSKey %d -> unsupported macro -> REFUSED, nothing injected\n", pk);
-                continue;
+                return;
             }
             const QVector<QPair<int, int>> seq = evdev_sequence(typed);
             if (seq.isEmpty()) {
                 std::printf("POSKey %d '%s' -> rule match -> no evdev code -> nothing injected\n",
                             pk, typed.toUtf8().constData());
-                continue;
+                return;
             }
-            QString pairs;
-            for (const auto &p : seq) pairs += QString("%1:%2 ").arg(p.first).arg(p.second);
+            // record the key-codes we send for the exit sweep (fixed array, atomic idx)
+            for (const auto &p : seq)
+                if (p.second == 1 && sweep_count.load() < 64) held_evdev[sweep_count.fetch_add(1)] = p.first;
             const int rc = ydot_send(sock, seq);
             if (rc == 0) {
                 ++injected;
+                QString pairs;
+                for (const auto &p : seq) pairs += QString("%1:%2 ").arg(p.first).arg(p.second);
                 std::printf("POSKey %d '%s' -> rule match -> injected (ydotool key %s)\n",
                             pk, typed.toUtf8().constData(), pairs.toUtf8().constData());
             } else {
-                std::printf("POSKey %d '%s' -> rule match -> NOT injected: socket rc=%d (%s)\n",
+                std::printf("POSKey %d '%s' -> NOT injected: socket rc=%d (%s)\n",
                             pk, typed.toUtf8().constData(), rc, sock.toUtf8().constData());
             }
+        };
+        auto do_sweep = [&]() {
+            // called ONLY from the loop (not from the signal handler): release pending keys
+            QString pairs;
+            QVector<QPair<int, int>> ups;
+            for (int i = 0; i < sweep_count.load(); ++i) ups.append({held_evdev[i], 0});
+            for (const auto &p : ups) pairs += QString("%1:0 ").arg(p.first);
+            if (!ups.isEmpty()) ydot_send(sock, ups);
+            sweep_count.store(0);
+            std::printf("-- exit sweep: released %s\n", pairs.toUtf8().constData());
+        };
+
+        if (!feed.isEmpty()) {           // synthetic recorded feed stays batch (gate)
+            const QVector<KeyEvent> events = decode_stream(hex_to_bytes(feed));
+            for (const KeyEvent &ev : events) on_event(ev.scancode, ev.down);
+            std::printf("-- %d presses, %d injected, %d unknown scancodes skipped\n",
+                        presses, injected, skipped);
+            return 0;
         }
+
+        // REAL event loop: blocking per-report read, replug reopen, --seconds budget
+        std::printf(">> backend=ydotool calib=%d rules=%d (event loop, window per press; Ctrl-C = sweep)\n",
+                    int(table.size()), int(rs.rules.size()));
+        QString node = device.isEmpty() ? find_hidraw_node() : device;
+        int fd = node.isEmpty() ? -1 : ::open(node.toUtf8().constData(), O_RDONLY);
+        if (fd < 0 && device.isEmpty()) fd = -1;
+        const time_t t0 = std::time(nullptr);
+        unsigned char rep[8];
+        while (true) {
+            if (secs > 0 && std::time(nullptr) - t0 >= secs) break;
+            if (fd < 0) {
+                ::usleep(200000);
+                node = find_hidraw_node();
+                fd = node.isEmpty() ? -1 : ::open(node.toUtf8().constData(), O_RDONLY | O_NONBLOCK);
+                if (fd >= 0) std::printf(">> reconnected hidraw %s\n", node.toUtf8().constData());
+                continue;
+            }
+            const ssize_t n = ::read(fd, rep, 6);
+            if (n == 6) { for (const KeyEvent &ev : decode_report(rep)) on_event(ev.scancode, ev.down); continue; }
+            if (n < 0 && (errno == EAGAIN || errno == EINTR)) { ::usleep(20000); continue; }
+            if (n == 0) { ::usleep(20000); continue; }
+            ::close(fd); fd = -1;       // replug: node died -> reopen next round
+        }
+        if (sweep_count.load() > 0) do_sweep();
         std::printf("-- %d presses, %d injected, %d unknown scancodes skipped\n",
                     presses, injected, skipped);
         return 0;
