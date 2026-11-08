@@ -63,6 +63,89 @@ static std::vector<uint8_t> unhex(const std::string &h) {
     return out;
 }
 
+// ---- built-in named-def model (gap B: pos_mci128a_* templates) ------------
+// A def = chain of nodes: code bytes + mid4 + trailer. Ptr nodes carry a
+// 16-bit forward pointer (mid = 00 ptr16 X) to another node, resolved to the
+// absolute body offset at emission; the final non-ptr node of a def takes the
+// -L chain rule when its literal trailer is 00/01. Data probed with
+// tools/gapB_extract.py + oracle mutators (never copied container bytes).
+struct RNode {
+    std::vector<uint8_t> code;
+    std::array<uint8_t, 4> mid{};
+    bool ptr = false;
+    std::string tgt;
+    int tnode = 0;
+    uint8_t x = 0;
+    uint8_t tr = 0;
+};
+
+static std::map<std::string, std::vector<RNode>> RAW_DEFS = [] {
+    std::map<std::string, std::vector<RNode>> m;
+    auto plain = [](std::string chex, uint8_t tr, uint8_t m3) {
+        RNode n;
+        n.code = unhex(chex);
+        n.mid = {0, 0, 0, m3};
+        n.tr = tr;
+        return n;
+    };
+    auto chain = [](std::string chex, std::string tgt, int idx, uint8_t x, uint8_t tr) {
+        RNode n;
+        n.code = unhex(chex);
+        n.ptr = true;
+        n.tgt = tgt;
+        n.tnode = idx;
+        n.x = x;
+        n.tr = tr;
+        return n;
+    };
+    m["Alt"] = {chain("1e38", "KEY-FN", 1, 0x00, 0x80)};
+    m["KEY-FN"] = {plain("14fc", 0x80, 0x80), plain("14fd", 0x01, 0x00)};
+    m["K-FnNumScroll"] = {plain("1c46", 0x00, 0x00),
+                          chain("1c45", "K-FnPrtScPause", 1, 0x00, 0x8f)};
+    m["K-FnDelIns"] = {chain("1ee02ae052", "K-FnDelIns", 2, 0xa1, 0xa7),
+                       chain("1ce052e0aa", "K-FnDelIns", 3, 0x20, 0xa6),
+                       chain("1ee02ae053", "K-FnDelIns", 4, 0xa0, 0xa6),
+                       chain("1ce053e0aa", "K-FnDelIns", 5, 0x01, 0x01),
+                       plain("1ee052", 0x00, 0x00),
+                       plain("1ee053", 0x01, 0x00)};
+    return m;
+}();
+
+static const std::map<std::string, std::string> SIMPLE_CODE{
+    {"Ctrl", "1e1d"},   {"LWIN", "1ee05b"}, {"AltGr", "1ee038"}, {"RWIN", "1ee05c"},
+    {"APP", "1ee05d"},  {"RCTRL", "1ee01d"}, {"Space", "1e39"},  {"Shift", "1e2a"},
+    {"RShift", "1e36"}, {"MakeSHIFTLOCK", "1e3a"}, {"Tab", "1e0f"}, {"ESC", "1e01"},
+    {"F1", "1e3b"}, {"F2", "1e3c"}, {"F3", "1e3d"}, {"F4", "1e3e"}, {"F5", "1e3f"},
+    {"F6", "1e40"}, {"F7", "1e41"}, {"F8", "1e42"}, {"F9", "1e43"}, {"F10", "1e44"},
+    {"F11", "1e57"}, {"F12", "1e58"}, {"Backspace", "1e0e"},
+};
+static const std::map<std::string, std::string> KEYFAM_CODE{
+    {"KEY-LEFT", "1ae04b"}, {"KEY-RIGHT", "1ae04d"}, {"KEY-DOWN", "1ae050"},
+    {"KEY-UP", "1ae048"},   {"KEY-END", "1ae04f"},   {"KEY-HOME", "1ae047"},
+    {"KEY-PGUP", "1ae049"}, {"KEY-PGDN", "1ae051"},
+};
+static const std::map<std::string, std::pair<std::string, std::string>> KF_STD{
+    {"K-Fn0", {"52", "32"}},   {"K-Fn.", {"53", "34"}},   {"K-FnDiv", {"e035", "35"}},
+    {"K-Fn1", {"4f", "24"}},   {"K-Fn2", {"50", "25"}},   {"K-Fn3", {"51", "26"}},
+    {"K-FnPlus", {"4e", "27"}}, {"K-FnEnter", {"e01c", "1c"}},
+    {"K-Fn4", {"4b", "16"}},   {"K-Fn5", {"4c", "17"}},   {"K-Fn6", {"4d", "18"}},
+    {"K-FnMinus", {"4a", "19"}}, {"K-Fn7", {"47", "08"}}, {"K-Fn8", {"48", "09"}},
+    {"K-Fn9", {"49", "0a"}},   {"K-FnMul", {"37", "0b"}},
+};
+static int ascii_code(const std::string &s) {
+    if (s.size() == 4 && s[0] == '\\' && s[1] == 'x') {
+        auto hx = [](char c) -> int {
+            if (c >= '0' && c <= '9') return c - '0';
+            char l = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (l >= 'a' && l <= 'f') return l - 'a' + 10;
+            return -1;
+        };
+        const int h1 = hx(s[2]), h2 = hx(s[3]);
+        if (h1 >= 0 && h2 >= 0) return h1 * 16 + h2;
+    }
+    return -1;
+}
+
 static std::vector<std::string> split_lines(const std::string &text) {
     std::vector<std::string> out;
     std::string cur;
@@ -122,11 +205,14 @@ static std::vector<std::string> findall(const std::string &s, const std::string 
 static bool emit_mwf(const std::string &mwf_text, std::vector<uint8_t> &payload) {
     std::map<std::string, std::string> hdr;
     std::vector<std::tuple<std::string, std::string, bool, std::string>> posrefs;  // cap label, refname, has -L, token-run
-    static const std::regex pos_re(R"(^([A-Z0-9]{2,4})(-L)?\+([A-Z/]*):\s*"\{(POS\w+)\}")");
+    static const std::regex pos_re(R"(^([A-Z0-9]{2,4})(-L)?\+([A-Z/]*):\s*"\{(.*)\}")");
     static const std::regex hdr_re(R"(^([A-Z0-9]+)\s+(.*)$)");
+    std::set<std::string> kp_caps;  // cap labels from !@KEYPRINT lines = grid caps
+    static const std::regex kp_re(R"(^!@KEYPRINT:([A-Z0-9-]{2,5})\s)");
     for (const auto &l : split_lines(mwf_text)) {
         std::smatch m;
         if (std::regex_search(l, m, pos_re)) { posrefs.emplace_back(m[1].str(), m[4].str(), m[2].matched, m[3].str()); continue; }
+        if (std::regex_search(l, m, kp_re)) { kp_caps.insert(m[1].str()); continue; }
         if (std::regex_search(l, m, hdr_re)) hdr[m[1].str()] = m[2].str();
     }
     const auto get = [&](const std::string &k) {
@@ -244,92 +330,120 @@ static bool emit_mwf(const std::string &mwf_text, std::vector<uint8_t> &payload)
     std::vector<uint8_t> h0, h1;
     if (!hk("HOTKEY0", h0) || !hk("HOTKEY1", h1)) return false;
 
-    // ---- POS slots: POSKey NN 1..128 unique, named refs onto fixed slots ----
-    std::map<uint32_t, std::vector<uint8_t>> slot;  // POS -> record code bytes
-    std::map<std::string, std::vector<uint32_t>> free;
+    // ---- POS records: slot = cap position, code = token ------------------
+    // Grid caps (everything except the fixed named caps) take POS slots 1.. in
+    // CAP-LABEL order — so a duplicated POSKey token on two caps writes two
+    // records (tools/gapA_dup_trailer.py: vendor emits POSKey001's code in
+    // slots 1 AND 2). The named caps of this device family own fixed slots;
+    // swapping tokens moves the CODE into the slot of the owning cap, never the
+    // slot itself (tools/gapA_named_swap.py: POSMSR2/POSMSR3 token swap ->
+    // slots 131..134 = 63,64,64,63). Record leading byte comes from the slot
+    // region (0x1d grid / named def first byte in 129..142; a POSKey code on a
+    // named slot keeps 0x1e, a named code on a grid slot is cut to 1d + second
+    // byte), and the trailer of a record = -L flag of the next occupied slot.
+    std::map<uint32_t, std::tuple<bool, bool, std::vector<uint8_t>>> recs;  // slot -> is_pk, -L, code
+    static const std::map<std::string, uint32_t> NAMED_CAP_SLOT{
+        {"M1H", 129}, {"M1T", 130}, {"M2H", 131}, {"M2T", 132}, {"M3H", 133}, {"M3T", 134},
+        {"BCH", 135}, {"BCT", 136}, {"FIH", 137}, {"FRT", 140},
+        {"KLH", 141}, {"KLT", 142},
+    };
     static const std::regex pk_re(R"(^POSKey([0-9]+)$)");
-    // cap label -> POS; vendor emits POSKey records ordered by CAP label
-    // (tools/order_probe.py: label_swap+far_swap move records with the
-    // binding; line order is irrelevant)
-    std::map<std::string, uint32_t> cap_pos;
-    // per-ref -L flags keyed by DECLARED POS SLOT: the vendor re-emits the
-    // flag of slot s as the trailer of the record for slot s-1 (and slot 1's
-    // flag lands in the global byte 0x141) — verified by the single-drop probe
-    // sweep (tools: drop fileline j -> trailer flip at record slot(j)-1).
-    std::map<uint32_t, uint8_t> slot_L;
-    for (const auto &[cap, name, has_L, toks] : posrefs) {
+
+    // code bytes for one token: POSKeyNN -> 68 POSID(NN); a named def -> its
+    // two bytes with the K/A/P token shift on the first byte
+    const auto code_for = [&](const std::string &name, const std::string &toks,
+                              bool &is_pk, std::vector<uint8_t> &code) -> bool {
         std::smatch m;
+        int k = 0, a = 0, p = 0;
+        {
+            std::string t = toks;
+            for (size_t j = 0; j < t.size(); ) {
+                const char c = t[j];
+                if (c == 'K') ++k; else if (c == 'A') ++a; else if (c == 'P') ++p;
+                j += (j + 1 < t.size() && t[j + 1] == '/' ? 2 : 1);
+            }
+        }
         if (std::regex_match(name, m, pk_re)) {
             const uint32_t i = static_cast<uint32_t>(std::stoul(m[1].str()));
-            if (i < 1 || i > 128 || slot.count(i)) return false;
-            slot[i] = unhex(POSID_HEX.at(i));
-            slot_L[i] = has_L ? 1 : 0;
-            cap_pos[cap] = i;
+            if (i < 1 || i > 128) return false;
+            is_pk = true;
+            code.push_back(0x68);
+            const auto pc = unhex(POSID_HEX.at(i));
+            code.insert(code.end(), pc.begin(), pc.end());
+            return true;
+        }
+        const NamedDef *def = nullptr;
+        for (const auto &nd : NAMED_DEFS) if (nd.name == name) def = &nd;
+        if (!def) return false;
+        const int first_b = std::stoi(def->code.substr(0, 2), nullptr, 16) + (k - 1) + 2 * (a - 1) + 4 * (p - 1);
+        const int second_b = std::stoi(def->code.substr(2, 2), nullptr, 16);
+        is_pk = false;
+        code.push_back(static_cast<uint8_t>(first_b));
+        code.push_back(static_cast<uint8_t>(second_b));
+        return true;
+    };
+
+    struct GridCap { std::string name, toks; bool has_L; };  // grid cap + its token
+    std::map<std::string, GridCap> grid;
+    for (const auto &[cap, name, has_L, toks] : posrefs) {
+        bool is_pk = false;
+        std::vector<uint8_t> code;
+        if (!code_for(name, toks, is_pk, code)) return false;
+        if (const auto it = NAMED_CAP_SLOT.find(cap); it != NAMED_CAP_SLOT.end()) {
+            if (recs.count(it->second)) return false;
+            recs[it->second] = {is_pk, has_L, std::move(code)};
         } else {
-            const NamedDef *def = nullptr;
-            for (const auto &nd : NAMED_DEFS) if (nd.name == name) def = &nd;
-            if (!def) return false;
-            if (!free.count(name)) free[name] = def->slots;
-            if (free[name].empty()) return false;
-            const uint32_t pos = free[name][0];
-            free[name].erase(free[name].begin());
-            if (slot.count(pos)) return false;
-            std::string h = def->code;
-            // token multiset shifts first scancode byte: K +1, A +2, P +4 per extra/missing
-            int k = 0, a = 0, p = 0;
-            {
-                std::string t = toks;
-                for (size_t j = 0; j < t.size(); ) {
-                    char c = t[j];
-                    if (c == 'K') ++k; else if (c == 'A') ++a; else if (c == 'P') ++p;
-                    j += (j + 1 < t.size() && t[j+1] == '/' ? 2 : 1);
-                }
-            }
-            int first = std::stoi(h.substr(0, 2), nullptr, 16);
-            first += (k - 1) * 1 + (a - 1) * 2 + (p - 1) * 4;
-            h[0] = static_cast<char>("0123456789ABCDEF"[(first >> 4) & 0xF]);
-            h[1] = static_cast<char>("0123456789ABCDEF"[first & 0xF]);
-            slot[pos] = unhex(h);
-            slot_L[pos] = has_L ? 1 : 0;
+            grid[cap] = GridCap{name, toks, has_L};
+        }
+    }
+    {
+        // grid slot = the cap's ordinal among the KEYPRINT cap labels (cap order).
+        // A dropped ref line keeps its KEYPRINT cap, so every other slot stays
+        // put; swapping POSKey tokens between caps moves only the code bytes
+        // (tools/gapA_template_probe.py + tools/gapA_swap_sweep.py).
+        std::set<std::string> gridcaps = kp_caps;
+        for (const auto &[cap, g] : grid) gridcaps.insert(cap);
+        uint32_t ord = 0;
+        for (const auto &cap : gridcaps) {
+            ++ord;
+            if (ord > 128) return false;
+            const auto it = grid.find(cap);
+            if (it == grid.end()) continue;  // cap without a ref = empty POS slot
+            bool is_pk = false;
+            std::vector<uint8_t> code;
+            if (!code_for(it->second.name, it->second.toks, is_pk, code)) return false;
+            recs[ord] = {is_pk, it->second.has_L, std::move(code)};
         }
     }
 
-    // trailer of record for slot s = -L flag of the NEXT DECLARED POS slot
-    // above s (138/139 are never declared, so FC@137 reads Keylock@140 — the
-    // one residual byte in drop_L_named_all pinned this generalization); if
-    // none exists, vendor writes 1.
-    auto next_flag = [&](uint32_t pos) {
-        auto it = slot_L.upper_bound(pos);
-        return it != slot_L.end() ? it->second : uint8_t(1);
+    // trailer of a record = -L flag of the NEXT occupied slot (ascending); the
+    // first occupied slot's flag is the global byte before the stream, and the
+    // last record loses its 4-byte mid together with the stream tail.
+    std::vector<uint32_t> used;
+    for (const auto &[slot, r] : recs) used.push_back(slot);
+    std::vector<uint8_t> flags;
+    for (const auto &[slot, r] : recs) flags.push_back(std::get<1>(r) ? 1 : 0);
+    const auto trailer = [&](size_t j) {
+        return j + 1 < flags.size() ? flags[j + 1] : uint8_t(1);
     };
-    auto record = [&](uint32_t pos) {
-        const auto &code = slot.at(pos);
-        const bool named = !POSID_HEX.count(pos);
-        std::vector<uint8_t> r;
-        if (!named) { r.push_back(0x1d); r.push_back(0x68); }
-        r.insert(r.end(), code.begin(), code.end());
-        for (int k0 = 0; k0 < 4; ++k0) r.push_back(0x00);
-        r.push_back(next_flag(pos));
-        return r;
-    };
-
-    // record stream: POSKey caps in cap-label order (std::map iterates sorted:
-    // A..H rows, then KLH/KLT, then M* — matches vendor base + probes), then
-    // named defs in fixed def order (MSR1,MSR2,MSR3,Barcode,FC,Keylock).
     std::vector<uint8_t> stream;
-    std::vector<size_t> emitted_sizes;  // per emitted record, stream order
-    size_t cur = 0;
-    const auto emit_rec = [&](uint32_t pos) {
-        const auto r = record(pos);
+    std::vector<size_t> emitted_sizes;  // per emitted record, slot order
+    for (size_t j = 0; j < recs.size(); ++j) {
+        const auto &[is_pk, has_L, code] = recs.at(used[j]);
+        const bool named_slot = used[j] >= 129;
+        std::vector<uint8_t> r;
+        if (is_pk) {  // POSKey code: style + 68 + POSID bytes
+            r.push_back(named_slot ? 0x1e : 0x1d);
+            r.insert(r.end(), code.begin(), code.end());
+        } else {      // named def code: style/first byte + second byte
+            r.push_back(named_slot ? code[0] : 0x1d);
+            r.push_back(code[1]);
+        }
+        for (int k0 = 0; k0 < 4; ++k0) r.push_back(0x00);
+        r.push_back(trailer(j));
         emitted_sizes.push_back(r.size());
         stream.insert(stream.end(), r.begin(), r.end());
-        cur += r.size();
-    };
-    for (const auto &[cap, pos] : cap_pos)
-        if (slot.count(pos)) emit_rec(pos);
-    for (const auto &def : NAMED_DEFS)
-        for (const uint32_t s : def.slots)
-            if (slot.count(s)) emit_rec(s);
+    }
     if (stream.size() >= 4) stream.resize(stream.size() - 4);
     else stream.clear();
 
@@ -343,12 +457,11 @@ static bool emit_mwf(const std::string &mwf_text, std::vector<uint8_t> &payload)
     payload.push_back(static_cast<uint8_t>((total - 1276) & 0xFF));
     const size_t first = 4 + 284 + gsz;
     {
-        // index: slot enumeration = occupied POS ascending; offsets advance by
-        // the sizes of records IN EMISSION order (oracle-confirmed: binding
-        // swaps move record CONTENT, never the slot walk — gapA_proof tok_swap)
+        // index: occupied slots ascending, offsets advance by record sizes in
+        // the same slot order
         size_t k = 0, cum = 0;
         for (uint32_t pos = 1; pos <= 142; ++pos) {
-            if (slot.count(pos) && k < emitted_sizes.size()) {
+            if (k < emitted_sizes.size() && used[k] == pos) {
                 const size_t off = first + cum;
                 payload.push_back(static_cast<uint8_t>(off >> 8));
                 payload.push_back(static_cast<uint8_t>(off & 0xFF));
@@ -373,7 +486,7 @@ static bool emit_mwf(const std::string &mwf_text, std::vector<uint8_t> &payload)
     payload.push_back(b138);
     if (mtxt) {
         for (uint8_t b : {0x01, 0x2e, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00}) payload.push_back(b);
-        payload.push_back(next_flag(0));  // slot 1's -L flag (next declared above 0)
+        payload.push_back(flags.empty() ? 1 : flags[0]);  // first ref's -L flag
     } else {
         for (uint8_t b : {0x00, 0x00, 0x00, 0x01}) payload.push_back(b);
     }
