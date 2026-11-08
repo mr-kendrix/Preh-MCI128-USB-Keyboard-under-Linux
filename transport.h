@@ -24,6 +24,7 @@ bool send_code(uint8_t code);
 std::vector<uint8_t> vendor_frame(int addr, const uint8_t *p, int seq);
 // drain IN reports for ms (0 = non-blocking), nonzero bytes only
 int drain_ms(int ms, std::vector<int> &out);
+int drain_one(int ms, std::vector<int> &out);
 
 // IN stream: raw hidapi read of one 5-byte report [0x04 …]; ms=0 non-blocking
 int poll_in(unsigned char *buf, int len, int ms);

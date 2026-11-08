@@ -23,6 +23,8 @@ struct UploadResult {
     bool canceled = false; // progress callback said stop (cancel button)
     bool armed = false;    // did we actually write the board
     bool finished = false; // ack tally passed and EF 12 (FinishWrite) was sent
+    uint16_t checksum16 = 0; // payload checksum sent via EF 0E handshake
+    QString reply;           // raw IN codes of the checksum reply (format TBD)
 };
 
 // payload -> report-4 frames -> one device_send() per code; progress(done,total)

@@ -78,7 +78,7 @@ static bool board_open_locked() {
     return true;
 }
 
-static int drain_one(int ms, std::vector<int> &out);
+int drain_one(int ms, std::vector<int> &out);
 static bool send_one(uint8_t code) {
     if (!board_open_locked()) return false;
     const unsigned char r[2] = {0x04, code};
@@ -92,7 +92,7 @@ static bool send_one(uint8_t code) {
     return false;
 }
 
-static int drain_one(int ms, std::vector<int> &out) {
+int drain_one(int ms, std::vector<int> &out) {
     out.clear();
     if (!board_open_locked()) return -1;
     unsigned char buf[64];
