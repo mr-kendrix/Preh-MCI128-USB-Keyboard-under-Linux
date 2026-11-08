@@ -1,0 +1,11 @@
+# pktm.service — USER unit (NOT the system pktd.service), kept NOT-started.
+# Start manually for trials: systemctl --user start pktm.service ; rollback: systemctl --user stop && (pktd stays running untouched).
+# Rollback one-liner: pktd.service (system) is independent and still the active daemon.
+[Unit]
+Description=pktm POS-key mapper daemon (C++/Qt6, trial only)
+
+[Service]
+Environment=YDOTOOL_SOCKET=/tmp/.ydotool_socket
+ExecStart=/home/nonrmy/hermes-workspace/pkt-editor-cpp/b/pktm --live "/mnt/Windows/ProgramData/PrehKeyTec/PKT Mapper/MappingLists/Mr.Kendrix.pmap" --calib /home/nonrmy/MK.calib.json
+# no hidraw theft: only start this after `systemctl stop pktd` (single consumer per hidraw node)
+OnExit=always
