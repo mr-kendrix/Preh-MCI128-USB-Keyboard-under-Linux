@@ -15,6 +15,7 @@
 #include <QSet>
 #include <cstring>
 #include <cstdlib>
+#include <csignal>
 #include <ctime>
 #include <cerrno>
 #include <fcntl.h>
@@ -134,7 +135,7 @@ int main(int argc, char **argv) {
         const QByteArray nm = rs.name.toUtf8();
         std::printf("rules=%d name=%s\n", int(rs.rules.size()), nm.constData());
         for (const Rule &r : rs.rules) {
-            int sel = match_layer(r, unknown_window());
+            int sel = match_layer(r, unknown_window(), unknown_window());
             if (sel < 0 && !r.layers.isEmpty()) sel = 0;
             Layer l;  // empty when the MAP carries no layer (poskey still a rule)
             if (sel >= 0) l = r.layers[sel];
@@ -155,9 +156,13 @@ int main(int argc, char **argv) {
     // --live: vendor IN stream -> calib -> rules -> ydotool socket. Never
     // starts/stops daemons or units; a human decides which reader runs.
     if (mode == "live") {
+        // exit sweep: a TERM/INT mid-sequence must not leave keys stuck
+        std::signal(SIGINT, +[](int) { ydot_release_all(); std::_Exit(0); });
+        std::signal(SIGTERM, +[](int) { ydot_release_all(); std::_Exit(0); });
         const QString calib_path = calib.isEmpty() ? QStringLiteral("/home/nonrmy/MK.calib.json") : calib;
         const QHash<int, int> table = load_calib_json(calib_path);
         const QString win = active_window();
+    const QString proc = active_process();
         const QString sock = getenv("YDOTOOL_SOCKET") ? QString(getenv("YDOTOOL_SOCKET"))
                                                       : QStringLiteral("/tmp/.ydotool_socket");
         std::printf(">> backend=ydotool calib=%d rules=%d window='%s' socket=%s\n",
@@ -205,13 +210,17 @@ int main(int argc, char **argv) {
                 std::printf("POSKey %d -> no rule for this POSKey -> nothing injected\n", pk);
                 continue;
             }
-            const int sel = match_layer(*hit, win);
+            const int sel = match_layer(*hit, proc, win);
             if (sel < 0) {
                 std::printf("POSKey %d -> no rule match (window '%s') -> nothing injected\n",
                             pk, win.toUtf8().constData());
                 continue;
             }
             const QString typed = literal_to_type(*hit, hit->layers[sel]);
+            if (typed.startsWith(QStringLiteral("\x01"))) {
+                std::printf("POSKey %d -> unsupported macro -> REFUSED, nothing injected\n", pk);
+                continue;
+            }
             const QVector<QPair<int, int>> seq = evdev_sequence(typed);
             if (seq.isEmpty()) {
                 std::printf("POSKey %d '%s' -> rule match -> no evdev code -> nothing injected\n",
@@ -237,12 +246,14 @@ int main(int argc, char **argv) {
 
     // --dry-inject: resolve window, match, print what WOULD be typed (no send)
     const QString win = active_window();
+    const QString proc = active_process();
     const Rule *hit = nullptr;
     for (const Rule &r : rs.rules)
         if (r.poskey == poskey) { hit = &r; break; }
-    int idx = hit ? match_layer(*hit, win) : -1;
+    int idx = hit ? match_layer(*hit, proc, win) : -1;
     QString typed;
     if (idx >= 0) typed = literal_to_type(*hit, hit->layers[idx]);
+    if (typed.startsWith(QStringLiteral("\x01"))) typed = QStringLiteral("<unsupported-macro: REFUSED>");
     const QByteArray w = win.toUtf8(), t = typed.toUtf8();
     std::printf("POSKey %d window='%s' would-type '%s' rule-match=%s\n",
                 poskey, w.constData(), t.constData(), idx >= 0 ? "YES" : "NO");

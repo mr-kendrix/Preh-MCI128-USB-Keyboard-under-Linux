@@ -21,7 +21,7 @@ RuleSet parse_rules(const QString &xml);
 
 // index of the <MAP>.layers entry an inject would use for this window
 // ('<unknown-window>' admits only unconditional/empty-dep layers), or -1
-int match_layer(const Rule &r, const QString &window);
+int match_layer(const Rule &r, const QString &process, const QString &window);
 
 // literal text an inject would type: the decoded Value with {...} macro
 // placeholders stripped; empty Value (or macro-only) falls back to the cap <Text>
@@ -32,6 +32,13 @@ QString active_window();
 
 // the sentinel string active_window() returns when no window can be observed
 QString unknown_window();
+
+// active window's process name via getwindowpid -> /proc/PID/comm (empty if unavailable)
+QString active_process();
+
+// exit sweep: release keys still held by the last ydot_send (install a signal
+// handler in main calling this; also call on normal exit after the live loop)
+void ydot_release_all();
 
 // ---- live IN feed (pktm --live) -------------------------------------
 // port of pktwire's decode_report/split_reports: IN reports are

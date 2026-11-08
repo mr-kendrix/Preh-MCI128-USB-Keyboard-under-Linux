@@ -2,6 +2,8 @@
 // cp1252 hex decoder without touching that shared file (kanban collision rule).
 #include "mapper.h"
 #include "pmap.h"
+#include <vector>
+#include <algorithm>
 #include <QProcess>
 #include <QRegularExpression>
 #include <QJsonDocument>
@@ -139,7 +141,24 @@ QHash<int, int> load_calib_json(const QString &path) {
 // (record = {int64 sec, int64 usec, u16 type, u16 code, s32 value}, zeroed tv —
 // exactly what Client/ydotool.c writes; the daemon's recv discards any datagram
 // whose size != sizeof(struct input_event) = 24 on x86_64).
+// keys currently held by the LAST ydot_send (exit sweep: a signal mid-sequence
+// must not leave them stuck — caller installs handler calling ydot_release_all())
+static std::vector<int> held_keys;
+static int ydot_send_now(const QString &socket_path, const QVector<QPair<int, int>> &events);
 int ydot_send(const QString &socket_path, const QVector<QPair<int, int>> &events) {
+    for (const auto &e : events)
+        if (e.second == 1) held_keys.push_back(e.first);
+        else held_keys.erase(std::remove(held_keys.begin(), held_keys.end(), e.first), held_keys.end());
+    return ydot_send_now(socket_path, events);
+}
+void ydot_release_all() {
+    // send up-events for whatever is still held (best-effort, fresh socket each time)
+    QVector<QPair<int, int>> ups;
+    for (int k : held_keys) ups.push_back({k, 0});
+    held_keys.clear();
+    if (!ups.isEmpty()) (void)ydot_send_now(QStringLiteral("/tmp/.ydotool_socket"), ups);
+}
+static int ydot_send_now(const QString &socket_path, const QVector<QPair<int, int>> &events) {
     QByteArray p = socket_path.toUtf8();
     sockaddr_un sa{};
     sa.sun_family = AF_UNIX;
@@ -199,16 +218,21 @@ RuleSet parse_rules(const QString &xml) {
     return rs;
 }
 
-static bool dep_matches(const QString &dep, const QString &window) {
+static bool dep_matches(const QString &dep, const QString &process, const QString &window) {
     if (dep.isEmpty() || window == k_unknown) return false;
-    return window.contains(dep, Qt::CaseInsensitive) ||
-           dep.contains(window, Qt::CaseInsensitive);
+    // vendor <Dependency> = process name (e.g. "soffice.bin"); match it against
+    // the active window's process (getwindowpid -> /proc/PID/comm), and allow a
+    // title-containment fallback ONLY in title direction (never dep-contains-window).
+    if (!process.isEmpty() &&
+        (process.contains(dep, Qt::CaseInsensitive) || dep.contains(process, Qt::CaseInsensitive)))
+        return true;
+    return window.contains(dep, Qt::CaseInsensitive);
 }
 
-int match_layer(const Rule &r, const QString &window) {
+int match_layer(const Rule &r, const QString &process, const QString &window) {
     // window-specific layer wins, else the unconditional one
     for (int i = 0; i < r.layers.size(); ++i)
-        if (!r.layers[i].dep.isEmpty() && dep_matches(r.layers[i].dep, window))
+        if (!r.layers[i].dep.isEmpty() && dep_matches(r.layers[i].dep, process, window))
             return i;
     for (int i = 0; i < r.layers.size(); ++i)
         if (r.layers[i].dep.isEmpty())
@@ -217,16 +241,25 @@ int match_layer(const Rule &r, const QString &window) {
 }
 
 QString literal_to_type(const Rule &r, const Layer &l) {
-    // "{N5}", "{Esc}", "{TAB}" are key-macro placeholders, not literal text:
-    // strip {..} runs; nothing literal left (empty Value too) -> cap <Text>.
-    // no regex needed: drop {..} macro placeholders, keep literal chars
-    QString v;
-    bool in_macro = false;
+    // macros: known tokens map via WORDS (caller-side); an UNKNOWN {...} token must
+    // not be silently dropped -> refuse (sentinel '#', caller injects nothing + logs).
+    // known macro-only Value falls back to cap <Text> (label is the honest stand-in).
+    static const auto known = [](const QString &t) {
+        static const QStringList k = {"N1","N2","N3","N4","N5","N6","N7","N8","N9",
+            "N10","N11","N12","N13","N14","ESC","TAB","DELAY","POS","POSKEY","MSR"};
+        for (const QString &s : k) if (t.startsWith(s, Qt::CaseInsensitive)) return true;
+        return false;
+    };
+    QString v; bool in_macro = false; QString tok;
     for (const QChar &c : l.value) {
-        if (c == QLatin1Char('{')) in_macro = true;
-        else if (c == QLatin1Char('}')) in_macro = false;
-        else if (!in_macro) v += c;
+        if (c == QLatin1Char('{')) { in_macro = true; tok.clear(); }
+        else if (c == QLatin1Char('}')) {
+            in_macro = false;
+            if (!known(tok)) return QStringLiteral("\x01unsupported-macro");
+        }
+        else { if (in_macro) tok += c; if (!in_macro) v += c; }
     }
+    if (in_macro) return QStringLiteral("\x01unsupported-macro"); // unterminated {...}
     return v.isEmpty() ? r.text : v;
 }
 
@@ -239,6 +272,21 @@ QString active_window() {
     p.waitForFinished(1500);
     const QString name = QString::fromUtf8(p.readAllStandardOutput()).trimmed();
     return name.isEmpty() ? k_unknown : name;
+}
+
+QString active_process() {
+    // getactivewindow getwindowpid -> /proc/PID/comm (vendor <Dependency> = process name)
+    QProcess p;
+    p.start(QStringLiteral("xdotool"),
+            {QStringLiteral("getactivewindow"), QStringLiteral("getwindowpid")});
+    if (p.error() == QProcess::FailedToStart)
+        return QString();
+    p.waitForFinished(1500);
+    const QString pid = QString::fromUtf8(p.readAllStandardOutput()).trimmed();
+    if (pid.isEmpty()) return QString();
+    QFile c(QStringLiteral("/proc/%1/comm").arg(pid));
+    if (!c.open(QIODevice::ReadOnly)) return QString();
+    return c.readAll().trimmed();
 }
 
 QString unknown_window() { return k_unknown; }

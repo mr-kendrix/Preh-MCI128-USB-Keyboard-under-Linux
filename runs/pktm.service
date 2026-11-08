@@ -1,11 +1,14 @@
 # pktm.service — USER unit (NOT the system pktd.service), kept NOT-started.
-# Start manually for trials: systemctl --user start pktm.service ; rollback: systemctl --user stop && (pktd stays running untouched).
-# Rollback one-liner: pktd.service (system) is independent and still the active daemon.
+# Trial order: stop the SYSTEM pktd first (sudo systemctl stop pktd.service — a user unit
+# cannot stop a system unit), then systemd path below. One daemon at a time: running BOTH
+# injects every key twice (hidraw readers each get their own copy — no silent theft).
+# Rollback: kill pktm process, sudo systemctl start pktd.service again.
+# NO auto-restart until the exit-sweep trial passed (see below).
 [Unit]
 Description=pktm POS-key mapper daemon (C++/Qt6, trial only)
 
 [Service]
 Environment=YDOTOOL_SOCKET=/tmp/.ydotool_socket
 ExecStart=/home/nonrmy/hermes-workspace/pkt-editor-cpp/b/pktm --live "/mnt/Windows/ProgramData/PrehKeyTec/PKT Mapper/MappingLists/Mr.Kendrix.pmap" --calib /home/nonrmy/MK.calib.json
-# no hidraw theft: only start this after `systemctl stop pktd` (single consumer per hidraw node)
-OnExit=always
+# (exit sweep = SIGTERM/SIGINT handler in --live: ydot_release_all(); add Restart=
+#  on-failure only after the 30s trial verifies it)

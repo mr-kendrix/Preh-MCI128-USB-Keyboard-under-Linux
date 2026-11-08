@@ -11,6 +11,11 @@
 | `calibrate` (learn live, next-key-prompt) | ✔ | ✘ | covered by existing MK.calib.json (learned via pktd) — pktm needs no relearn, but no relearn path |
 | `watch` / `raw` / `--dump-unknown` | ✔ | ✘ | diagnostics only; pktd remains for those |
 | auto-repeat (`<AutoRepeat>`) | ✔ | ✘ | open |
+| macros `{TAB}/{ESC}/{N5}` | partial | **open**: known-macros (ESC/TAB/DELAY/Nx, case-insens.) → Text-fallback; UNKNOWN macro → REFUSED (no silent strip) | full macro engine (mixed macro+literal → key+char sequence) open |
+| window/`<Dependency>` rule | ✔ x11/file/cmd | **process-name via getwindowpid→/proc/comm added**; title-contains one-directional; xdotool per press, X11/XWayland only | open: KDE-Wayland focus source |
+| unplug/replug | ✔ | ✔ (fresh open per reader) | — |
+| exit sweep | ✔? | **SIGINT/SIGTERM handler → ydot_release_all() (held-keys)** | 30s trial with mid-seq kill open |
+| relearn (`calibrate`) | ✔ | ✘ | open — pktm --calibrate missing |
 | held-set typematic-repeat kill | ✔ | ✔ (held set) | — |
 | hold_device_lock / other-readers detection | ✔ | ✘ | hidraw single-consumer risk unmanaged in pktm |
 | umlauts/unicode text→evdev seq | ✔ (`expand_tokens`) | ✔ (`CHARMAP` + refuse on unmappable) | — |
