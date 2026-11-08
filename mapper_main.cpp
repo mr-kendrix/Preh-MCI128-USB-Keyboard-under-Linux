@@ -107,7 +107,7 @@ int main(int argc, char **argv) {
     QString mode;
     int poskey = -1;
     QString feed, calib, device;
-    int secs = 3;
+    int secs = 0;   // --live default: run until signalled; tests pass explicit time
     for (int i = 1; i < argc; ++i) {
         const QString a = argv[i];
         if (a == "--rules-report") mode = QStringLiteral("report");
@@ -169,22 +169,23 @@ int main(int argc, char **argv) {
         // signal-safe sweep: handler sends up-events over the persistent ydotool
         // socket fd and _Exits — no heap, no stdio inside the handler.
         static int g_ydot_fd = -1;
-        std::signal(SIGTERM, [](int) {
+        auto sweep_handler = [](int) {
             for (int i = 0; i < sweep_count.load() && i < 64; ++i) {
                 unsigned char rec[24] = {0};
-                // {i64 tv_sec=0, i64 tv_usec=0, u16 type=1, u16 code, i32 val=0(release)}
                 const unsigned code = held_evdev[i] & 0xFFFFu;
                 rec[16] = 1; rec[18] = (unsigned char)code; rec[19] = (unsigned char)(code >> 8);
-                // val=0 -> key-up
                 (void)::send(g_ydot_fd, rec, sizeof rec, 0);
             }
             std::_Exit(0);
-        });
-        std::signal(SIGINT, [](int) { std::_Exit(0); });
+        };
+        std::signal(SIGTERM, sweep_handler);
+        std::signal(SIGINT, sweep_handler);
 
-        const QString calib_path = calib.isEmpty()
-            ? (getenv("PKT_CALIB") ? QString(getenv("PKT_CALIB")) : QStringLiteral("/home/nonrmy/MK.calib.json"))
-            : calib;
+        const QString calib_path = calib.isEmpty() ? (getenv("PKT_CALIB") ? QString(getenv("PKT_CALIB")) : QString()) : calib;
+        if (calib_path.isEmpty()) {
+            std::fprintf(stderr, "error: --calib <json> or PKT_CALIB env required for --live\n");
+            return 2;
+        }
         const QHash<int, int> table = load_calib_json(calib_path);
         const QString sock = getenv("YDOTOOL_SOCKET") ? QString(getenv("YDOTOOL_SOCKET"))
                                                       : QStringLiteral("/tmp/.ydotool_socket");
@@ -215,9 +216,6 @@ int main(int argc, char **argv) {
             if (held.contains(scancode)) return;      // typematic repeat while held
             held.insert(scancode);
             ++presses;
-            // window/process probed PER PRESS, not once at startup
-            const QString win = active_window();
-            const QString proc = active_process();
             if (!table.contains(scancode)) {
                 std::printf("UNKNOWN scancode 0x%04x -> skipped (not in calib)\n", scancode);
                 ++skipped; return;
@@ -227,6 +225,11 @@ int main(int argc, char **argv) {
             for (const Rule &r : rs.rules)
                 if (r.poskey == pk) { hit = &r; break; }
             if (!hit) { std::printf("POSKey %d -> no rule -> nothing injected\n", pk); return; }
+            // probes only when actually needed (rule has a dependency)
+            bool need_dep = false;
+            for (const Layer &l : hit->layers) if (!l.dep.isEmpty()) { need_dep = true; break; }
+            QString win = unknown_window(), proc;
+            if (need_dep) { win = active_window(); proc = active_process(); }
             const int sel = match_layer(*hit, proc, win);
             if (sel < 0) {
                 std::printf("POSKey %d -> no rule match (window '%s' proc '%s') -> nothing injected\n",
@@ -244,11 +247,18 @@ int main(int argc, char **argv) {
                             pk, typed.toUtf8().constData());
                 return;
             }
-            // record the key-codes we send for the exit sweep (fixed array, atomic idx)
+            // record key-codes for the exit sweep: store BEFORE increment (a signal
+            // between the two must never see an empty slot counted)
             for (const auto &p : seq)
-                if (p.second == 1 && sweep_count.load() < 64) held_evdev[sweep_count.fetch_add(1)] = p.first;
+                if (p.second == 1 && sweep_count.load() < 64) {
+                    const int i = sweep_count.load();
+                    held_evdev[i] = p.first;
+                    sweep_count.store(i + 1);
+                }
             const int rc = ydot_send(sock, seq);
             if (rc == 0) {
+                // sequence fully sent (down+up pairs) -> nothing left to release
+                sweep_count.store(0);
                 ++injected;
                 QString pairs;
                 for (const auto &p : seq) pairs += QString("%1:%2 ").arg(p.first).arg(p.second);
@@ -282,7 +292,7 @@ int main(int argc, char **argv) {
         std::printf(">> backend=ydotool calib=%d rules=%d (event loop, window per press; Ctrl-C = sweep)\n",
                     int(table.size()), int(rs.rules.size()));
         QString node = device.isEmpty() ? find_hidraw_node() : device;
-        int fd = node.isEmpty() ? -1 : ::open(node.toUtf8().constData(), O_RDONLY);
+        int fd = node.isEmpty() ? -1 : ::open(node.toUtf8().constData(), O_RDONLY | O_NONBLOCK);
         if (fd < 0 && device.isEmpty()) fd = -1;
         const time_t t0 = std::time(nullptr);
         unsigned char rep[8];

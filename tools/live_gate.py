@@ -42,7 +42,7 @@ if fd is not None:                       # drain leftovers via select-guarded lo
                 break
         time.sleep(0.05)
 
-p = subprocess.run([BIN, PMAP, "--live", "--feed-hex", FEED],
+p = subprocess.run([BIN, PMAP, "--live", "--feed-hex", FEED, "--calib", "/home/nonrmy/MK.calib.json"],
                    capture_output=True, text=True)
 print("rc", p.returncode)
 print(p.stdout)
