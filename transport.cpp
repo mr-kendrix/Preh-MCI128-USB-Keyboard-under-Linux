@@ -161,8 +161,12 @@ bool board_read(int addr, int ln, std::vector<int> &vals) {
         unsigned char buf[64];
         const int n = hid_read_timeout(board, buf, sizeof buf, 10u);
         if (n > 0) {
-            for (int i = 1; i < n; ++i)   // skip report id like python r[1:]
-                if (buf[i]) codes.push_back(buf[i]);
+            for (int s = 0; s + 5 <= n; s += 5)          // reports are 5 bytes [04 d1 d2 d3 d4]
+                for (int i = 1; i < 5; ++i)
+                    if (buf[s + i]) codes.push_back(buf[s + i]);
+            if (n % 5)                                   // tail partial report
+                for (int s = (n / 5) * 5, i = 1; s + i < n; ++i)
+                    if (buf[s + i]) codes.push_back(buf[s + i]);
             quiet_slices = 0;
         } else if (++quiet_slices >= 35) break;
     }

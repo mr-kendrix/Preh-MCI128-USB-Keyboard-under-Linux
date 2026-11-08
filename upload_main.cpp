@@ -19,7 +19,8 @@ int main(int argc, char **argv) {
     int cancel_at = -1, dump_frames = 0;
     for (int i = 1; i < argc; ++i) {
         const QString a = argv[i];
-        if (a == "--verify") verify = true;
+        if (a == "--upload") upload = true;
+        else if (a == "--verify") verify = true;
         else if (a == "--arm-upload") armed = true;
         else if (a == "--map-table") table = true;
         else if (a == "--fail-text") fail_text = true;

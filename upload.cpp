@@ -5,6 +5,7 @@
 #include <QPushButton>
 #include <QProgressDialog>
 #include <QDateTime>
+#include <QDir>
 #include <cstdio>
 #include <functional>
 
@@ -70,7 +71,10 @@ UploadResult run_upload(const std::vector<uint8_t> &payload, bool armed,
             r.err_msg = QStringLiteral("backup read failed — refusing blind overwrite");
             return r;
         }
-        const QString path = QStringLiteral("/tmp/pktup_backup_%1.mwx")
+        const QString dir = QStringLiteral("%1/.local/share/pkteditor").arg(
+                                QDir::homePath());
+        QDir().mkdir(dir);
+        const QString path = dir + QStringLiteral("/pktup_backup_%1.mwx")
                                  .arg(QDateTime::currentDateTime().toString("yyyyMMdd_Hhmmss"));
         QFile bf(path);
         if (bf.open(QIODevice::WriteOnly)) bf.write("Preh" + bak);
