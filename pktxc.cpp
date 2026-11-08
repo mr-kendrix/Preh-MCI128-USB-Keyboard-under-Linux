@@ -310,7 +310,7 @@ static bool emit_mwf(const std::string &mwf_text, std::vector<uint8_t> &payload)
     payload.clear();
     payload.push_back(b0);
     payload.push_back(0x00);
-    payload.push_back(0x05);
+    payload.push_back(static_cast<uint8_t>(total >> 8));
     payload.push_back(static_cast<uint8_t>((total - 1276) & 0xFF));
     const size_t first = 4 + 284 + gsz;
     size_t cum = 0;
