@@ -18,14 +18,15 @@ endforeach()
 target_include_directories(pkteditor PRIVATE /usr/include/qt6/QtWidgets /usr/include/qt6/QtGui)
 target_include_directories(pktup PRIVATE /usr/include/qt6/QtWidgets /usr/include/qt6/QtGui)
 
-# hotspot: CMakeLists.txt — pktm mount added by the mapper lane (own TU mapper.*;
-# no USB/HID: rules layer is pure Qt Core/Gui)
-add_executable(pktm mapper_main.cpp mapper.cpp pmap.cpp)
+# hotspot: CMakeLists.txt — pktm mount added by the rules layer (own TU mapper.*;
+# rules layer is pure Qt Core/Gui; --live additionally reuses transport.cpp, so
+# pktm links USB+HID too — link line moved below find_library)
+add_executable(pktm mapper_main.cpp mapper.cpp pmap.cpp transport.cpp)
 target_include_directories(pktm PRIVATE /usr/include/qt6 /usr/include/qt6/QtCore)
-target_link_libraries(pktm PRIVATE Qt6Core Qt6Gui)
 
 find_library(USB_LIB NAMES usb-1.0)
 set(HID_LIB /usr/lib/libhidapi-libusb.so)
 target_link_libraries(pktest PRIVATE Qt6Core "${USB_LIB}" "${HID_LIB}")
 target_link_libraries(pkteditor PRIVATE Qt6Core Qt6Gui Qt6Widgets "${USB_LIB}" "${HID_LIB}")
 target_link_libraries(pktup PRIVATE Qt6Core Qt6Gui Qt6Widgets "${USB_LIB}" "${HID_LIB}")
+target_link_libraries(pktm PRIVATE Qt6Core Qt6Gui "${USB_LIB}" "${HID_LIB}")
