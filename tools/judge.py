@@ -21,9 +21,13 @@ if __name__ == "__main__":
     for line in open(mf):
         e = json.loads(line)
         if not e["expected"]:
-            stats["reject" if e["rc"] else "skip"] += 1
-            if e["rc"]:
-                fails.append(("REJECT", e["variant"], (e["mwxc_out"] or e["stdout"])[:120]))
+            # reject-agreement: oracle rejected -> native MUST refuse too
+            ours_check = run_pktxc(e["path"], "/tmp/judge_rej.mwx")
+            if len(ours_check) > 0:
+                stats["agree_fail"] = stats.get("agree_fail", 0) + 1
+                fails.append(("AGREE-FAIL", e["variant"], "oracle rejected, native ACCEPTED"))
+            else:
+                stats["agree_ok"] = stats.get("agree_ok", 0) + 1
             continue
         exp = open(e["expected"], "rb").read()
         ours = run_pktxc(e["path"], "/tmp/judge_out.mwx")

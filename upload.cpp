@@ -41,6 +41,15 @@ UploadResult run_upload(const std::vector<uint8_t> &payload, bool armed,
         return r;
     }
     std::vector<uint8_t> body(payload.begin() + 4, payload.end());
+    // supported-path guard: length word (body[2:3], LE) must count the whole file
+    if (body.size() >= 4) {
+        const int declared = (body[2] << 8) | body[3];
+        if (declared != (int)payload.size()) {
+            r.status = LIBUSB_ERROR_INVALID_PARAM;
+            r.stopped_at = 0;
+            return r;
+        }
+    }
     while (body.size() % 8) body.push_back(0);   // zero-pad the last block
     r.frames = int(body.size() / 8);
     if (!armed)
