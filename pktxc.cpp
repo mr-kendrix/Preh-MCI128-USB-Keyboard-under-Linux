@@ -285,10 +285,15 @@ static bool emit_mwf(const std::string &mwf_text, std::vector<uint8_t> &payload)
     // ---- MSR line: tokens before the first ':'; ':' presence drives body size ----
     const std::string msr = get("MSR");
     const bool mtxt = msr.find(':') != std::string::npos;
-    // MSR tokens only count on the "toks, : text" form; a token-only MSR line is ignored
-    if (mtxt) {
-        const std::string head = msr.substr(0, msr.find(':'));
-        for (const auto &t0 : split_c(head, ',')) {
+    // MSR token bits (oracle probes, A@0x131/B@0x132): every comma element
+    // before the ':' counts; WITHOUT a ':' the last list element is the text-
+    // holder slot and is dropped -> single-token "MSR M3" is inert, but
+    // "MSR M3, LRC" still sets M3 (B@0x132), "LRC, NSE, M3" sets LRC|NSE.
+    {
+        std::string head = mtxt ? msr.substr(0, msr.find(':')) : msr;
+        std::vector<std::string> toks = split_c(head, ',');
+        if (!mtxt && !toks.empty()) toks.pop_back();
+        for (const auto &t0 : toks) {
             const std::string tok = strip(t0);
             if (tok == "N1") A &= ~1;
             else if (tok == "N2") A &= ~2;
@@ -617,7 +622,9 @@ static bool emit_mwf(const std::string &mwf_text, std::vector<uint8_t> &payload)
         for (uint8_t b : {0x01, 0x2e, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00}) payload.push_back(b);
         payload.push_back(flags.empty() ? 1 : flags[0]);  // first ref's -L flag
     } else {
-        for (uint8_t b : {0x00, 0x00, 0x00, 0x01}) payload.push_back(b);
+        // no MSR ": text" block: no global -L consumer byte (oracle probes),
+        // the flag lands on each record's own trailer instead
+        for (uint8_t b : {0x00, 0x00, 0x00, 0x00}) payload.push_back(b);
     }
     payload.insert(payload.end(), stream.begin(), stream.end());
     return payload.size() == total;
