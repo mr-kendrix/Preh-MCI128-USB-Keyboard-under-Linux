@@ -35,6 +35,8 @@ uint8_t expected_ack(size_t i) { return 0x20 | static_cast<uint8_t>((i + 1) & 3)
 // issues the HID SET_REPORT control request for us (interface 1), so no hand-rolled
 // control_transfer with invented request bytes is needed anywhere.
 static hid_device *board = nullptr;
+static QString g_first8;
+QString first8_debug() { return g_first8; }
 static int last_status = 0;
 
 // resolve bus node path of 053a:0b01 via libusb, then wrap per interface exactly
@@ -146,6 +148,7 @@ static int nibble_sum(int addr, int ln) {
 // reply = escape-coded IN codes until 350 ms silence; FC->00 FE|0x80, else literal
 bool board_read(int addr, int ln, std::vector<int> &vals) {
     if (!board_open_locked()) return false;
+    { std::vector<int> pre; drain_one(150, pre); }   // silence first (leftover IN tail)
     const QString d = QStringLiteral("%1").arg(addr, 4, 16, QChar('0')).toUpper() +
                       QStringLiteral("%1").arg(ln, 2, 16, QChar('0')).toUpper() +
                       QStringLiteral("%1").arg(nibble_sum(addr, ln) & 0xFF, 2, 16, QChar('0')).toUpper();
@@ -155,10 +158,13 @@ bool board_read(int addr, int ln, std::vector<int> &vals) {
     std::vector<int> codes;
     int quiet_slices = 0;
     for (int t = 0; t < 300; ++t) {   // up to 3 s, end at 350 ms silence
-        std::vector<int> part;
-        const int got = drain_one(10, part);
-        if (got) { for (int c : part) codes.push_back(c); quiet_slices = 0; }
-        else if (++quiet_slices >= 35) break;
+        unsigned char buf[64];
+        const int n = hid_read_timeout(board, buf, sizeof buf, 10u);
+        if (n > 0) {
+            for (int i = 1; i < n; ++i)   // skip report id like python r[1:]
+                if (buf[i]) codes.push_back(buf[i]);
+            quiet_slices = 0;
+        } else if (++quiet_slices >= 35) break;
     }
     for (size_t i = 0; i < codes.size(); ++i) {
         const int c = codes[i];
@@ -175,7 +181,11 @@ int board_checksum16(int *len_word) {   // read first 8 bytes, return board's ow
         std::vector<int> v;
         drain_ms(300, v);   // silence first (leftover IN tail)
         v.clear();
-        if (board_read(0, 8, v) && v.size() >= 9) {
+        if (board_read(0, 8, v) && v.size() >= 8) {
+            QString hexs;
+            for (int i = 0; i < 9 && i < int(v.size()); ++i) hexs += QStringLiteral(" %1").arg(v[i], 2, 16, QChar('0'));
+            g_first8 = hexs;
+            // framing seen in WinProgrammer captures AND on this board: 31 00 CHK(2) LEN(2)
             if (len_word) *len_word = (v[6] << 8) | v[7];
             return (v[2] << 8) | v[3];
         }

@@ -25,6 +25,7 @@ std::vector<uint8_t> vendor_frame(int addr, const uint8_t *p, int seq);
 // drain IN reports for ms (0 = non-blocking), nonzero bytes only
 int drain_ms(int ms, std::vector<int> &out);
 int drain_one(int ms, std::vector<int> &out);
+QString first8_debug();   // raw decoded first-8 readback (diagnostics)
 bool board_read(int addr, int ln, std::vector<int> &vals);
 int board_checksum16(int *len_word);
 

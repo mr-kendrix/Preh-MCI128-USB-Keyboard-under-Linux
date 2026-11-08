@@ -15,11 +15,11 @@
 
 int main(int argc, char **argv) {
     QString path, container, shot;
-    bool armed = false, upload = false, table = false, fail_text = false;
+    bool armed = false, upload = false, table = false, fail_text = false, verify = false;
     int cancel_at = -1, dump_frames = 0;
     for (int i = 1; i < argc; ++i) {
         const QString a = argv[i];
-        if (a == "--upload") upload = true;
+        if (a == "--verify") verify = true;
         else if (a == "--arm-upload") armed = true;
         else if (a == "--map-table") table = true;
         else if (a == "--fail-text") fail_text = true;
@@ -79,6 +79,23 @@ int main(int argc, char **argv) {
         std::printf("%s\n", upload_text(r).toUtf8().constData());
         r.canceled = false;
         std::printf("%s\n", upload_text(r).toUtf8().constData());
+        return 0;
+    }
+
+    if (verify) { // board checksum readback vs container (no write)
+        const auto payload = payload_of(pm, container);
+        std::vector<uint8_t> body(payload.begin(), payload.end());
+        if (body.size() >= 4 && body[0] == 'P')
+            body = std::vector<uint8_t>(body.begin() + 4, body.end());
+        int lw = -1;
+        const int bc = board_checksum16(&lw);
+        const int ln = (body.size() >= 4) ? ((uint16_t(body[2]) << 8) | body[3]) : 0;
+        uint32_t sum = 0;
+        for (int i = 0; i + 1 < ln && i < int(body.size()); ++i) sum += body[i];
+        const uint16_t cs = uint16_t(sum & 0xFFFF);
+        std::printf("board: len=%d chk=%04X  container chk=%04X  %s  raw=%s\n",
+                    lw, bc, cs, (bc >= 0 && bc == cs) ? "MATCH" : "DIFF/unread",
+                    first8_debug().toUtf8().constData());
         return 0;
     }
 

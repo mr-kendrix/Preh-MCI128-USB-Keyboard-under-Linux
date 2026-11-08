@@ -19,8 +19,18 @@ std::vector<uint8_t> payload_of(const Pmap &pm, const QString &container) {
     return std::vector<uint8_t>(raw.constData(), raw.constData() + raw.size());
 }
 
-// payload[2:4] BE = byte count; checksum16 = sum(payload[0:len-2]) (4-capture rule)
+static uint16_t checksum_winprog(const std::vector<uint8_t> &body);
+// board/container framing here: 00 00 LEN(2BE) CHK(2BE) payload-from-addr-8
+// (WinProgrammer captures use 31 00 CHK(2) LEN(2) — the sum rule applies there)
 static uint16_t payload_checksum16(const std::vector<uint8_t> &body) {
+    if (body.size() >= 6 && body[0] == 0x31)          // WinProgrammer framing
+        return checksum_winprog(body);
+    if (body.size() >= 6)                              // board framing: embedded CHK
+        return (uint16_t(body[4]) << 8) | body[5];
+    return 0;
+}
+
+static uint16_t checksum_winprog(const std::vector<uint8_t> &body) {
     const int n = (uint16_t(body[2]) << 8) | body[3];
     uint32_t sum = 0;
     for (int i = 0; i + 1 < n && i < int(body.size()); ++i)
@@ -124,8 +134,8 @@ UploadResult run_upload(const std::vector<uint8_t> &payload, bool armed,
     // FinishWriteDataMWX + expected ack 0x02
     send_code(0xEF); send_code(0x12);
     drain_ms(150, junk);
-    // verify: read back the board's own checksum (EF 0E read verb, decode FC/FE)
-    const uint16_t cs = payload_checksum16(body);
+// verify: board's own checksum (Claude sum rule matches on this board: sum(body[0:len-2]))
+    const uint16_t cs = checksum_winprog(body);
     int len_word = -1;
     const int board_cs = board_checksum16(&len_word);
     r.checksum16 = cs;
