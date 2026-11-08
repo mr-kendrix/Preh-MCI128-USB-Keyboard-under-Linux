@@ -45,12 +45,12 @@ static const std::map<uint32_t, std::string> POSID_HEX{
 // named POS refs: code bytes + candidate POS slots
 struct NamedDef { const char *name; std::string code; std::vector<uint32_t> slots; };
 static const NamedDef NAMED_DEFS[]{
-    {"POSBarcode", "1e62", {129, 130}},
-    {"POSFC", "1e63", {131, 132}},
-    {"POSKeylock", "1e64", {133, 134}},
-    {"POSMSR1", "1e65", {135, 136}},
-    {"POSMSR2", "1e67", {137, 140}},
-    {"POSMSR3", "1e66", {141, 142}},
+    {"POSMSR1", "1e62", {135, 136}},
+    {"POSMSR2", "1e63", {137, 140}},
+    {"POSMSR3", "1e64", {141, 142}},
+    {"POSBarcode", "1e65", {129, 130}},
+    {"POSFC", "1e67", {131, 132}},
+    {"POSKeylock", "1e66", {133, 134}},
 };
 
 static std::vector<uint8_t> unhex(const std::string &h) {
@@ -118,12 +118,12 @@ static std::vector<std::string> findall(const std::string &s, const std::string 
 
 static bool emit_mwf(const std::string &mwf_text, std::vector<uint8_t> &payload) {
     std::map<std::string, std::string> hdr;
-    std::vector<std::string> posrefs;
-    static const std::regex pos_re(R"(^([A-Z0-9]{2,4})-L\+[A-Z/]*:\s*"\{(POS\w+)\}")");
+    std::vector<std::tuple<std::string, bool, std::string>> posrefs;  // name, has -L, token-run
+    static const std::regex pos_re(R"(^([A-Z0-9]{2,4})(-L)?\+([A-Z/]*):\s*"\{(POS\w+)\}")");
     static const std::regex hdr_re(R"(^([A-Z0-9]+)\s+(.*)$)");
     for (const auto &l : split_lines(mwf_text)) {
         std::smatch m;
-        if (std::regex_search(l, m, pos_re)) { posrefs.push_back(m[2].str()); continue; }
+        if (std::regex_search(l, m, pos_re)) { posrefs.emplace_back(m[4].str(), m[2].matched, m[3].str()); continue; }
         if (std::regex_search(l, m, hdr_re)) hdr[m[1].str()] = m[2].str();
     }
     const auto get = [&](const std::string &k) {
@@ -144,9 +144,13 @@ static bool emit_mwf(const std::string &mwf_text, std::vector<uint8_t> &payload)
     static const std::map<std::string, uint8_t> RATE_W{{"FAST", 0x20}, {"MEDIUM", 0x24},
                                                        {"SLOW", 0x2C}, {"VERY", 0x3F}, {"VERY SLOW", 0x3F}};
     if (!word.empty() && !RATE_W.count(word)) return false;
-    if ((n == 30 && d == 250) || (n == 2 && d == 1000)) {} else return false;
+    // vendor maps (n,d) pairs to a preset byte at 0x138; out-of-preset pairs map to 0x1F
+    static const std::map<std::pair<int,int>, uint8_t> RATE_P{
+        {{30,250}, 0x00}, {{20,250}, 0x04}, {{30,500}, 0x20}, {{20,500}, 0x24},
+        {{30,1000}, 0x60}, {{10,200}, 0x60}, {{5,400}, 0x60}, {{2,1000}, 0x7F},
+        {{2,250}, 0x1F}, {{40,500}, 0x1F}, {{1,2000}, 0x1F}};
+    const uint8_t b138 = RATE_P.count({n,d}) ? RATE_P.at({n,d}) : 0x1F;
     const uint8_t R = RATE_W.count(word) ? RATE_W.at(word) : 0;
-    const uint8_t b138 = d == 1000 ? 0x7F : 0x00;
 
     // ---- SOUND: 4 fields; a zero duration is rejected ----
     const auto snd = split_c(get("SOUND"), ',');
@@ -239,44 +243,64 @@ static bool emit_mwf(const std::string &mwf_text, std::vector<uint8_t> &payload)
 
     // ---- POS slots: POSKey NN 1..128 unique, named refs onto fixed slots ----
     std::map<uint32_t, std::vector<uint8_t>> slot;  // POS -> record code bytes
+    std::map<uint32_t, uint8_t> recflag;            // POS -> active flag (has -L)
+    bool all_named_L = true;                        // all named refs have -L?
     std::map<std::string, std::vector<uint32_t>> free;
     static const std::regex pk_re(R"(^POSKey([0-9]+)$)");
-    for (const auto &name : posrefs) {
+    for (const auto &[name, has_L, toks] : posrefs) {
         std::smatch m;
         if (std::regex_match(name, m, pk_re)) {
             const uint32_t i = static_cast<uint32_t>(std::stoul(m[1].str()));
             if (i < 1 || i > 128 || slot.count(i)) return false;
             slot[i] = unhex(POSID_HEX.at(i));
+            recflag[i] = has_L ? 1 : 0;
         } else {
             const NamedDef *def = nullptr;
             for (const auto &nd : NAMED_DEFS) if (nd.name == name) def = &nd;
             if (!def) return false;
+            all_named_L = all_named_L && has_L;
             if (!free.count(name)) free[name] = def->slots;
             if (free[name].empty()) return false;
             const uint32_t pos = free[name][0];
             free[name].erase(free[name].begin());
             if (slot.count(pos)) return false;
-            slot[pos] = unhex(def->code);
+            std::string h = def->code;
+            // token multiset shifts first scancode byte: K +1, A +2, P +4 per extra/missing
+            int k = 0, a = 0, p = 0;
+            {
+                std::string t = toks;
+                for (size_t j = 0; j < t.size(); ) {
+                    char c = t[j];
+                    if (c == 'K') ++k; else if (c == 'A') ++a; else if (c == 'P') ++p;
+                    j += (j + 1 < t.size() && t[j+1] == '/' ? 2 : 1);
+                }
+            }
+            int first = std::stoi(h.substr(0, 2), nullptr, 16);
+            first += (k - 1) * 1 + (a - 1) * 2 + (p - 1) * 4;
+            h[0] = static_cast<char>("0123456789ABCDEF"[(first >> 4) & 0xF]);
+            h[1] = static_cast<char>("0123456789ABCDEF"[first & 0xF]);
+            slot[pos] = unhex(h);
+            recflag[pos] = has_L ? 1 : 0;
         }
     }
 
-    // ---- records: [1d 68] + code + trailer for POSKeys; code + trailer named ----
     auto record = [&](uint32_t pos) {
         const auto &code = slot.at(pos);
         const bool named = !POSID_HEX.count(pos);
         std::vector<uint8_t> r;
         if (!named) { r.push_back(0x1d); r.push_back(0x68); }
         r.insert(r.end(), code.begin(), code.end());
-        for (int k = 0; k < 4; ++k) r.push_back(0x00);
-        r.push_back(0x01);  // active flag
+        for (int k0 = 0; k0 < 4; ++k0) r.push_back(0x00);
+        r.push_back(recflag.at(pos));
         return r;
     };
 
     std::vector<uint8_t> stream;
-    for (const auto &[pos, code] : slot) {
-        const auto r = record(pos);
-        stream.insert(stream.end(), r.begin(), r.end());
-    }
+    for (uint32_t pos = 1; pos <= 128; ++pos)
+        if (slot.count(pos)) { const auto r = record(pos); stream.insert(stream.end(), r.begin(), r.end()); }
+    for (const auto &def : NAMED_DEFS)
+        for (const uint32_t s : def.slots)
+            if (slot.count(s)) { const auto r = record(s); stream.insert(stream.end(), r.begin(), r.end()); }
     if (stream.size() >= 4) stream.resize(stream.size() - 4);
     else stream.clear();
 
@@ -314,7 +338,8 @@ static bool emit_mwf(const std::string &mwf_text, std::vector<uint8_t> &payload)
     payload.push_back(0x00);
     payload.push_back(b138);
     if (mtxt) {
-        for (uint8_t b : {0x01, 0x2e, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01}) payload.push_back(b);
+        for (uint8_t b : {0x01, 0x2e, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00}) payload.push_back(b);
+        payload.push_back(all_named_L ? 0x01 : 0x00);
     } else {
         for (uint8_t b : {0x00, 0x00, 0x00, 0x01}) payload.push_back(b);
     }
