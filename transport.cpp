@@ -136,6 +136,53 @@ bool device_send(uint8_t code) { return send_one(code); }
 
 bool send_code(uint8_t code) { return send_one(code); }
 
+
+static int nibble_sum(int addr, int ln) {
+    return ((addr >> 12) & 15) + ((addr >> 8) & 15) + ((addr >> 4) & 15) +
+           (addr & 15) + ((ln >> 4) & 15) + (ln & 15);
+}
+
+// board read verb: EF 0E + ASCII hex "%04X%02X%02X" (addr/len/nibble-sum)
+// reply = escape-coded IN codes until 350 ms silence; FC->00 FE|0x80, else literal
+bool board_read(int addr, int ln, std::vector<int> &vals) {
+    if (!board_open_locked()) return false;
+    const QString d = QStringLiteral("%1").arg(addr, 4, 16, QChar('0')).toUpper() +
+                      QStringLiteral("%1").arg(ln, 2, 16, QChar('0')).toUpper() +
+                      QStringLiteral("%1").arg(nibble_sum(addr, ln) & 0xFF, 2, 16, QChar('0')).toUpper();
+    if (!send_code(0xEF) || !send_code(0x0E)) return false;
+    for (int i = 0; i < d.size(); ++i)
+        if (!send_code(static_cast<uint8_t>(d.at(i).unicode()))) return false;
+    std::vector<int> codes;
+    int quiet_slices = 0;
+    for (int t = 0; t < 300; ++t) {   // up to 3 s, end at 350 ms silence
+        std::vector<int> part;
+        const int got = drain_one(10, part);
+        if (got) { for (int c : part) codes.push_back(c); quiet_slices = 0; }
+        else if (++quiet_slices >= 35) break;
+    }
+    for (size_t i = 0; i < codes.size(); ++i) {
+        const int c = codes[i];
+        if (c == 0xFC) vals.push_back(0x00);
+        else if (c == 0xFD) vals.push_back(0x80);
+        else if (c == 0xFE && i + 1 < codes.size()) { vals.push_back(codes[++i] | 0x80); }
+        else vals.push_back(c);
+    }
+    return true;
+}
+
+int board_checksum16(int *len_word) {   // read first 8 bytes, return board's own checksum
+    for (int t2 = 0; t2 < 3; ++t2) {
+        std::vector<int> v;
+        drain_ms(300, v);   // silence first (leftover IN tail)
+        v.clear();
+        if (board_read(0, 8, v) && v.size() >= 9) {
+            if (len_word) *len_word = (v[6] << 8) | v[7];
+            return (v[2] << 8) | v[3];
+        }
+    }
+    return -1;
+}
+
 int drain_ms(int ms, std::vector<int> &out) { return drain_one(ms, out); }
 
 int device_last_status() { return last_status; }

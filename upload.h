@@ -24,7 +24,11 @@ struct UploadResult {
     bool armed = false;    // did we actually write the board
     bool finished = false; // ack tally passed and EF 12 (FinishWrite) was sent
     uint16_t checksum16 = 0; // payload checksum sent via EF 0E handshake
+    int board_checksum16 = -1; // board's own checksum read back (EF 0E read verb)
+    bool verified = false;   // board checksum == payload checksum
+    QString backup_path;     // live keytable dumped before the write
     QString reply;           // raw IN codes of the checksum reply (format TBD)
+    QString err_msg;         // human reason for failure/cancel ("" = none)
 };
 
 // payload -> report-4 frames -> one device_send() per code; progress(done,total)

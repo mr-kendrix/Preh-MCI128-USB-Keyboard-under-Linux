@@ -4,6 +4,7 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QProgressDialog>
+#include <QDateTime>
 #include <cstdio>
 #include <functional>
 
@@ -43,6 +44,28 @@ UploadResult run_upload(const std::vector<uint8_t> &payload, bool armed,
     r.frames = int(body.size() / 8);
     if (!armed)
         return r;                                // plan only, nothing on the wire
+
+    // BACKUP before touching the board: read the live keytable back (EF 0E verb),
+    // refuse to overwrite if the read fails. Dump -> /tmp/pktup_backup_*.mwx
+    {
+        QByteArray bak;
+        bool ok = true;
+        for (int addr = 0; addr + 8 <= 0x5D8; addr += 8) {   // 1496 B keytable region
+            std::vector<int> v;
+            if (!board_read(addr, 8, v) || v.size() < 8) { ok = false; break; }
+            for (int i = 0; i < 8; ++i) bak.append(uint8_t(v[i]));
+        }
+        if (!ok) {
+            r.status = LIBUSB_ERROR_TIMEOUT;
+            r.err_msg = QStringLiteral("backup read failed — refusing blind overwrite");
+            return r;
+        }
+        const QString path = QStringLiteral("/tmp/pktup_backup_%1.mwx")
+                                 .arg(QDateTime::currentDateTime().toString("yyyyMMdd_Hhmmss"));
+        QFile bf(path);
+        if (bf.open(QIODevice::WriteOnly)) bf.write("Preh" + bak);
+        r.backup_path = path;
+    }
 
     std::vector<int> junk;
     // StartWriteDataMWX (identify EF 59 dropped: not in any verified capture)
@@ -101,16 +124,13 @@ UploadResult run_upload(const std::vector<uint8_t> &payload, bool armed,
     // FinishWriteDataMWX + expected ack 0x02
     send_code(0xEF); send_code(0x12);
     drain_ms(150, junk);
-    // EF 0E checksum handshake (reply format still partly unknown -> recorded)
+    // verify: read back the board's own checksum (EF 0E read verb, decode FC/FE)
     const uint16_t cs = payload_checksum16(body);
-    static const uint8_t cs_cmd[] = { 0xEF, 0x0E, 0x30, 0x30, 0x30, 0x30, 0x30,
-                                      0x38, 0x30, 0x38 };
-    for (uint8_t b : cs_cmd) send_code(b);
-    std::vector<int> reply;
-    drain_ms(300, reply);
-    QString rq; for (int b : reply) rq += QStringLiteral("%1 ").arg(b);
+    int len_word = -1;
+    const int board_cs = board_checksum16(&len_word);
     r.checksum16 = cs;
-    r.reply = rq.trimmed();
+    r.board_checksum16 = board_cs;
+    r.verified = (board_cs >= 0 && board_cs == cs);
     return r;
 }
 
@@ -130,11 +150,17 @@ QString upload_text(const UploadResult &r) {
                    .arg(r.stopped_at + 1).arg(r.frames).arg(code)
                    .arg(QString::fromUtf8(transfer_error_message(r.status)));
     }
-    return QStringLiteral("upload: %1 blocks, %2 ACKs (EF 12 %3, checksum16=%4 reply=%5)")
+    QString t = QStringLiteral("upload: %1 blocks, %2 ACKs, EF 12 %3")
                .arg(r.frames).arg(r.acks)
-               .arg(r.finished ? QStringLiteral("sent — table finalised, verify keytable")
-                               : QStringLiteral("NOT sent"))
-               .arg(r.checksum16).arg(r.reply);
+               .arg(r.finished ? QStringLiteral("sent") : QStringLiteral("NOT sent"));
+    if (r.board_checksum16 < 0)
+        t += QStringLiteral(" — board checksum unread");
+    else {
+        t += QStringLiteral(", board checksum %1 vs payload %2%3")
+                   .arg(r.board_checksum16, 0, 16).arg(r.checksum16, 0, 16)
+                   .arg(r.verified ? QStringLiteral(" MATCH") : QStringLiteral(" DIFF — board content suspect"));
+    }
+    return t;
 }
 
 UploadPanel::UploadPanel(QWidget *parent, const Pmap *pm, const QString &container, bool armed)
