@@ -516,7 +516,12 @@ static bool emit_mwf(const std::string &mwf_text, std::vector<uint8_t> &payload)
     for (const auto &[s, d] : defs) used.push_back(s);
     std::vector<uint8_t> flags;
     for (uint32_t s : used) flags.push_back(lflags[s]);
-    const size_t gsz = mtxt ? 34 : 29;
+    // flag-consumer tail (3 pad + first ref's -L flag, 4 B) exists only with >=1
+    // record: empty layouts drop it in BOTH forms (oracle pos_mci128 copy w/o
+    // assignments: mtxt body 318 len-word 0x0142 keeps only 01 2e 05 00 00;
+    // no-text body 313 ends at b13c) — so gsz shrinks 34->30 / 29->25
+    const bool refs = !used.empty();
+    const size_t gsz = (mtxt ? 34 : 29) - (refs ? 0 : 4);
     const size_t first = 4 + 284 + gsz;
     std::map<uint32_t, size_t> region_start;
     std::map<uint32_t, std::vector<size_t>> node_off;
@@ -619,13 +624,13 @@ static bool emit_mwf(const std::string &mwf_text, std::vector<uint8_t> &payload)
     payload.push_back(0x00);
     payload.push_back(b138);
     if (mtxt) {
-        for (uint8_t b : {0x01, 0x2e, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00}) payload.push_back(b);
-        payload.push_back(flags.empty() ? 1 : flags[0]);  // first ref's -L flag
-    } else {
-        // no MSR ": text" block (gsz 29): the global block is 5 B shorter, so the
-        // -L consumer byte survives as the LAST global at 0x13c (oracle: varsealed4242
-        // MSR-token variants 'MSR NSE' etc. expect the first ref's -L flag there;
-        // varsealed2 base has flag 00 -> same expression, never a constant)
+        for (uint8_t b : {0x01, 0x2e, 0x05, 0x00, 0x00}) payload.push_back(b);
+    }
+    if (refs) {
+        // 3 pad + first ref's -L flag: after the 01 2e 05 +5 pad at 0x141 in the
+        // ': text' form (gsz 34); as the LAST global at 0x13c without it (gsz 29)
+        // (oracle: varsealed4242 MSR-token variants exp 01, varsealed2 base flag 00;
+        // empty layouts have no consumer -> block dropped in BOTH forms, gsz 34->30/29->25)
         payload.push_back(0x00);
         payload.push_back(0x00);
         payload.push_back(0x00);
