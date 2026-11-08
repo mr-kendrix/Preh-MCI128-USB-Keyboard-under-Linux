@@ -63,51 +63,61 @@ static std::vector<uint8_t> unhex(const std::string &h) {
     return out;
 }
 
-// ---- built-in named-def model (gap B: pos_mci128a_* templates) ------------
-// A def = chain of nodes: code bytes + mid4 + trailer. Ptr nodes carry a
-// 16-bit forward pointer (mid = 00 ptr16 X) to another node, resolved to the
-// absolute body offset at emission; the final non-ptr node of a def takes the
-// -L chain rule when its literal trailer is 00/01. Data probed with
-// tools/gapB_extract.py + oracle mutators (never copied container bytes).
-struct RNode {
+// ---- built-in named-def model (pos_mci128a_* templates) -------------------
+// A def = chain of nodes: code bytes + mid4 + trailer. Chain nodes carry a
+// 16-bit offset (mid = 00 ptr16 X) to another node of another named def,
+// resolved to an absolute body offset at emission time; the final non-chained
+// node of a def takes the -L chain rule when its literal trailer is 00/01.
+// Tables probed with tools/gapB_extract.py (oracle stream, node by node) +
+// oracle mutators (never copied container bytes). Names are matched
+// case-insensitively ("Key-Fn" in .gr, "KEY-FN" in .us).
+struct DNode {
     std::vector<uint8_t> code;
-    std::array<uint8_t, 4> mid{};
-    bool ptr = false;
+    int kind = 0;  // 0 literal | 2 chain to (tgt def, node idx) | 3 def tail:
+                   // adjacency link to the next def's node 1 when that def is
+                   // multi-node (x=0x01 tr=0x21), else chain-rule trailer
+    uint8_t tnode = 0;
     std::string tgt;
-    int tnode = 0;
-    uint8_t x = 0;
-    uint8_t tr = 0;
+    uint8_t x = 0;   // mid[3] on a linked node
+    uint8_t tr = 0;  // literal trailer (used for linked / non-last nodes)
 };
 
-static std::map<std::string, std::vector<RNode>> RAW_DEFS = [] {
-    std::map<std::string, std::vector<RNode>> m;
-    auto plain = [](std::string chex, uint8_t tr, uint8_t m3) {
-        RNode n;
+static std::map<std::string, std::vector<DNode>> RAW_DEFS = [] {
+    std::map<std::string, std::vector<DNode>> m;
+    auto plain = [](std::string chex, uint8_t x, uint8_t tr) {
+        DNode n;
         n.code = unhex(chex);
-        n.mid = {0, 0, 0, m3};
-        n.tr = tr;
-        return n;
-    };
-    auto chain = [](std::string chex, std::string tgt, int idx, uint8_t x, uint8_t tr) {
-        RNode n;
-        n.code = unhex(chex);
-        n.ptr = true;
-        n.tgt = tgt;
-        n.tnode = idx;
         n.x = x;
         n.tr = tr;
         return n;
     };
-    m["Alt"] = {chain("1e38", "KEY-FN", 1, 0x00, 0x80)};
-    m["KEY-FN"] = {plain("14fc", 0x80, 0x80), plain("14fd", 0x01, 0x00)};
-    m["K-FnNumScroll"] = {plain("1c46", 0x00, 0x00),
-                          chain("1c45", "K-FnPrtScPause", 1, 0x00, 0x8f)};
-    m["K-FnDelIns"] = {chain("1ee02ae052", "K-FnDelIns", 2, 0xa1, 0xa7),
-                       chain("1ce052e0aa", "K-FnDelIns", 3, 0x20, 0xa6),
-                       chain("1ee02ae053", "K-FnDelIns", 4, 0xa0, 0xa6),
-                       chain("1ce053e0aa", "K-FnDelIns", 5, 0x01, 0x01),
+    auto chain = [](std::string chex, std::string tgt, int idx, uint8_t x, uint8_t tr) {
+        DNode n;
+        n.code = unhex(chex);
+        n.kind = 2;
+        n.tgt = tgt;
+        n.tnode = static_cast<uint8_t>(idx);
+        n.x = x;
+        n.tr = tr;
+        return n;
+    };
+    m["alt"] = {chain("1e38", "key-fn", 1, 0x00, 0x80)};
+    m["key-fn"] = {plain("14fc", 0x80, 0x80), plain("14fd", 0x00, 0x01)};
+    m["k-fnnumscroll"] = {plain("1c46", 0x00, 0x00),
+                          chain("1c45", "k-fnprtscpause", 1, 0x00, 0x8f)};
+    m["k-fnprtscpause"] = {chain("16e02ae037", "k-fnprtscpause", 2, 0x80, 0x8f),
+                           chain("14e0b7e0aa", "k-fnprtscpause", 3, 0x05, 0x85),
+                           chain("14e046e0c6", "k-fnprtscpause", 4, 0x01, 0x81),
+                           chain("14e11d45e19dc5", "k-fnprtscpause", 5, 0x04, 0x05),
+                           chain("1ee037", "k-fnprtscpause", 6, 0x02, 0x03),
+                           plain("1ee037", 0x00, 0x00),
+                           chain("1e54", "k-fndelins", 1, 0x21, 0xa7)};
+    m["k-fndelins"] = {chain("1ee02ae052", "k-fndelins", 2, 0xa1, 0xa7),
+                       chain("1ce052e0aa", "k-fndelins", 3, 0x20, 0xa6),
+                       chain("1ee02ae053", "k-fndelins", 4, 0xa0, 0xa6),
+                       chain("1ce053e0aa", "k-fndelins", 5, 0x01, 0x01),
                        plain("1ee052", 0x00, 0x00),
-                       plain("1ee053", 0x01, 0x00)};
+                       plain("1ee053", 0x00, 0x01)};
     return m;
 }();
 
@@ -236,8 +246,8 @@ static bool emit_mwf(const std::string &mwf_text, std::vector<uint8_t> &payload)
     // vendor maps (n,d) pairs to a preset byte at 0x138; out-of-preset pairs map to 0x1F
     static const std::map<std::pair<int,int>, uint8_t> RATE_P{
         {{30,250}, 0x00}, {{20,250}, 0x04}, {{30,500}, 0x20}, {{20,500}, 0x24},
-        {{30,1000}, 0x60}, {{10,200}, 0x60}, {{5,400}, 0x60}, {{2,1000}, 0x7F},
-        {{2,250}, 0x1F}, {{40,500}, 0x1F}, {{1,2000}, 0x1F}};
+        {{10,500}, 0x2c}, {{30,1000}, 0x60}, {{10,200}, 0x60}, {{5,400}, 0x60},
+        {{2,1000}, 0x7F}, {{2,250}, 0x1F}, {{40,500}, 0x1F}, {{1,2000}, 0x1F}};
     const uint8_t b138 = RATE_P.count({n,d}) ? RATE_P.at({n,d}) : 0x1F;
     const uint8_t R = RATE_W.count(word) ? RATE_W.at(word) : 0;
 
@@ -330,18 +340,22 @@ static bool emit_mwf(const std::string &mwf_text, std::vector<uint8_t> &payload)
     std::vector<uint8_t> h0, h1;
     if (!hk("HOTKEY0", h0) || !hk("HOTKEY1", h1)) return false;
 
-    // ---- POS records: slot = cap position, code = token ------------------
-    // Grid caps (everything except the fixed named caps) take POS slots 1.. in
-    // CAP-LABEL order — so a duplicated POSKey token on two caps writes two
-    // records (tools/gapA_dup_trailer.py: vendor emits POSKey001's code in
-    // slots 1 AND 2). The named caps of this device family own fixed slots;
-    // swapping tokens moves the CODE into the slot of the owning cap, never the
-    // slot itself (tools/gapA_named_swap.py: POSMSR2/POSMSR3 token swap ->
-    // slots 131..134 = 63,64,64,63). Record leading byte comes from the slot
-    // region (0x1d grid / named def first byte in 129..142; a POSKey code on a
-    // named slot keeps 0x1e, a named code on a grid slot is cut to 1d + second
-    // byte), and the trailer of a record = -L flag of the next occupied slot.
-    std::map<uint32_t, std::tuple<bool, bool, std::vector<uint8_t>>> recs;  // slot -> is_pk, -L, code
+    // ---- POS records: slot = label of the cap, def = token ---------------
+    // Grid caps own the slot named by their label (row*16+col): dense A01..H16
+    // is the full grid, so CAP-LABEL order == CAP-ORDINAL there; the 128a
+    // templates have label gaps and, e.g., POSKey032@H16 lives in slot 128
+    // although only 119 caps exist. A duplicated POSKey token on two caps
+    // writes two records (tools/gapA_dup_trailer.py); swapping POSKey<->named
+    // tokens between caps moves the CODE into the slot of the owning cap,
+    // never the slot (tools/gapA_named_swap.py). A POSKey code on a named
+    // slot keeps 0x1e; a POS-def token on a grid slot is cut to 1d + second
+    // byte; ordinary named prints (Ctrl, F1, \xNN, KEY-*) keep their full
+    // def code. The trailer of a def = -L flag of the NEXT occupied slot,
+    // but defs that precede a KEY-* (0x1a) def carry 0 there (oracle a_us:
+    // RCTRL/KEY-LEFT/KEY-DOWN/RShift trailers 00) and the last record loses
+    // its 4-byte mid together with the stream tail.
+    std::map<uint32_t, std::vector<DNode>> defs;
+    std::map<uint32_t, uint8_t> lflags;   // slot -> -L flag
     static const std::map<std::string, uint32_t> NAMED_CAP_SLOT{
         {"M1H", 129}, {"M1T", 130}, {"M2H", 131}, {"M2T", 132}, {"M3H", 133}, {"M3T", 134},
         {"BCH", 135}, {"BCT", 136}, {"FIH", 137}, {"FRT", 140},
@@ -349,11 +363,27 @@ static bool emit_mwf(const std::string &mwf_text, std::vector<uint8_t> &payload)
     };
     static const std::regex pk_re(R"(^POSKey([0-9]+)$)");
 
-    // code bytes for one token: POSKeyNN -> 68 POSID(NN); a named def -> its
-    // two bytes with the K/A/P token shift on the first byte
-    const auto code_for = [&](const std::string &name, const std::string &toks,
-                              bool &is_pk, std::vector<uint8_t> &code) -> bool {
-        std::smatch m;
+    const auto label_slot = [](const std::string &cap) -> uint32_t {
+        if (cap.size() == 3 && cap[0] >= 'A' && cap[0] <= 'H' &&
+            cap[1] >= '0' && cap[1] <= '9' && cap[2] >= '0' && cap[2] <= '9') {
+            const int col = (cap[1] - '0') * 10 + (cap[2] - '0');
+            if (col >= 1 && col <= 16)
+                return static_cast<uint32_t>(cap[0] - 'A') * 16u + static_cast<uint32_t>(col);
+        }
+        return 0;  // 0 = not a grid-label cap
+    };
+    const auto lc = [](std::string s) {
+        for (auto &c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return s;
+    };
+
+    // def for one token: POSKeyNN -> 68 + POSID(NN); a POS def -> two bytes
+    // with the K/A/P token shift on the first byte; named prints via the
+    // code tables; K-Fn* pairs expand to the 3-node chain (dup middle node,
+    // head node points to the tail); \xNN -> 1e + byte.
+    const auto make_def = [&](const std::string &name, const std::string &low,
+                              const std::string &toks, uint32_t slot,
+                              std::vector<DNode> &out) -> bool {
         int k = 0, a = 0, p = 0;
         {
             std::string t = toks;
@@ -363,109 +393,208 @@ static bool emit_mwf(const std::string &mwf_text, std::vector<uint8_t> &payload)
                 j += (j + 1 < t.size() && t[j + 1] == '/' ? 2 : 1);
             }
         }
+        std::smatch m;
         if (std::regex_match(name, m, pk_re)) {
             const uint32_t i = static_cast<uint32_t>(std::stoul(m[1].str()));
             if (i < 1 || i > 128) return false;
-            is_pk = true;
-            code.push_back(0x68);
+            DNode n;
+            n.kind = 3; n.x = 0x01; n.tr = 0x21;
+            n.code.push_back(slot >= 129 ? 0x1e : 0x1d);
+            n.code.push_back(0x68);
             const auto pc = unhex(POSID_HEX.at(i));
-            code.insert(code.end(), pc.begin(), pc.end());
+            n.code.insert(n.code.end(), pc.begin(), pc.end());
+            out = {n};
             return true;
         }
-        const NamedDef *def = nullptr;
-        for (const auto &nd : NAMED_DEFS) if (nd.name == name) def = &nd;
-        if (!def) return false;
-        const int first_b = std::stoi(def->code.substr(0, 2), nullptr, 16) + (k - 1) + 2 * (a - 1) + 4 * (p - 1);
-        const int second_b = std::stoi(def->code.substr(2, 2), nullptr, 16);
-        is_pk = false;
-        code.push_back(static_cast<uint8_t>(first_b));
-        code.push_back(static_cast<uint8_t>(second_b));
-        return true;
+        const NamedDef *nd = nullptr;
+        for (const auto &d0 : NAMED_DEFS) if (lc(d0.name) == low) { nd = &d0; break; }
+        if (nd) {
+            const int first_b = std::stoi(nd->code.substr(0, 2), nullptr, 16) + (k - 1) + 2 * (a - 1) + 4 * (p - 1);
+            const int second_b = std::stoi(nd->code.substr(2, 2), nullptr, 16);
+            DNode n;
+            n.kind = 3; n.x = 0x01; n.tr = 0x21;
+            n.code.push_back(slot >= 129 ? static_cast<uint8_t>(first_b) : 0x1d);
+            n.code.push_back(static_cast<uint8_t>(second_b));
+            out = {n};
+            return true;
+        }
+        static const std::map<std::string, std::string> SC_L = [] {
+            std::map<std::string, std::string> o;
+            for (const auto &[kn, v] : SIMPLE_CODE) {
+                std::string lk = kn;
+                for (auto &c : lk) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                o[lk] = v;
+            }
+            return o;
+        }();
+        static const std::map<std::string, std::string> KF_L = [] {
+            std::map<std::string, std::string> o;
+            for (const auto &[kn, v] : KEYFAM_CODE) {
+                std::string lk = kn;
+                for (auto &c : lk) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                o[lk] = v;
+            }
+            return o;
+        }();
+        static const std::map<std::string, std::pair<std::string, std::string>> KF2_L = [] {
+            std::map<std::string, std::pair<std::string, std::string>> o;
+            for (const auto &[kn, v] : KF_STD) {
+                std::string lk = kn;
+                for (auto &c : lk) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                o[lk] = v;
+            }
+            return o;
+        }();
+        if (auto it = SC_L.find(low); it != SC_L.end()) {
+            DNode n;
+            n.code = unhex(it->second);
+            n.kind = 3; n.x = 0x01; n.tr = 0x21;
+            out = {n};
+            return true;
+        }
+        if (auto it = KF_L.find(low); it != KF_L.end()) {
+            DNode n;
+            n.code = unhex(it->second);
+            n.kind = 3; n.x = 0x01; n.tr = 0x21;
+            out = {n};
+            return true;
+        }
+        if (auto it = KF2_L.find(low); it != KF2_L.end()) {
+            const std::string c1 = "1e" + it->second.first;
+            const std::string c2 = "1e" + it->second.second;
+            DNode n0, n1, n2;
+            n0.code = unhex(c1);
+            n0.kind = 2; n0.tgt = low; n0.tnode = 2; n0.x = 0x20; n0.tr = 0x21;
+            n1.code = unhex(c1);
+            n2.code = unhex(c2);
+            n2.kind = 3; n2.x = 0x01; n2.tr = 0x21;
+            out = {n0, n1, n2};
+            return true;
+        }
+        if (auto it = RAW_DEFS.find(low); it != RAW_DEFS.end()) {
+            out = it->second;
+            return true;
+        }
+        const int ab = ascii_code(name);
+        if (ab >= 0) {
+            DNode n;
+            n.code = {0x1e, static_cast<uint8_t>(ab)};
+            n.kind = 3; n.x = 0x01; n.tr = 0x21;
+            out = {n};
+            return true;
+        }
+        return false;
     };
 
-    struct GridCap { std::string name, toks; bool has_L; };  // grid cap + its token
-    std::map<std::string, GridCap> grid;
+    // named-print chain targets resolve by def name -> placing slot
+    std::map<std::string, uint32_t> def_slot;
+    std::map<uint32_t, bool> def_raw;  // slot -> def came from RAW_DEFS
     for (const auto &[cap, name, has_L, toks] : posrefs) {
-        bool is_pk = false;
-        std::vector<uint8_t> code;
-        if (!code_for(name, toks, is_pk, code)) return false;
-        if (const auto it = NAMED_CAP_SLOT.find(cap); it != NAMED_CAP_SLOT.end()) {
-            if (recs.count(it->second)) return false;
-            recs[it->second] = {is_pk, has_L, std::move(code)};
-        } else {
-            grid[cap] = GridCap{name, toks, has_L};
-        }
-    }
-    {
-        // grid slot = the cap's ordinal among the KEYPRINT cap labels (cap order).
-        // A dropped ref line keeps its KEYPRINT cap, so every other slot stays
-        // put; swapping POSKey tokens between caps moves only the code bytes
-        // (tools/gapA_template_probe.py + tools/gapA_swap_sweep.py).
-        std::set<std::string> gridcaps = kp_caps;
-        for (const auto &[cap, g] : grid) gridcaps.insert(cap);
-        uint32_t ord = 0;
-        for (const auto &cap : gridcaps) {
-            ++ord;
-            if (ord > 128) return false;
-            const auto it = grid.find(cap);
-            if (it == grid.end()) continue;  // cap without a ref = empty POS slot
-            bool is_pk = false;
-            std::vector<uint8_t> code;
-            if (!code_for(it->second.name, it->second.toks, is_pk, code)) return false;
-            recs[ord] = {is_pk, it->second.has_L, std::move(code)};
-        }
+        auto it = NAMED_CAP_SLOT.find(cap);
+        const uint32_t slot = it != NAMED_CAP_SLOT.end() ? it->second : label_slot(cap);
+        if (!slot) return false;
+        std::vector<DNode> d;
+        const std::string low = lc(name);
+        if (!make_def(name, low, toks, slot, d)) return false;
+        if (defs.count(slot)) return false;
+        defs[slot] = std::move(d);
+        lflags[slot] = has_L ? 1 : 0;
+        def_raw[slot] = RAW_DEFS.count(low) != 0;
+        def_slot[low] = slot;
     }
 
-    // trailer of a record = -L flag of the NEXT occupied slot (ascending); the
-    // first occupied slot's flag is the global byte before the stream, and the
-    // last record loses its 4-byte mid together with the stream tail.
+    // trailer of a def = -L flag of the NEXT occupied slot, forced to 0 when
+    // that def is a KEY-* (0x1a) family; the first occupied slot's flag is the
+    // global byte before the stream, and the last record loses its 4-byte
+    // mid together with the stream tail.
     std::vector<uint32_t> used;
-    for (const auto &[slot, r] : recs) used.push_back(slot);
+    for (const auto &[s, d] : defs) used.push_back(s);
     std::vector<uint8_t> flags;
-    for (const auto &[slot, r] : recs) flags.push_back(std::get<1>(r) ? 1 : 0);
-    const auto trailer = [&](size_t j) {
-        return j + 1 < flags.size() ? flags[j + 1] : uint8_t(1);
+    for (uint32_t s : used) flags.push_back(lflags[s]);
+    const size_t gsz = mtxt ? 34 : 29;
+    const size_t first = 4 + 284 + gsz;
+    std::map<uint32_t, size_t> region_start;
+    std::map<uint32_t, std::vector<size_t>> node_off;
+    size_t cum = 0;
+    for (uint32_t s : used) {
+        region_start[s] = first + cum;
+        size_t off = 0;
+        for (const auto &n : defs[s]) {
+            node_off[s].push_back(off);
+            off += n.code.size() + 5;
+        }
+        cum += off;
+    }
+    const auto chain_tr = [&](size_t i) -> uint8_t {
+        if (i + 1 >= used.size()) return 1;
+        if (!flags[i + 1]) return 0;
+        const auto &nd = defs[used[i + 1]];
+        return nd[0].code.empty() || nd[0].code[0] != 0x1a ? 1 : 0;
     };
     std::vector<uint8_t> stream;
-    std::vector<size_t> emitted_sizes;  // per emitted record, slot order
-    for (size_t j = 0; j < recs.size(); ++j) {
-        const auto &[is_pk, has_L, code] = recs.at(used[j]);
-        const bool named_slot = used[j] >= 129;
-        std::vector<uint8_t> r;
-        if (is_pk) {  // POSKey code: style + 68 + POSID bytes
-            r.push_back(named_slot ? 0x1e : 0x1d);
-            r.insert(r.end(), code.begin(), code.end());
-        } else {      // named def code: style/first byte + second byte
-            r.push_back(named_slot ? code[0] : 0x1d);
-            r.push_back(code[1]);
+    for (size_t i = 0; i < used.size(); ++i) {
+        const uint32_t s = used[i];
+        const std::vector<DNode> &d = defs[s];
+        for (size_t j = 0; j < d.size(); ++j) {
+            const DNode &n = d[j];
+            bool linked = false;
+            size_t abs = 0;
+            if (n.kind == 2) {
+                const auto dn = def_slot.find(n.tgt);
+                if (dn == def_slot.end()) return false;
+                const uint32_t ts = dn->second;
+                if (n.tnode >= defs[ts].size()) return false;
+                linked = true;
+                abs = region_start[ts] + node_off[ts][n.tnode];
+            } else if (n.kind == 3 && j + 1 == d.size() &&
+                       i + 1 < used.size() && defs[used[i + 1]].size() > 1) {
+                linked = true;
+                abs = region_start[used[i + 1]] + node_off[used[i + 1]][1];
+            }
+            stream.insert(stream.end(), n.code.begin(), n.code.end());
+            if (linked) {
+                stream.push_back(0x00);
+                stream.push_back(static_cast<uint8_t>(abs >> 8));
+                stream.push_back(static_cast<uint8_t>(abs & 0xFF));
+                stream.push_back(n.x);
+            } else {
+                stream.push_back(0x00);
+                stream.push_back(0x00);
+                stream.push_back(0x00);
+                stream.push_back(n.kind == 3 ? 0x00 : n.x);
+            }
+            uint8_t tr = n.tr;
+            if (j + 1 == d.size()) {
+                if (!linked) {
+                    if (n.kind == 3 || tr <= 1) tr = chain_tr(i);
+                } else if (n.kind == 3 && def_raw[used[i + 1]]) {
+                    // adjacency into a raw vendor def keeps the -L flag trailer
+                    // (oracle: F12 -> K-FnNumScroll node 1 trailer 01)
+                    tr = chain_tr(i);
+                }
+            }
+            stream.push_back(tr);
         }
-        for (int k0 = 0; k0 < 4; ++k0) r.push_back(0x00);
-        r.push_back(trailer(j));
-        emitted_sizes.push_back(r.size());
-        stream.insert(stream.end(), r.begin(), r.end());
     }
     if (stream.size() >= 4) stream.resize(stream.size() - 4);
     else stream.clear();
 
     // ---- assemble: header | index table (POS 1..142) | globals | records ----
-    const size_t gsz = mtxt ? 34 : 29;
     const size_t total = 4 + 284 + gsz + stream.size();
     payload.clear();
     payload.push_back(b0);
     payload.push_back(0x00);
     payload.push_back(static_cast<uint8_t>(total >> 8));
     payload.push_back(static_cast<uint8_t>((total - 1276) & 0xFF));
-    const size_t first = 4 + 284 + gsz;
     {
-        // index: occupied slots ascending, offsets advance by record sizes in
-        // the same slot order
-        size_t k = 0, cum = 0;
+        // index: occupied slots ascending, region starts precomputed
+        size_t k = 0;
         for (uint32_t pos = 1; pos <= 142; ++pos) {
-            if (k < emitted_sizes.size() && used[k] == pos) {
-                const size_t off = first + cum;
+            if (k < used.size() && used[k] == pos) {
+                const size_t off = region_start[used[k]];
                 payload.push_back(static_cast<uint8_t>(off >> 8));
                 payload.push_back(static_cast<uint8_t>(off & 0xFF));
-                cum += emitted_sizes[k++];
+                ++k;
             } else {
                 payload.push_back(0x00);
                 payload.push_back(0x00);
