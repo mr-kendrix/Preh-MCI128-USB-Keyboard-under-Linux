@@ -217,19 +217,15 @@ static bool dep_matches(const QString &dep_in, const QString &process, const QSt
     QString dep_proc = dep_in, dep_title;
     const int colon = dep_in.indexOf(QLatin1Char(':'));
     if (colon > 0) { dep_proc = dep_in.left(colon); dep_title = dep_in.mid(colon + 1); }
-    // comm is truncated to 15 chars -> compare shortest-prefix containment
-    auto proc_eq = [](QString a, QString b) {
+    // comm truncates at 15 chars -> truncate BOTH, then case-insensitive EQUAL
+    auto proc_eq = [](const QString &a, const QString &b) {
         if (a.isEmpty() || b.isEmpty()) return false;
-        const int n = qMin(a.size(), b.size());
-        return a.left(n).compare(b.left(n), Qt::CaseInsensitive) == 0;
+        return a.left(15).compare(b.left(15), Qt::CaseInsensitive) == 0;
     };
-    if (!process.isEmpty() && proc_eq(dep_proc, process)) {
-        if (dep_title.isEmpty()) return true;
-        return window.contains(dep_title, Qt::CaseInsensitive);
-    }
-    if (dep_title.isEmpty())
-        return window.contains(dep_proc, Qt::CaseInsensitive);  // title-only rule
-    return false;
+    if (!process.isEmpty())
+        return proc_eq(dep_proc, process) && (dep_title.isEmpty() || window.contains(dep_title, Qt::CaseInsensitive));
+    // process undeterminable (no xdotool/pure Wayland) -> degraded title-only match
+    return window.contains(dep_proc, Qt::CaseInsensitive);
 }
 
 int match_layer(const Rule &r, const QString &process, const QString &window) {
