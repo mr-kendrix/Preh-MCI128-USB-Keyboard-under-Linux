@@ -276,24 +276,28 @@ int main(int argc, char **argv) {
         std::printf(">> backend=ydotool calib=%d rules=%d (event loop, window per press; Ctrl-C = sweep)\n",
                     int(table.size()), int(rs.rules.size()));
         QString node = device.isEmpty() ? find_hidraw_node() : device;
-        int fd = node.isEmpty() ? -1 : ::open(node.toUtf8().constData(), O_RDONLY | O_NONBLOCK);
-        if (fd < 0 && device.isEmpty()) fd = -1;
+        int fd = node.isEmpty() ? -1 : ::open(node.toUtf8().constData(), O_RDONLY);
         const time_t t0 = std::time(nullptr);
-        unsigned char rep[8];
+        unsigned char rep[64];
+        QByteArray buf;
         while (true) {
             if (secs > 0 && std::time(nullptr) - t0 >= secs) break;
             if (fd < 0) {
                 ::usleep(200000);
                 node = find_hidraw_node();
-                fd = node.isEmpty() ? -1 : ::open(node.toUtf8().constData(), O_RDONLY | O_NONBLOCK);
+                fd = node.isEmpty() ? -1 : ::open(node.toUtf8().constData(), O_RDONLY);
                 if (fd >= 0) std::printf(">> reconnected hidraw %s\n", node.toUtf8().constData());
                 continue;
             }
-            const ssize_t n = ::read(fd, rep, 6);
-            if (n == 6) { for (const KeyEvent &ev : decode_report(rep)) on_event(ev.scancode, ev.down); continue; }
-            if (n < 0 && (errno == EAGAIN || errno == EINTR)) { ::usleep(20000); continue; }
-            if (n == 0) { ::usleep(20000); continue; }
-            ::close(fd); fd = -1;       // replug: node died -> reopen next round
+            const ssize_t n = ::read(fd, rep, 64);
+            if (n <= 0) {
+                if (n < 0 && (errno == EAGAIN || errno == EINTR)) { ::usleep(20000); continue; }
+                ::close(fd); fd = -1;       // replug/EOF: node died -> reopen next round
+                continue;
+            }
+            buf.append(reinterpret_cast<const char*>(rep), int(n));
+            for (const KeyEvent &ev : decode_stream(buf)) on_event(ev.scancode, ev.down);
+            buf.clear();
         }
         if (sweep_count.load() > 0) do_sweep();
         std::printf("-- %d presses, %d injected, %d unknown scancodes skipped\n",
