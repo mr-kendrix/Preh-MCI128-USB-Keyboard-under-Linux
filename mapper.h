@@ -25,7 +25,15 @@ int match_layer(const Rule &r, const QString &process, const QString &window);
 
 // literal text an inject would type: the decoded Value with {...} macro
 // placeholders stripped; empty Value (or macro-only) falls back to the cap <Text>
+// (preview only — the inject path uses value_script, see below).
 QString literal_to_type(const Rule &r, const Layer &l);
+
+// executor: vendor {MACRO} Value -> ev_key down/up event sequence. Macro-only
+// Values execute directly ({BS}=14 backspace, {PGUP}=104, {CTRL+w}=modifier combo);
+// mixed literal+macro stays REFUSED (oracle agreement untested); empty Value
+// falls back to <Text>. Numbers = XKB evdev keycodes minus 8 (authoritative).
+// false -> refused, why = machine-readable reason.
+bool value_script(const Rule &r, const Layer &l, QVector<QPair<int, int>> &seq, QString &why);
 
 // active window title via QProcess xdotool; '<unknown-window>' if absent/failing
 QString active_window();

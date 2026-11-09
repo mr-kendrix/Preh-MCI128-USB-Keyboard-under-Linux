@@ -70,7 +70,7 @@ for pk in ("124", "95", "77"):
         ok = False
 if "UNKNOWN scancode 0x00ee -> skipped" not in p.stdout:
     ok = False
-for want in (6, 111, 15):               # '5' del tab — keydown+keyup each
+for want in (6, 1, 15):                 # '5'=6, POSKey 95 vendor value {Esc}=1, Tab=15
     downs = sum(1 for t, c, v in ev if t == 1 and c == want and v == 1)
     ups = sum(1 for t, c, v in ev if t == 1 and c == want and v == 0)
     if fd is not None and not (downs == 1 and ups == 1):

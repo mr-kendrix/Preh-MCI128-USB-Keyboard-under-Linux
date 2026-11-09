@@ -90,6 +90,90 @@ QVector<QPair<int, int>> evdev_sequence(const QString &text) {
     return out;
 }
 
+// ---- macro executor ---------------------------------------------------
+// Vendor {TOKEN} Values are the real output; refuse only what we cannot do
+// faithfully. ev_key numbers verified against the XKB evdev keycodes table
+// (value = ev_key + 8: TAB 23->15, ESC 9->1, BKSP 22->14, DELE 119->111) and
+// the live journal ('5' -> key 6). Never guess an unknown token's meaning.
+static int macro_evdev(const QString &tok) {
+    static const struct { const char *tok; int ev; } MACROS[] = {
+        {"N0",11},{"N1",2},{"N2",3},{"N3",4},{"N4",5},{"N5",6},{"N6",7},{"N7",8},
+        {"N8",9},{"N9",10},
+        {"BS",14},{"DEL",111},{"ESC",1},{"TAB",15},{"SPACE",57},{"ENTER",28},
+        {"UP",103},{"DOWN",108},{"LEFT",105},{"RIGHT",106},{"PGUP",104},{"PGDN",109},
+        {"SHIFT",42},{"CTRL",29},{"ALT",56},{"CAPS",58},{"NUMLOCK",69},{"SCROLL-LOCK",70},
+    };
+    for (const auto &e : MACROS)
+        if (tok.compare(QString::fromUtf8(e.tok), Qt::CaseInsensitive) == 0) return e.ev;
+    return -1;
+}
+static int modifier_evdev(const QString &tok) {
+    if (tok.compare("CTRL", Qt::CaseInsensitive) == 0) return 29;   // LCTL
+    if (tok.compare("ALT", Qt::CaseInsensitive) == 0) return 56;    // LALT
+    if (tok.compare("SHIFT", Qt::CaseInsensitive) == 0) return 42;  // LFSH
+    return -1;
+}
+
+// false -> refused; why says which token/char made it impossible
+bool value_script(const Rule &r, const Layer &l, QVector<QPair<int, int>> &seq, QString &why) {
+    seq.clear(); why.clear();
+    if (l.value.isEmpty()) { seq = evdev_sequence(r.text); return true; } // <Text> fallback
+    const QString v = l.value;
+    // mixed literal+macro: literal = non-space char OUTSIDE braces (token text
+    // never counts as literal); mixed stays refused (oracle behaviour untested).
+    bool has_macro = v.contains(QLatin1Char('{'));
+    bool has_lit = false;
+    bool inm = false;
+    for (int i = 0; i < v.size(); ++i) {
+        const QChar c = v[i];
+        if (c == QLatin1Char('{')) inm = true;
+        else if (c == QLatin1Char('}')) inm = false;
+        else if (!inm && !c.isSpace()) { has_lit = true; break; }
+    }
+    if (has_macro && has_lit) { why = QStringLiteral("mixed literal+macro"); return false; }
+    int i = 0;
+    while (i < v.size()) {
+        const QChar c = v[i];
+        if (c == QLatin1Char('{')) {
+            const int end = v.indexOf(QLatin1Char('}'), i + 1);
+            if (end < 0) { seq.clear(); why = QStringLiteral("unterminated {"); return false; }
+            const QString tok = v.mid(i + 1, end - i - 1);
+            i = end + 1;
+            if (tok.contains(QLatin1Char('{'))) { seq.clear(); why = QStringLiteral("nested brace"); return false; }
+            if (tok == QLatin1String("DELAY")) continue;  // timing hint: no key
+            if (tok.contains(QLatin1Char('+'))) {
+                const QStringList parts = tok.split(QLatin1Char('+'));
+                QVector<int> mods;
+                bool ok = parts.size() >= 2;
+                for (int p = 0; ok && p + 1 < parts.size(); ++p) {
+                    const int m = modifier_evdev(parts[p]);
+                    if (m < 0) ok = false; else mods << m;
+                }
+                int key = ok ? macro_evdev(parts.last()) : -1;
+                if (ok && key < 0 && parts.last().size() == 1)
+                    key = char_evdev(parts.last().toLower()[0]);
+                if (!ok || key < 0) { seq.clear(); why = QStringLiteral("unsupported combo '") + tok + "'"; return false; }
+                for (const int m : mods) seq << QPair<int, int>{m, 1};
+                seq << QPair<int, int>{key, 1} << QPair<int, int>{key, 0};
+                for (int k = mods.size() - 1; k >= 0; --k) seq << QPair<int, int>{mods[k], 0};
+                continue;
+            }
+            const int ev = macro_evdev(tok);
+            if (ev < 0) { seq.clear(); why = QStringLiteral("unsupported macro '") + tok + "'"; return false; }
+            seq << QPair<int, int>{ev, 1} << QPair<int, int>{ev, 0};
+        } else {
+            const bool upper = c.isUpper();
+            const int code = char_evdev(upper ? c.toLower() : c);
+            if (code < 0) { seq.clear(); why = QStringLiteral("unmappable char"); return false; }
+            if (upper) seq << QPair<int, int>{42, 1} << QPair<int, int>{code, 1}
+                           << QPair<int, int>{code, 0} << QPair<int, int>{42, 0};
+            else seq << QPair<int, int>{code, 1} << QPair<int, int>{code, 0};
+            ++i;
+        }
+    }
+    return true;
+}
+
 QVector<KeyEvent> decode_report(const unsigned char *p) {
     QVector<KeyEvent> out;
     QVector<int> keys;

@@ -220,14 +220,17 @@ int main(int argc, char **argv) {
                             pk, win.toUtf8().constData(), proc.toUtf8().constData());
                 return;
             }
-            const QString typed = literal_to_type(*hit, hit->layers[sel]);
-            if (typed.startsWith(QStringLiteral("\x01"))) {
-                std::printf("POSKey %d -> unsupported macro -> REFUSED, nothing injected\n", pk);
+            QVector<QPair<int, int>> seq;
+            QString why;
+            if (!value_script(*hit, hit->layers[sel], seq, why)) {
+                std::printf("POSKey %d -> %s -> REFUSED, nothing injected\n",
+                            pk, why.toUtf8().constData());
                 return;
             }
-            const QVector<QPair<int, int>> seq = evdev_sequence(typed);
+            QString typed = literal_to_type(*hit, hit->layers[sel]); // label only
+            if (typed.startsWith(QStringLiteral("\x01"))) typed = hit->text;
             if (seq.isEmpty()) {
-                std::printf("POSKey %d '%s' -> rule match -> no evdev code -> nothing injected\n",
+                std::printf("POSKey %d '%s' -> rule match -> no injectable key -> nothing injected\n",
                             pk, typed.toUtf8().constData());
                 return;
             }
@@ -280,6 +283,7 @@ int main(int argc, char **argv) {
         const time_t t0 = std::time(nullptr);
         unsigned char rep[64];
         QByteArray buf;
+        int dead_opens = 0;   // open succeeded but read fails immediately, in a row
         while (true) {
             if (secs > 0 && std::time(nullptr) - t0 >= secs) break;
             if (fd < 0) {
@@ -293,8 +297,15 @@ int main(int argc, char **argv) {
             if (n <= 0) {
                 if (n < 0 && (errno == EAGAIN || errno == EINTR)) { ::usleep(20000); continue; }
                 ::close(fd); fd = -1;       // replug/EOF: node died -> reopen next round
+                if (++dead_opens >= 5) {    // persistent other-reader (pktd.service?) -> stop spam
+                    std::printf(">> hidraw node dead: %d open+read failures (errno %d) — "
+                                "a second reader (pktd.service) owns it? stop it first\n",
+                                dead_opens, errno);
+                    break;
+                }
                 continue;
             }
+            dead_opens = 0;
             buf.append(reinterpret_cast<const char*>(rep), int(n));
             for (const KeyEvent &ev : decode_stream(buf)) on_event(ev.scancode, ev.down);
             buf.clear();
@@ -313,8 +324,14 @@ int main(int argc, char **argv) {
         if (r.poskey == poskey) { hit = &r; break; }
     int idx = hit ? match_layer(*hit, proc, win) : -1;
     QString typed;
-    if (idx >= 0) typed = literal_to_type(*hit, hit->layers[idx]);
-    if (typed.startsWith(QStringLiteral("\x01"))) typed = QStringLiteral("<unsupported-macro: REFUSED>");
+    if (idx >= 0) {
+        QVector<QPair<int, int>> seq;
+        QString why;
+        if (value_script(*hit, hit->layers[idx], seq, why)) {
+            typed.clear();
+            for (const auto &p : seq) typed += QStringLiteral("%1:%2 ").arg(p.first).arg(p.second);
+        } else typed = why + QStringLiteral(" -> REFUSED");
+    }
     const QByteArray w = win.toUtf8(), t = typed.toUtf8();
     std::printf("POSKey %d window='%s' would-type '%s' rule-match=%s\n",
                 poskey, w.constData(), t.constData(), idx >= 0 ? "YES" : "NO");
