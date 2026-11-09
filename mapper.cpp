@@ -142,8 +142,9 @@ QHash<int, int> load_calib_json(const QString &path) {
 // exactly what Client/ydotool.c writes; the daemon's recv discards any datagram
 // whose size != sizeof(struct input_event) = 24 on x86_64).
 // keys currently held by the LAST ydot_send (exit sweep: a signal mid-sequence
-// must not leave them stuck — caller installs handler calling ydot_release_all())
+// must not leave them stuck — handler reuses the connected fd stored here)
 static std::vector<int> held_keys;
+static int g_ydot_connected = -1;   // fd connected by ydot_send_now (for the handler)
 static int ydot_send_now(const QString &socket_path, const QVector<QPair<int, int>> &events);
 int ydot_send(const QString &socket_path, const QVector<QPair<int, int>> &events) {
     for (const auto &e : events)
@@ -151,6 +152,7 @@ int ydot_send(const QString &socket_path, const QVector<QPair<int, int>> &events
         else held_keys.erase(std::remove(held_keys.begin(), held_keys.end(), e.first), held_keys.end());
     return ydot_send_now(socket_path, events);
 }
+int ydot_sweep_fd() { return g_ydot_connected; }
 static int ydot_send_now(const QString &socket_path, const QVector<QPair<int, int>> &events) {
     QByteArray p = socket_path.toUtf8();
     sockaddr_un sa{};
@@ -162,6 +164,7 @@ static int ydot_send_now(const QString &socket_path, const QVector<QPair<int, in
     if (::connect(fd, reinterpret_cast<const sockaddr *>(&sa), sizeof(sa))) {
         const int e = errno; ::close(fd); return -e;
     }
+    g_ydot_connected = fd;   // valid from now on: the signal sweep sends into it
     auto send_rec = [&fd](uint16_t type, uint16_t code, int32_t val) -> bool {
         unsigned char rec[24] = {};
         std::memcpy(rec + 16, &type, 2);
@@ -173,11 +176,17 @@ static int ydot_send_now(const QString &socket_path, const QVector<QPair<int, in
         if (!send_rec(1, static_cast<uint16_t>(ev.first), static_cast<int32_t>(ev.second))) {
             const int e = errno; ::close(fd); return -e;
         }
-        if (!send_rec(0, 0, 0)) {          // EV_SYN, like uinput_emit(syn_report=true)
+        // PKT_HOLD_MS: TEST-ONLY hook — hold the key for N ms before its release
+        // (lets a SIGTERM fall in a real hold window so the sweep can be observed)
+        if (const char *h = getenv("PKT_HOLD_MS"))
+            if (ev.second == 1) ::usleep(atoi(h) * 1000);
+        if (!send_rec(0, 0, 0)) {
             const int e = errno; ::close(fd); return -e;
         }
     }
-    ::close(fd);
+    // success: keep the connected fd so a later signal-handler sweep can ::send()
+    // into it without any allocation (set AFTER the last send; overwritten per call)
+    g_ydot_connected = fd;
     return 0;
 }
 

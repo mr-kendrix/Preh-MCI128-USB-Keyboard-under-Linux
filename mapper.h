@@ -59,5 +59,8 @@ QVector<QPair<int, int>> evdev_sequence(const QString &text);
 // silently DROPPED, verified headless against the live ydotoold at /tmp/.ydotool_socket).
 // 0 = all sent; negative = -errno of connect/send failure.
 int ydot_send(const QString &socket_path, const QVector<QPair<int, int>> &events);
+// connected ydotool fd (valid after ydot_send's connect) for async-signal-safe
+// sweep sends in a SIGTERM handler; -1 if none.
+int ydot_sweep_fd();
 
 }

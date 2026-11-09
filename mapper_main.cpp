@@ -166,16 +166,18 @@ int main(int argc, char **argv) {
         // no heap / no stdio inside the handler. Normal exit sweeps via do_sweep().
         static std::atomic<int> sweep_count{0};
         static int held_evdev[64];
-        // signal-safe sweep: handler sends up-events over the persistent ydotool
-        // socket fd and _Exits — no heap, no stdio inside the handler.
-        static int g_ydot_fd = -1;
+        // signal-safe sweep: reuse the fd ydot_send connected (set right after its
+        // connect) — no connect/heap/stdio in the handler. PKT_HOLD_MS widens the
+        // down->up gap so a signal can fall into a real hold window (tests).
         auto sweep_handler = [](int) {
-            for (int i = 0; i < sweep_count.load() && i < 64; ++i) {
-                unsigned char rec[24] = {0};
-                const unsigned code = held_evdev[i] & 0xFFFFu;
-                rec[16] = 1; rec[18] = (unsigned char)code; rec[19] = (unsigned char)(code >> 8);
-                (void)::send(g_ydot_fd, rec, sizeof rec, 0);
-            }
+            const int fd = pktm::ydot_sweep_fd();
+            if (fd >= 0)
+                for (int i = 0; i < sweep_count.load() && i < 64; ++i) {
+                    unsigned char rec[24] = {0};
+                    const unsigned code = held_evdev[i] & 0xFFFFu;
+                    rec[16] = 1; rec[18] = (unsigned char)code; rec[19] = (unsigned char)(code >> 8);
+                    (void)::send(fd, rec, sizeof rec, 0);
+                }
             std::_Exit(0);
         };
         std::signal(SIGTERM, sweep_handler);
@@ -189,24 +191,6 @@ int main(int argc, char **argv) {
         const QHash<int, int> table = load_calib_json(calib_path);
         const QString sock = getenv("YDOTOOL_SOCKET") ? QString(getenv("YDOTOOL_SOCKET"))
                                                       : QStringLiteral("/tmp/.ydotool_socket");
-        // persistent socket fd for the signal-safe sweep: raw connect once (no Qt)
-        static char sweep_path[108];
-        snprintf(sweep_path, sizeof sweep_path, "%s", sock.toUtf8().constData());
-        if (g_ydot_fd < 0) {
-            sockaddr_un sa{};
-            sa.sun_family = AF_UNIX;
-            snprintf(sa.sun_path, sizeof sa.sun_path, "%s", sweep_path);
-            g_ydot_fd = -1;
-            int fds[2] = {-1, -1};
-            if (::socketpair(AF_UNIX, 0, 0, fds) == 0) {
-                ::close(fds[1]);
-                sockaddr_un sa{};
-                sa.sun_family = AF_UNIX;
-                snprintf(sa.sun_path, sizeof sa.sun_path, "%s", sweep_path);
-                if (::connect(fds[0], (const sockaddr *)&sa, sizeof sa) == 0) g_ydot_fd = fds[0];
-                else ::close(fds[0]);
-            }
-        }
 
         // one inject path used by BOTH batch-feed and event-loop
         QSet<int> held;
