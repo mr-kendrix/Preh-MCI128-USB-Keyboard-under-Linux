@@ -1,14 +1,14 @@
-# pktm.service — USER unit (NOT the system pktd.service), kept NOT-started.
-# Trial order: stop the SYSTEM pktd first (sudo systemctl stop pktd.service — a user unit
-# cannot stop a system unit), then systemd path below. One daemon at a time: running BOTH
-# injects every key twice (hidraw readers each get their own copy — no silent theft).
-# Rollback: kill pktm process, sudo systemctl start pktd.service again.
-# NO auto-restart until the exit-sweep trial passed (see below).
+# pktm.service — TEMPLATE (not installed; placeholders BEFORE use):
+#   <HOME>  = your home; <PMAP> = absolute .pmap path; <CALIB> = calib json (learned via pktd)
+# NOTE: vendor .pmaps use WINDOWS process names as <Dependency> — Linux process names
+#   NEVER match them; window-specific rules look dead until an alias table maps them (open).
+# Trial order: sudo systemctl stop pktd.service (a user unit cannot stop the SYSTEM unit),
+#   then start pktm by hand or via this unit. ONE daemon at a time: both = every key twice.
+# Rollback: kill pktm, sudo systemctl start pktd.service. NO auto-restart until the
+#   exit-sweep trial passed. PKT_HOLD_MS=<ms> = test-only hold hook for sweep observation.
 [Unit]
-Description=pktm POS-key mapper daemon (C++/Qt6, trial only)
+Description=pktm live POS-key daemon (trial)
 
 [Service]
+ExecStart=<HOME>/hermes-workspace/pkt-editor-cpp/b/pktm --live <PMAP> --calib <CALIB>
 Environment=YDOTOOL_SOCKET=/tmp/.ydotool_socket
-ExecStart=/home/nonrmy/hermes-workspace/pkt-editor-cpp/b/pktm --live "/mnt/Windows/ProgramData/PrehKeyTec/PKT Mapper/MappingLists/Mr.Kendrix.pmap" --calib /home/nonrmy/MK.calib.json
-# (exit sweep = SIGTERM/SIGINT handler in --live: ydot_release_all(); add Restart=
-#  on-failure only after the 30s trial verifies it)
