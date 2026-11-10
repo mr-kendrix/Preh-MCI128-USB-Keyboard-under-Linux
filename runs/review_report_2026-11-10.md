@@ -188,6 +188,21 @@ User trial on the physical board (Runs A/B1/B3):
 - pktd.service restarted after trial; ydotoold restarted to clear the chat-flood key
   state (recovery cmd from Round 9 §4 used and works).
 
+## Round 14: focus tool FIXED (kdotool fork) — window rules live
+
+Root cause (upstream github jinliu/kdotool src/main.rs:615): exact match
+`KDE_SESSION_VERSION == "6"`; Plasma/Wayland + plain terminals DO NOT export it
+(GUI procs get "6" only inside sessions) -> every kdotool call failed on this box
+(Plasma 6.8.2 irrelevant — the var was just empty).
+
+Fix (kdotool-fork in ~/hermes-workspace/kdotool-fork, cargo release, 15 s build):
+reject ONLY "5"/"5.*" (true Plasma 5), accept empty/6.x/future. Verified headless:
+plain terminal, no env: getactivewindow getwindowpid -> 35743 (Blender), getwindowname
+-> '* (Unsaved) - Blender 5.2.3 LTS'; KDE_SESSION_VERSION=5 -> still refuses (fail-closed).
+Installed at ~/.local/bin/kdotool (upstream kept as kdotool.upstream).
+pktm --dry-inject 91: window resolved + rule-match YES (Blender focused at probe time)
+-> degraded-case warning from round 13 no longer applies on this machine.
+
 ## Repro (headless)
 
 ```bash
