@@ -25,6 +25,7 @@
 #include <sys/un.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <sys/file.h>   // LOCK_SH/LOCK_EX for advisory flock (reader parity)
 #include <unistd.h>
 #include "transport.h"
 #include <dirent.h>
@@ -446,6 +447,65 @@ int main(int argc, char **argv) {
         }
 
         // REAL event loop: blocking per-report read, replug reopen, --seconds budget
+        // reader parity part 1: pktd.service (cmd=inject) does NOT flock at all — it
+        // detects rivals via /proc scan (other_pktd_readers in pktd.py). Do the same:
+        // refuse while a pktd.py inject process lives, so the two daemons never share
+        // the hidraw node.
+        {
+            bool busy = false;
+            if (struct dirent *de; DIR *pr = ::opendir("/proc")) {
+                while ((de = ::readdir(pr))) {
+                    char *e = de->d_name; char *q = e; int pid = 0;
+                    while (*q && *q >= '0' && *q <= '9') { pid = pid * 10 + (*q - '0'); ++q; }
+                    if (!pid || pid == ::getpid() || *q) continue;
+                    char cp[64]; std::snprintf(cp, sizeof cp, "/proc/%d/cmdline", pid);
+                    if (FILE *cf = ::fopen(cp, "r")) {
+                        char cl[4096]; const size_t got = ::fread(cl, 1, sizeof cl - 1, cf);
+                        ::fclose(cf);
+                        cl[got] = '\0';
+                        bool is_py = false, is_inj = false;
+                        for (size_t i = 0; i + 7 <= got; ++i)
+                            if (!std::memcmp(cl + i, "pktd.py", 7)) is_py = true;
+                        for (size_t i = 0; i + 6 <= got; ++i)
+                            if (!std::memcmp(cl + i, "inject", 6)) is_inj = true;
+                        if (is_py && is_inj) { busy = true;
+                            std::printf(">> pktd.py inject is live (pid %d) — stop pktd.service first\n", pid);
+                            break; }
+                    }
+                }
+                ::closedir(pr);
+            }
+            if (busy) return 2;
+        }
+        // hidraw reader parity part 2: advisory flock on the SAME lockfile pktd uses
+        // (/tmp/pktd-hidraw.lock). pktd's calibrate/watch/raw commands hold it LOCK_EX
+        // while running (pktd.py:249) -> our conditional LOCK_SH fails meanwhile, and
+        // our lock also makes pktd's next mandatory attempt fail (pktd refuses then).
+        // (pktd's cmd=inject daemon never flocks — part 1 above covers that case.)
+        // Own LOCK_EX file additionally excludes pktm vs pktm. Kernel drops locks at
+        // process exit, so no stale locks after crashes.
+        {
+            const int peer = ::open("/tmp/pktd-hidraw.lock", O_CREAT | O_WRONLY, 0666);
+            if (peer < 0) {
+                std::printf(">> cannot open peer lockfile: %s (rc)\n", std::strerror(errno));
+                return 2;
+            }
+            if (::flock(peer, LOCK_SH | LOCK_NB) != 0) {
+                ::close(peer);
+                std::printf(">> refusing: hidraw lock is held — pktd.service (or another\n"
+                            "   reader) reads the device. stop it first (systemctl stop pktd.service)\n");
+                return 2;
+            }
+            const int self = ::open("/tmp/pktm-hidraw.lock", O_CREAT | O_WRONLY, 0666);
+            if (self < 0 || ::flock(self, LOCK_EX | LOCK_NB) != 0) {
+                if (self >= 0) ::close(self);
+                // closing the fd alone drops its advisory lock (kernel, per-fd)
+                ::close(peer);
+                std::printf(">> refusing: another pktm holds the exclusive pktm lock\n");
+                return 2;
+            }
+            // fds stay open for process lifetime; locks drop at exit/kill
+        }
         std::printf(">> backend=ydotool calib=%d rules=%d (event loop, window per press; Ctrl-C = sweep; max-hold=%ds)\n",
                     int(table.size()), int(rs.rules.size()), max_hold_s);
         QString node = device.isEmpty() ? find_hidraw_node() : device;
@@ -476,13 +536,14 @@ int main(int argc, char **argv) {
                 continue;
             }
             // poll before read: while a key is HELD the board sends no reports, a
-            // blocking read would wait forever and the watchdog above could not run
+            // blocking read would wait forever and the watchdog above could not run.
+            // events MUST request POLLIN — a pollfd with events=0 never reports the
+            // ready byte (regression found by review: ppoll always returned 0, live
+            // board read dead). ppoll keeps timespec precision; plain poll(fds,nfds,
+            // timeout_MS) would work too but its timeout is in MILLISECONDS.
             {
-                struct pollfd pfd{ fd, 0, -1 };
+                struct pollfd pfd{ fd, POLLIN, 0 };
                 struct timespec tv{ 0, 250000000L };       // 250 ms in NANOseconds (ppoll)
-                // ppoll = glibc's timeval-precision poll; plain poll() in <sys/poll.h>
-                // is the legacy SVID variant (fds FIRST, timeout in ms) — silently
-                // different arg order and units (250000 became 250 s there).
                 const int pr = ::ppoll(&pfd, 1, &tv, nullptr);
                 if (pr == 0) continue;               // empty wait window: watchdog next round
                 if (pr < 0 && errno == EINTR) continue;

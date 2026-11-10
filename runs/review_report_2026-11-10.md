@@ -19,7 +19,9 @@ All commits pushed to `origin/main` (ssh mr-kendrix/Preh-MCI128-USB-Keyboard-und
 | hidraw reader | reopen-spam bounded (5 open+read failures → one errno hint, clean sweep exit); replug renames the node → pktd/pktm must be restarted (pitfall recorded); stuck-key incident from kill-test recovered via raw up-events into `/tmp/.ydotool_socket` |
 | Gate | `tools/live_gate.py` GREEN incl. uinput down/up arrival (keys 6,1,15); single RED reproduces as event-delivery timing, re-run GREEN |
 | One socket per lifetime (round-9) | 4 injection pairs under `PKT_HOLD_MS`: `/proc/<pid>/fd` (via `pgrep -x pktm`) shows exactly ONE `socket:[N]` inode across calls 1–4; reconnect+close only after send failure, `g_ydot_connected=-1` before every `::close()` |
-| AutoRepeat safety net (round-9) | 30 s max-hold (`PKT_MAX_HOLD_S` test override) + flush of pending AR downs on read death; event loop polls 250 ms so the watchdog runs while a held key is silent; `hidraw gone` flush printed and released in fifo run; physical-board max-hold release = user trial (FIFO poll is a dead stand-in path on Linux) |
+| AutoRepeat safety net (round-9) | 30 s max-hold (`PKT_MAX_HOLD_S` test override) + flush of pending AR downs on read death; event loop polls 250 ms so the watchdog runs while a held key is silent; PROVEN on the real read path via FIFO (round 10): down report arrives, `AutoRepeat press`, then `-- AutoRepeat release (max-hold): scancode 0xe040 up sent` at 1 s with `PKT_MAX_HOLD_S=1`; physical-board max-hold = user trial |
+| Reader parity (round-10) | pktd.service (cmd=inject) never flocks — parity part 1 is a `/proc` cmdline scan (pktd.py `other_pktd_readers` style): pktm refuses (rc=2) while a `pktd.py inject` lives, and pktd's own scan refuses beside pktm. Part 2: flock pair on `/tmp/pktd-hidraw.lock` — pktm LOCK_SH|NB vs pktd calibrate/watch/raw LOCK_EX conflict BOTH ways (proved errno 11 in both orders) + own LOCK_EX file: pktm-vs-pktm refuse rc=2. Kernel drops locks at process exit (no stale locks) |
+| fd-exhaustion test (round-10) | `ulimit -n 64` + 200 injections: `-- 200 presses, 200 injected, 0 unknown` rc=0 — one-socket design survives; ASAN irrelevant for fd counts (reviewer agreed) |
 | Probe hardening (round-9) | probe counts only with exit 0 (else fail-closed `<unknown-window>`); PID validated digits before `/proc`, dead PID -> undeterminable; title = first stdout line; distinct stderr lines logged ONCE. Live run resolved `proc 'vivaldi-bin'` natively; tested env **kdotool v0.3.0 @ plasma-desktop 6.8.2** (stderr silent on 6.8.2) |
 
 ## OPEN — verdict remains `stay` (do not install pktm.service at boot yet)
@@ -34,10 +36,13 @@ All commits pushed to `origin/main` (ssh mr-kendrix/Preh-MCI128-USB-Keyboard-und
 
 The old kdotool stderr question is ANSWERED and implemented (round 9 §3): exit status + parsed output decide; stderr is informational, logged once per distinct line.
 
-New questions:
-1. Max-hold semantics: vendor AutoRepeat repeats as long as the key is physically held. We cap an open AR hold at 30 s (release + log). Is a >30 s single hold plausible on this POS hardware — or can the cap ship as-is (it turns a would-be-stuck key into a bounded one)?
-2. Reader parity: before any `leave`, what exactly should the flock/`hold_device_lock` equivalence look like — refuse pktm startup while `pktd.service` is active (detectable via flock on the same lockfile), or a lockfile of our own both daemons honour?
-3. Do you want an ASAN-built pktm as evidence for the socket/fd changes, or is the `/proc/<pid>/fd` sample enough?
+New questions (round-9) — ALL ANSWERED, see Round 10 section:
+1. Max-hold: ship the 30 s cap (configurable, logged) — >30 s single holds are not
+   plausible on POS hardware; late board release silently ignored. DONE as-is.
+2. Reader parity: IMPLEMENTED round 10 (proc scan + flock pair; pktd inject never
+   flock'd — that finding changed the shape, see Round 10).
+3. ASAN would not cover fd exhaustion; `ulimit -n 64` + 200 injections run instead:
+   200/200 rc=0.
 
 ## Round-8: --calibrate CLOSED (1790ecc)
 
@@ -91,6 +96,37 @@ BEFORE any long-running/boot use. All three implemented + probe hardening:
 
 Gate after all fixes: GREEN (124/95/77 injected, event-node down/up balanced).
 
+## Round 10: `stay` follow-up — POLLIN regression fix, parity, corrected claims (this session)
+
+Reviewer found `struct pollfd pfd{ fd, 0, -1 }`: events=0 -> ppoll reports nothing ->
+the live read loop starved (no key ever read). Confirmed empirically: pipe with data,
+events=0 -> ppoll 0; events=POLLIN -> 1. Fixed to `struct pollfd pfd{ fd, POLLIN, 0 }`.
+
+Two earlier claims were WRONG, cause was the same events=0 bug (both re-tested):
+- "poll on FIFO never wakes on Linux" — false; with POLLIN it wakes immediately.
+- "glibc legacy SVID poll() with swapped args" — false; `poll(fds,nfds,timeout_ms)` is
+  the standard signature, timeout just in ms (our hang came from 250000 ms = 250 s).
+
+Real-read-path re-test via FIFO (bypasses were the problem, now covered):
+POSKey 124 AutoRepeat press -> max-hold release at 1 s (PKT_MAX_HOLD_S=1) -> proof
+read loop + watchdog work end-to-end; ulimit -n 64 + 200 injections rc=0 (fd proof the
+reviewer asked for); gate GREEN rerun.
+
+Reader parity implementation (the reviewer's flock shape refined by reality): pktd
+cmd=inject NEVER calls hold_device_lock() (only calibrate/watch/raw do, pktd.py:525) —
+so a shared-lock dance alone would not stop the daemon. pktm does BOTH:
+1. /proc cmdline scan for live `pktd.py ... inject` (same method pktd uses:
+   other_pktd_readers) -> refuse rc=2 with the stop-pktd hint.
+2. flock pair: conditional LOCK_SH|NB on /tmp/pktd-hidraw.lock (conflicts both ways
+   with pktd's calibrate/watch/raw LOCK_EX, errno 11 verified both orders) + own
+   LOCK_EX /tmp/pktm-hidraw.lock -> pktm-vs-pktm refuse too.
+Late release report after max-hold flush: arrives with empty ar_pending -> silently
+ignored (verified on the FIFO run, no double up).
+Failed injection sends stay drop-only (no reconnect-and-retry added — POS tool,
+explicit beats implicit; revisit only with vendor data).
+
+Verdict: `stay`. User trial only AFTER this POLLIN fix (before it nothing would work).
+
 ## Repro (headless)
 
 ```bash
@@ -106,8 +142,16 @@ YDOTOOL_SOCKET=/tmp/.does-not-exist ./b/pktm ...  # error: + rc=2
 #   ls -l /proc/$(pgrep -x pktm)/fd | grep socket   -> exactly ONE socket:[N], same inode across calls
 # flush-on-read-death (fifo stand-in for replug): data arrives, then writer closes:
 #   -- AutoRepeat release (hidraw gone): scancode 0xe040 up sent
-# max-hold on the BOARD (poll on FIFO never wakes on Linux -> board/user only):
-#   PKT_MAX_HOLD_S=5, physically hold POSKey 124 6 s -> -- AutoRepeat release (max-hold): ...
+# max-hold (round-10: FIFO poll DOES wake — earlier failure was events=0 in pollfd):
+#   mkfifo /tmp/arfifo; writer: { printf '\004\340\100\000\000'; sleep 5; } > /tmp/arfifo
+#   PKT_MAX_HOLD_S=1 ./b2/pktm /tmp/ar.pmap --live --device /tmp/arfifo --seconds 4 ...
+#   -> POSKey 124 AutoRepeat press -> '-- AutoRepeat release (max-hold): ... up sent' at 1 s
+#   (board user-trial variant: PKT_MAX_HOLD_S unset, physically hold POSKey 124 ~40 s)
+# ulimit proof (fd-exhaustion): FEED=200 pairs; bash -c 'ulimit -n 64; pktm --live --feed-hex $FEED'
+#   -> '-- 200 presses, 200 injected, 0 unknown' rc=0
+# reader parity: while `pktd.py inject` lives -> pktm --live rc=2 'pktd.py inject is live';
+#   two pktm live runs -> 2nd rc=2 'another pktm holds the exclusive pktm lock';
+#   flock conflict proved both orders errno 11 (LOCK_EX held vs LOCK_SH|NB attempt)
 # window probe now validates exit status: kdotool with bad Plasma -> nonzero exit ->
 #   fail-closed '<unknown-window>' (was: stdout-blind parse); stderr warning logged ONCE.
 ```
