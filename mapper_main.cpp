@@ -101,6 +101,10 @@ static QByteArray hex_to_bytes(const QString &hex) {
     return out;
 }
 
+// sweep-handler marker fd (test harness): opened from PKT_SWEEP_LOG at live start;
+// handler writes "SWEEP_UP <hex>\n" lines via raw ::write (signal-safe, fixed buf).
+static int g_mark_fd = -1;
+
 int main(int argc, char **argv) {
     ::setlinebuf(stdout);   // live/daemon mode: every line visible in logs immediately
     QString path;
@@ -171,15 +175,27 @@ int main(int argc, char **argv) {
         // down->up gap so a signal can fall into a real hold window (tests).
         auto sweep_handler = [](int) {
             const int fd = pktm::ydot_sweep_fd();
-            if (fd >= 0)
-                for (int i = 0; i < sweep_count.load() && i < 64; ++i) {
-                    unsigned char rec[24] = {0};
-                    const unsigned code = held_evdev[i] & 0xFFFFu;
-                    rec[16] = 1; rec[18] = (unsigned char)code; rec[19] = (unsigned char)(code >> 8);
-                    (void)::send(fd, rec, sizeof rec, 0);
+            static char buf[16];   // test marker side-channel (signal-safe, fixed buf)
+            for (int i = 0; i < sweep_count.load() && i < 64; ++i) {
+                const unsigned code = held_evdev[i] & 0xFFFFu;
+                unsigned char rec[24] = {0};
+                rec[16] = 1; rec[18] = (unsigned char)code; rec[19] = (unsigned char)(code >> 8);
+                (void)::send(fd, rec, sizeof rec, 0);
+                if (g_mark_fd >= 0) {
+                    static const char h[] = "0123456789abcdef";
+                    static const char pre[] = "SWEEP_UP ";
+                    char *p = buf;
+                    for (const char *q = pre; *q; ++q) *p++ = *q;
+                    *p++ = h[(code >> 12) & 15u]; *p++ = h[(code >> 8) & 15u];
+                    *p++ = h[(code >> 4) & 15u];  *p++ = h[code & 15u];
+                    *p++ = '\n';
+                    (void)::write(g_mark_fd, buf, (ssize_t)(p - buf));
                 }
+            }
             std::_Exit(0);
         };
+        if (const char *mk = getenv("PKT_SWEEP_LOG"))   // test harness marker file
+            g_mark_fd = ::open(mk, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         std::signal(SIGTERM, sweep_handler);
         std::signal(SIGINT, sweep_handler);
 
