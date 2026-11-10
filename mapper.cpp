@@ -140,7 +140,11 @@ bool value_script(const Rule &r, const Layer &l, QVector<QPair<int, int>> &seq, 
             const QString tok = v.mid(i + 1, end - i - 1);
             i = end + 1;
             if (tok.contains(QLatin1Char('{'))) { seq.clear(); why = QStringLiteral("nested brace"); return false; }
-            if (tok == QLatin1String("DELAY")) continue;  // timing hint: no key
+            // {DELAY}: NEVER silently drop. Vendor-tool wait semantics (allegedly
+            // ~0.5 s) untested here and ydot_send has no timed-send model -> refuse.
+            if (tok == QLatin1String("DELAY")) {
+                seq.clear(); why = QStringLiteral("DELAY not modelled, refusing"); return false;
+            }
             if (tok.contains(QLatin1Char('+'))) {
                 const QStringList parts = tok.split(QLatin1Char('+'));
                 QVector<int> mods;
