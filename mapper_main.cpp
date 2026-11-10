@@ -189,8 +189,23 @@ int main(int argc, char **argv) {
             return 2;
         }
         const QHash<int, int> table = load_calib_json(calib_path);
-        const QString sock = getenv("YDOTOOL_SOCKET") ? QString(getenv("YDOTOOL_SOCKET"))
-                                                      : QStringLiteral("/tmp/.ydotool_socket");
+        const QString sock = [=]() {                                       // resolve+sanity: typo'd
+            QString s = getenv("YDOTOOL_SOCKET") ? QString(getenv("YDOTOOL_SOCKET"))          // YDOTOOL_SOCKET
+                    : QStringLiteral("/tmp/.ydotool_socket");                                 // (the one ydotoold
+            if (getenv("YDOTOOL_SOCKET") && !QFile::exists(s)                                 // really serves) ->
+                && QFile::exists(QStringLiteral("/tmp/.ydotool_socket"))) {                  // loud fallback
+                std::fprintf(stderr,
+                    ">> YDOTOOL_SOCKET '%s' does not exist; falling back to '/tmp/.ydotool_socket' "
+                    "which ydotoold serves — fix the env spelling, this line says which path got used\n",
+                    s.toUtf8().constData());
+                s = QStringLiteral("/tmp/.ydotool_socket");
+            } else if (!QFile::exists(s)) {
+                std::fprintf(stderr,
+                    ">> ydotool socket '%s' not found — check YDOTOOL_SOCKET spelling and that "
+                    "ydotoold runs; injections WILL FAIL\n", s.toUtf8().constData());
+            }
+            return s;
+        }();
 
         // one inject path used by BOTH batch-feed and event-loop
         QSet<int> held;
