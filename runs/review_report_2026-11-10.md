@@ -143,10 +143,26 @@ Verdict: `stay`. User trial only AFTER this POLLIN fix (before it nothing would 
   ppoll loop -> AutoRepeat press + max-hold release), SKIPs while pktd.service active
   and still GREEN; with pktd stopped the stage proves read+watchdog:
   `POSKey 124 'x' -> AutoRepeat press` then `-- AutoRepeat release (max-hold)`.
-- Reviewer Q2 (hot unplug while holding): loop's read-death path re-opens the node,
-  after 5 dead opens flushes pending AR down (`hidraw gone`), kill -> sweep handler.
-  Proven fifo variant in report repro.
+- Hot unplug while holding (review Q2): read-death flush is IMMEDIATE (not after 5
+  tries — the 5-counter only bounds reopen spam and ends the run): pending AR downs
+  get their up right away with `-- AutoRepeat release (hidraw gone)`. Proven fifo
+  variant in report repro.
+- ydotool socket: plain ::socket() in mapper.cpp (QLocalSocket is only an include) —
+  now SOCK_CLOEXEC, so QProcess helpers (kdotool/xdotool) never inherit the fd.
 - Verdict unchanged `stay`; user trial per checklist below (pktd stop/start bracketed).
+
+## Round 12: gate honesty (review of round 11 — SKIP was invisible)
+
+- live_gate.py stage 2 now runs WITHOUT stopping pktd.service via new test hook
+  `PKT_SKIP_PKTD_SCAN` (pktm announces it like the other hooks: ">> TEST HOOK ACTIVE:
+  pktd scan skipped — never set in a service"). Scan skip is safe for the gate because
+  the stage reads a FIFO, not the hidraw node.
+- Honest verdict: if even the hooked run refuses (pktd calibrate/watch/raw holds the
+  flock), the gate prints "REAL-PATH: SKIP ... read path NOT tested" and the final
+  line says `GREEN (read path NOT tested)` — never a silent GREEN.
+- Verified with pktd.service ACTIVE: REAL-PATH press + max-hold release, GATE: GREEN.
+- Review round-11 verdict otherwise accepted; next step is the HUMAN trial (checklist
+  in OPEN 4) — headless rounds cannot cover real hidraw + Plasma window deps.
 
 ## Repro (headless)
 

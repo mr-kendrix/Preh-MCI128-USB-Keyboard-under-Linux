@@ -273,7 +273,8 @@ static int ydot_send_now(const QString &socket_path, const QVector<QPair<int, in
         sa.sun_family = AF_UNIX;
         std::memcpy(sa.sun_path, p.constData(),
                     qMin(p.size(), int(sizeof(sa.sun_path) - 1)));
-        fd = ::socket(AF_UNIX, SOCK_DGRAM, 0);
+        fd = ::socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0);   // cloexec: QProcess
+        // helpers (kdotool/xdotool) must never inherit the ydotool fd (review r11)
         if (fd < 0) return -errno;
         if (::connect(fd, reinterpret_cast<const sockaddr *>(&sa), sizeof(sa))) {
             const int e = errno; ::close(fd); return -e;

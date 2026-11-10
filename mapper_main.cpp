@@ -447,11 +447,11 @@ int main(int argc, char **argv) {
         }
 
         // REAL event loop: blocking per-report read, replug reopen, --seconds budget
-        // reader parity part 1: pktd.service (cmd=inject) does NOT flock at all — it
-        // detects rivals via /proc scan (other_pktd_readers in pktd.py). Do the same:
-        // refuse while a pktd.py inject process lives, so the two daemons never share
-        // the hidraw node.
-        {
+        // Part 1 scan (skippable by TEST HOOK PKT_SKIP_PKTD_SCAN for headless gates
+        // only — same "remove from service env" warning as the other hooks):
+        if (getenv("PKT_SKIP_PKTD_SCAN"))
+            std::printf(">> TEST HOOK ACTIVE: pktd scan skipped — never set in a service\n");
+        else {
             bool busy = false;
             if (struct dirent *de; DIR *pr = ::opendir("/proc")) {
                 while ((de = ::readdir(pr))) {

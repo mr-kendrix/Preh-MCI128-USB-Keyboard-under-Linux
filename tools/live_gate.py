@@ -76,32 +76,32 @@ for want in (6, 1, 15):                 # '5'=6, POSKey 95 vendor value {Esc}=1,
     if fd is not None and not (downs == 1 and ups == 1):
         ok = False
 # --- stage 2: REAL read path (FIFO feeds the ppoll loop; --feed-hex BYPASSES it and
-#     hid the round-9 POLLIN bug). pktd.service must be stopped (pktm refuses live).
-pktd_live = subprocess.run(["systemctl", "is-active", "pktd.service"],
-                           capture_output=True, text=True).stdout.strip() == "active"
-if pktd_live:
-    print("REAL-PATH: SKIP (pktd.service active — stop it to run the full gate)")
-else:
-    os.system("rm -f /tmp/gate_fifo")
-    subprocess.run(["mkfifo", "/tmp/gate_fifo"])
-    with open("/tmp/gate_ar.pmap", "w") as f:
-        f.write("<NAME></NAME>\n<MAP>\n  <POSKey>313234</POSKey>\n"
-                "  <LAYER><Type>74657874</Type><Value>78</Value>"
-                "<Dependency></Dependency><AutoRepeat>74727565</AutoRepeat></LAYER>\n</MAP>\n")
-    writer = subprocess.Popen([sys.executable, "-c",
-        "import time\nf=open('/tmp/gate_fifo','wb',buffering=0)\n"
-        "f.write(b'\\x04\\xe0\\x40\\x00\\x00'); f.flush(); time.sleep(4)"])
-    env2 = dict(os.environ, PKT_MAX_HOLD_S="1")
-    r2 = subprocess.run([BIN, "/tmp/gate_ar.pmap", "--live", "--device", "/tmp/gate_fifo",
-                         "--calib", "/home/nonrmy/MK.calib.json", "--seconds", "3"],
-                        capture_output=True, text=True, env=env2, timeout=15)
-    try:
-        writer.wait(8)
-    except subprocess.TimeoutExpired:
-        writer.kill()
-        writer.wait()
-    print("REAL-PATH:", r2.stdout.strip())
-    if not ("AutoRepeat press" in r2.stdout and "max-hold" in r2.stdout):
-        ok = False
-        print("REAL-PATH: missing AutoRepeat press / max-hold release -> RED")
-print("GATE:", "GREEN" if ok else "RED")
+#     hid the round-9 POLLIN bug). Runs regardless of pktd.service via TEST HOOK
+#     PKT_SKIP_PKTD_SCAN (gate-only; pktm prints a warning about service env then).
+not_tested = False
+os.system("rm -f /tmp/gate_fifo")
+subprocess.run(["mkfifo", "/tmp/gate_fifo"])
+with open("/tmp/gate_ar.pmap", "w") as f:
+    f.write("<NAME></NAME>\n<MAP>\n  <POSKey>313234</POSKey>\n"
+            "  <LAYER><Type>74657874</Type><Value>78</Value>"
+            "<Dependency></Dependency><AutoRepeat>74727565</AutoRepeat></LAYER>\n</MAP>\n")
+writer = subprocess.Popen([sys.executable, "-c",
+    "import time\nf=open('/tmp/gate_fifo','wb',buffering=0)\n"
+    "f.write(b'\\x04\\xe0\\x40\\x00\\x00'); f.flush(); time.sleep(4)"])
+env2 = dict(os.environ, PKT_MAX_HOLD_S="1", PKT_SKIP_PKTD_SCAN="1")
+r2 = subprocess.run([BIN, "/tmp/gate_ar.pmap", "--live", "--device", "/tmp/gate_fifo",
+                     "--calib", "/home/nonrmy/MK.calib.json", "--seconds", "3"],
+                    capture_output=True, text=True, env=env2, timeout=15)
+try:
+    writer.wait(8)
+except subprocess.TimeoutExpired:
+    writer.kill()
+    writer.wait()
+print("REAL-PATH:", r2.stdout.strip())
+if "refusing" in r2.stdout:                 # pktd calibrate/watch/raw holds the flock
+    print("REAL-PATH: SKIP (pktd calibrate/watch/raw holds the flock — read path NOT tested)")
+    not_tested = True
+elif not ("AutoRepeat press" in r2.stdout and "max-hold" in r2.stdout):
+    ok = False
+    print("REAL-PATH: missing AutoRepeat press / max-hold release -> RED")
+print("GATE:", ("GREEN" if ok else "RED") + (" (read path NOT tested)" if not_tested else ""))
