@@ -241,9 +241,22 @@ int main(int argc, char **argv) {
 
         // one inject path used by BOTH batch-feed and event-loop
         QSet<int> held;
+        // AutoRepeat (measured 2026-11-10 via hold_record: board sends ONE down +
+        // one 0xFE release per hold, no repeats): rules with rep=true inject their
+        // down now and defer the matching up until the release report — the OS
+        // typematic then repeats (vendor 250/15 ms are XKB settings, not wire).
+        QHash<int, QPair<int, int>> ar_pending;   // scancode -> deferred up event
         int presses = 0, injected = 0, skipped = 0;
         auto on_event = [&](int scancode, bool down) {
-            if (!down) { held.remove(scancode); return; }
+            if (!down) {
+                held.remove(scancode);
+                if (ar_pending.contains(scancode)) {
+                    const QPair<int, int> up = ar_pending.take(scancode);
+                    ydot_send(sock, QVector<QPair<int, int>>{up});
+                    std::printf("-- AutoRepeat release (scancode 0x%04x, up sent)\n", scancode);
+                }
+                return;
+            }
             if (held.contains(scancode)) return;      // typematic repeat while held
             held.insert(scancode);
             ++presses;
@@ -289,6 +302,23 @@ int main(int argc, char **argv) {
                     held_evdev[i] = p.first;
                     sweep_count.store(i + 1);
                 }
+            const bool rep = hit->layers[sel].rep.trimmed().toLower() == QStringLiteral("true");
+            if (rep && seq.size() == 2 && seq[0].second == 1 && seq[1].second == 0
+                && seq[0].first == seq[1].first) {
+                // down now, up on release (see ar_pending comment); sweep_count NOT
+                // reset: the down stays open, a signal mid-hold releases it via sweep
+                const int rc = ydot_send(sock, QVector<QPair<int, int>>{seq[0]});
+                if (rc == 0) {
+                    ar_pending.insert(scancode, seq[1]);
+                    ++injected;
+                    std::printf("POSKey %d '%s' -> AutoRepeat press (ydotool key %d down only)\n",
+                                pk, typed.toUtf8().constData(), seq[0].first);
+                } else {
+                    std::printf("POSKey %d '%s' -> NOT injected: socket rc=%d (%s)\n",
+                                pk, typed.toUtf8().constData(), rc, sock.toUtf8().constData());
+                }
+                return;
+            }
             const int gap = hit->layers[sel].slow.trimmed().toLower() == QStringLiteral("true")
                                 ? 20000 : 0;   // vendor SlowOutput: 20 ms/char
             const int rc = ydot_send(sock, seq, gap);
