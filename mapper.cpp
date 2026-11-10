@@ -14,6 +14,7 @@
 #include <QPair>
 #include <cstring>
 #include <cerrno>
+#include <ctime>   // struct timespec + nanosleep (PKT_HOLD_MS hook)
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -265,9 +266,18 @@ static int ydot_send_now(const QString &socket_path, const QVector<QPair<int, in
             const int e = errno; ::close(fd); return -e;
         }
         // PKT_HOLD_MS: TEST-ONLY hook — hold the key for N ms before its release
-        // (lets a SIGTERM fall in a real hold window so the sweep can be observed)
-        if (const char *h = getenv("PKT_HOLD_MS"))
-            if (ev.second == 1) ::usleep(atoi(h) * 1000);
+        // (lets a SIGTERM land in a real hold window so the sweep can be observed).
+        // nanosleep: correct for N >= 1000 (usleep caps at one second).
+        if (ev.second == 1) {   // hold only between a down and its matching up
+            if (const char *hs = getenv("PKT_HOLD_MS")) {
+                const long ms = atol(hs);
+                if (ms > 0) {
+                    struct timespec ts{ static_cast<time_t>(ms / 1000),
+                                        static_cast<time_t>((ms % 1000) * 1000000L) };
+                    ::nanosleep(&ts, nullptr);
+                }
+            }
+        }
         if (!send_rec(0, 0, 0)) {
             const int e = errno; ::close(fd); return -e;
         }

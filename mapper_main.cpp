@@ -208,20 +208,19 @@ int main(int argc, char **argv) {
         const QString sock = [=]() {                                       // resolve+sanity: typo'd
             QString s = getenv("YDOTOOL_SOCKET") ? QString(getenv("YDOTOOL_SOCKET"))          // YDOTOOL_SOCKET
                     : QStringLiteral("/tmp/.ydotool_socket");                                 // (the one ydotoold
-            if (getenv("YDOTOOL_SOCKET") && !QFile::exists(s)                                 // really serves) ->
-                && QFile::exists(QStringLiteral("/tmp/.ydotool_socket"))) {                  // loud fallback
-                std::fprintf(stderr,
-                    ">> YDOTOOL_SOCKET '%s' does not exist; falling back to '/tmp/.ydotool_socket' "
-                    "which ydotoold serves — fix the env spelling, this line says which path got used\n",
-                    s.toUtf8().constData());
-                s = QStringLiteral("/tmp/.ydotool_socket");
-            } else if (!QFile::exists(s)) {
-                std::fprintf(stderr,
-                    ">> ydotool socket '%s' not found — check YDOTOOL_SOCKET spelling and that "
-                    "ydotoold runs; injections WILL FAIL\n", s.toUtf8().constData());
+            if (getenv("YDOTOOL_SOCKET") && !QFile::exists(s)) {                            // really serves). An
+                std::fprintf(stderr,                                                       // EXPLICIT setting is
+                    "error: YDOTOOL_SOCKET '%s' does not exist — unset it for the default "  // honoured hard, no
+                    "/tmp/.ydotool_socket or fix the path\n", s.toUtf8().constData());      // silent override.
+                return QString();                                                          // caller exits
             }
             return s;
         }();
+        if (sock.isEmpty())
+            return 2;   // explicit bad env = hard failure (a service nobody reads must not drift)
+        if (getenv("PKT_HOLD_MS") || getenv("PKT_SWEEP_LOG"))
+            std::printf(">> TEST HOOKS ACTIVE (PKT_HOLD_MS/PKT_SWEEP_LOG) — key presses stay "
+                        "held N ms; remove from any service environment\n");
 
         // one inject path used by BOTH batch-feed and event-loop
         QSet<int> held;
