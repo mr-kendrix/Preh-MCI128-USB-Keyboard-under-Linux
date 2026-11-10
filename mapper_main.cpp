@@ -485,31 +485,44 @@ int main(int argc, char **argv) {
         // Own LOCK_EX file additionally excludes pktm vs pktm. Kernel drops locks at
         // process exit, so no stale locks after crashes.
         {
-            const int peer = ::open("/tmp/pktd-hidraw.lock", O_CREAT | O_WRONLY, 0666);
+            const char *peer_path = "/tmp/pktd-hidraw.lock";
+            // READ-ONLY open: flock works on an r-only fd and never fails on a root-
+            // owned file (pktd runs as root -> root:0644 would EACCES an O_WRONLY open
+            // = false refusal even with pktd stopped — reviewer round-10 finding).
+            // Create only when missing (pktd itself creates it at its startup).
+            int peer = ::open(peer_path, O_RDONLY | O_CLOEXEC);
+            if (peer < 0 && errno == ENOENT)
+                peer = ::open(peer_path, O_CREAT | O_WRONLY | O_NOFOLLOW, 0666);
             if (peer < 0) {
-                std::printf(">> cannot open peer lockfile: %s (rc)\n", std::strerror(errno));
+                std::printf(">> lockfile %s unusable: %s\n", peer_path, std::strerror(errno));
                 return 2;
             }
             if (::flock(peer, LOCK_SH | LOCK_NB) != 0) {
                 ::close(peer);
-                std::printf(">> refusing: hidraw lock is held — pktd.service (or another\n"
-                            "   reader) reads the device. stop it first (systemctl stop pktd.service)\n");
+                std::printf(">> refusing: pktd's lockfile is held (pktd calibrate/watch/"
+                            "raw running) — wait for it or stop pktd.service\n");
                 return 2;
             }
-            const int self = ::open("/tmp/pktm-hidraw.lock", O_CREAT | O_WRONLY, 0666);
+            // own lock in the PRIVATE per-user runtime dir, 0600 + O_NOFOLLOW: a
+            // world-writable /tmp lockfile could be weaponised/pre-held by others
+            QString ldir = getenv("XDG_RUNTIME_DIR");
+            if (ldir.isEmpty()) ldir = QString("/run/user/%1").arg(int(::getuid()));
+            const QString self_path = ldir + "/pktm-hidraw.lock";
+            const int self = ::open(self_path.toUtf8().constData(),
+                                    O_CREAT | O_RDWR | O_NOFOLLOW, 0600);
             if (self < 0 || ::flock(self, LOCK_EX | LOCK_NB) != 0) {
                 if (self >= 0) ::close(self);
-                // closing the fd alone drops its advisory lock (kernel, per-fd)
-                ::close(peer);
+                ::close(peer);   // closing the fd drops its advisory lock
                 std::printf(">> refusing: another pktm holds the exclusive pktm lock\n");
                 return 2;
             }
-            // fds stay open for process lifetime; locks drop at exit/kill
+            // fds stay open for the process lifetime; both locks drop on exit;
+            // O_CLOEXEC prevents fd leaks into helpers started via fork/exec
         }
         std::printf(">> backend=ydotool calib=%d rules=%d (event loop, window per press; Ctrl-C = sweep; max-hold=%ds)\n",
                     int(table.size()), int(rs.rules.size()), max_hold_s);
         QString node = device.isEmpty() ? find_hidraw_node() : device;
-        int fd = node.isEmpty() ? -1 : ::open(node.toUtf8().constData(), O_RDONLY);
+        int fd = node.isEmpty() ? -1 : ::open(node.toUtf8().constData(), O_RDONLY | O_CLOEXEC);
         const time_t t0 = std::time(nullptr);
         unsigned char rep[64];
         QByteArray buf;
@@ -531,7 +544,7 @@ int main(int argc, char **argv) {
             if (fd < 0) {
                 ::usleep(200000);
                 node = find_hidraw_node();
-                fd = node.isEmpty() ? -1 : ::open(node.toUtf8().constData(), O_RDONLY);
+                fd = node.isEmpty() ? -1 : ::open(node.toUtf8().constData(), O_RDONLY | O_CLOEXEC);
                 if (fd >= 0) std::printf(">> reconnected hidraw %s\n", node.toUtf8().constData());
                 continue;
             }

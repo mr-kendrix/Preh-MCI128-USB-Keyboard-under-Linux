@@ -127,6 +127,27 @@ explicit beats implicit; revisit only with vendor data).
 
 Verdict: `stay`. User trial only AFTER this POLLIN fix (before it nothing would work).
 
+## Round 11: lock hygiene (reviewer findings on 8daebbf, this session)
+
+- Peer lock file is pktd's path — pktd runs as ROOT -> file may be root-owned: opening
+  it O_WRONLY would fail EACCES = false refusal even with pktd stopped. Now: flock is
+  fd-based -> open O_RDONLY|O_CLOEXEC, create O_NOFOLLOW only if missing (fallback).
+- Own lock moved from /tmp (world-writable = foreign pre-holders could sabotage the
+  daemon) to $XDG_RUNTIME_DIR (/run/user/<uid>), mode 0600, O_NOFOLLOW. Verified:
+  `ls -l /run/user/1000/pktm-hidraw.lock` -> `-rw------- nonrmy`.
+- O_CLOEXEC on lock + hidraw opens (fd leak into forked helpers — kdotool probes run
+  via QProcess — impossible to leak a fd across exec with cloexec). ydotool socket is
+  QLocalSocket-managed, no open() under our control there — noted, not leaked either
+  (reused g_ydot_connected).
+- Reviewer Q1 answered by CODE: live_gate.py gained stage-2 REAL read path (FIFO ->
+  ppoll loop -> AutoRepeat press + max-hold release), SKIPs while pktd.service active
+  and still GREEN; with pktd stopped the stage proves read+watchdog:
+  `POSKey 124 'x' -> AutoRepeat press` then `-- AutoRepeat release (max-hold)`.
+- Reviewer Q2 (hot unplug while holding): loop's read-death path re-opens the node,
+  after 5 dead opens flushes pending AR down (`hidraw gone`), kill -> sweep handler.
+  Proven fifo variant in report repro.
+- Verdict unchanged `stay`; user trial per checklist below (pktd stop/start bracketed).
+
 ## Repro (headless)
 
 ```bash
