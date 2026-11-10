@@ -205,6 +205,23 @@ int main(int argc, char **argv) {
             return 2;
         }
         const QHash<int, int> table = load_calib_json(calib_path);
+        // calib-drift guard: "_board_chk" stamp vs live board checksum (EF 0E)
+        {
+            const QString stamp = pktm::calib_board_chk(calib_path);
+            if (!stamp.isEmpty() && device_present()) {
+                int lw = 0;
+                const int chk = board_checksum16(&lw);
+                if (chk >= 0) {
+                    const QString now = QStringLiteral("%1").arg(chk, 4, 16, QChar('0')).toUpper();
+                    if (now != stamp.toUpper())
+                        std::printf(">> WARN: live board chk %s != calib stamp %s — table was changed, "
+                                    "calib may be stale (re-record or restamp)\n",
+                                    now.toUtf8().constData(), stamp.toUtf8().constData());
+                }
+            } else if (stamp.isEmpty()) {
+                std::printf(">> note: calib has no '_board_chk' stamp — restamp after table uploads\n");
+            }
+        }
         const QString sock = [=]() {                                       // resolve+sanity: typo'd
             QString s = getenv("YDOTOOL_SOCKET") ? QString(getenv("YDOTOOL_SOCKET"))          // YDOTOOL_SOCKET
                     : QStringLiteral("/tmp/.ydotool_socket");                                 // (the one ydotoold
@@ -272,7 +289,9 @@ int main(int argc, char **argv) {
                     held_evdev[i] = p.first;
                     sweep_count.store(i + 1);
                 }
-            const int rc = ydot_send(sock, seq);
+            const int gap = hit->layers[sel].slow.trimmed().toLower() == QStringLiteral("true")
+                                ? 20000 : 0;   // vendor SlowOutput: 20 ms/char
+            const int rc = ydot_send(sock, seq, gap);
             if (rc == 0) {
                 // sequence fully sent (down+up pairs) -> nothing left to release
                 sweep_count.store(0);

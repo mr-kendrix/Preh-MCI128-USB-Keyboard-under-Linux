@@ -220,10 +220,23 @@ QHash<int, int> load_calib_json(const QString &path) {
     const QJsonObject o = doc.object();
     for (auto it = o.begin(); it != o.end(); ++it) {
         QString k = it.key();
+        if (k.startsWith("_")) continue;   // metadata keys ("_board_chk") not scancodes
         if (k.startsWith("0x") || k.startsWith("0X")) k = k.mid(2);
         m.insert(k.toInt(nullptr, 16), it.value().toInteger());
     }
     return m;
+}
+
+// board-checksum stamp written by a human/pktup when calib was recorded:
+// "_board_chk": "D2B6". Empty when absent.
+QString calib_board_chk(const QString &path) {
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) return QString();
+    QJsonParseError err;
+    const QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
+    if (err.error != QJsonParseError::NoError || !doc.isObject()) return QString();
+    const QString v = doc.object().value("_board_chk").toString();
+    return v.trimmed();
 }
 
 // ydotool 1.x wire: one 24-byte input_event datagram per event + EV_SYN tail
@@ -234,15 +247,15 @@ QHash<int, int> load_calib_json(const QString &path) {
 // must not leave them stuck — handler reuses the connected fd stored here)
 static std::vector<int> held_keys;
 static int g_ydot_connected = -1;   // fd connected by ydot_send_now (for the handler)
-static int ydot_send_now(const QString &socket_path, const QVector<QPair<int, int>> &events);
-int ydot_send(const QString &socket_path, const QVector<QPair<int, int>> &events) {
+static int ydot_send_now(const QString &socket_path, const QVector<QPair<int, int>> &events, int gap_us);
+int ydot_send(const QString &socket_path, const QVector<QPair<int, int>> &events, int gap_us) {
     for (const auto &e : events)
         if (e.second == 1) held_keys.push_back(e.first);
         else held_keys.erase(std::remove(held_keys.begin(), held_keys.end(), e.first), held_keys.end());
-    return ydot_send_now(socket_path, events);
+    return ydot_send_now(socket_path, events, gap_us);
 }
 int ydot_sweep_fd() { return g_ydot_connected; }
-static int ydot_send_now(const QString &socket_path, const QVector<QPair<int, int>> &events) {
+static int ydot_send_now(const QString &socket_path, const QVector<QPair<int, int>> &events, int gap_us) {
     QByteArray p = socket_path.toUtf8();
     sockaddr_un sa{};
     sa.sun_family = AF_UNIX;
@@ -281,6 +294,8 @@ static int ydot_send_now(const QString &socket_path, const QVector<QPair<int, in
         if (!send_rec(0, 0, 0)) {
             const int e = errno; ::close(fd); return -e;
         }
+        if (ev.second == 0 && gap_us > 0)   // vendor SlowOutput: 20 ms/char
+            ::usleep(gap_us);
     }
     // success: keep the connected fd so a later signal-handler sweep can ::send()
     // into it without any allocation (set AFTER the last send; overwritten per call)
