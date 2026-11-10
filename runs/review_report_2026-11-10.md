@@ -1,7 +1,7 @@
 # pktm review report — consolidated for Claude, 2026-11-10
 
 All commits pushed to `origin/main` (ssh mr-kendrix/Preh-MCI128-USB-Keyboard-under-Linux):
-`9faa2e9` macro executor · `bbf40bf` {DELAY} refuse · `dd17328` sweep marker · `e89d5c4` hard-fail socket + test-hook warning + nanosleep · `e0c35f2` SlowOutput + calib chk stamp · `93732a1` probe chain kdotool · `79106f7` AutoRepeat.
+`9faa2e9` macro executor · `bbf40bf` {DELAY} refuse · `dd17328` sweep marker · `e89d5c4` hard-fail socket + test-hook warning + nanosleep · `e0c35f2` SlowOutput + calib chk stamp · `93732a1` probe chain kdotool · `79106f7` AutoRepeat · `1790ecc` --calibrate · **`c034252` round-9 review fixes (socket leak, stale fd, AR watchdog, probe hardening)**.
 (`7c14090` interim fallback was superseded by `e89d5c4` hard-fail per review.)
 
 ## DONE — each row proven by a real run
@@ -18,14 +18,26 @@ All commits pushed to `origin/main` (ssh mr-kendrix/Preh-MCI128-USB-Keyboard-und
 | Wayland focus source | CLOSED: `kdotool` (KWin D-Bus scripting, v0.3.0 via cargo, symlink `~/.local/bin/kdotool` in PATH incl. QProcess); `getactivewindow getwindowname` → `~ : fish — Konsole`; pktm chain `kdotool→xdotool→<unknown-window>` verified end-to-end: dep-`konsole` pmap → `rule match → injected` natively; ~ms/call |
 | hidraw reader | reopen-spam bounded (5 open+read failures → one errno hint, clean sweep exit); replug renames the node → pktd/pktm must be restarted (pitfall recorded); stuck-key incident from kill-test recovered via raw up-events into `/tmp/.ydotool_socket` |
 | Gate | `tools/live_gate.py` GREEN incl. uinput down/up arrival (keys 6,1,15); single RED reproduces as event-delivery timing, re-run GREEN |
+| One socket per lifetime (round-9) | 4 injection pairs under `PKT_HOLD_MS`: `/proc/<pid>/fd` (via `pgrep -x pktm`) shows exactly ONE `socket:[N]` inode across calls 1–4; reconnect+close only after send failure, `g_ydot_connected=-1` before every `::close()` |
+| AutoRepeat safety net (round-9) | 30 s max-hold (`PKT_MAX_HOLD_S` test override) + flush of pending AR downs on read death; event loop polls 250 ms so the watchdog runs while a held key is silent; `hidraw gone` flush printed and released in fifo run; physical-board max-hold release = user trial (FIFO poll is a dead stand-in path on Linux) |
+| Probe hardening (round-9) | probe counts only with exit 0 (else fail-closed `<unknown-window>`); PID validated digits before `/proc`, dead PID -> undeterminable; title = first stdout line; distinct stderr lines logged ONCE. Live run resolved `proc 'vivaldi-bin'` natively; tested env **kdotool v0.3.0 @ plasma-desktop 6.8.2** (stderr silent on 6.8.2) |
 
 ## OPEN — verdict remains `stay` (do not install pktm.service at boot yet)
 
-1. `--calibrate` relearn after board re-bind (manual calib patch + pktd restart works today).
-2. Reader-lock parity vs pktd flock — pktd stays running untouched as rollback; new daemon must refuse to start while pktd is active.
-3. Mixed literal+macro stays REFUSED — vendor behaviour settles via a Windows keylogger recording; same recording settles `{DELAY}` wait.
-4. `pktm.service` is a template only (placeholders, `--seconds 0`); boot enable = human decision.
-5. Final user 30 s trial with everything on: stop pktd → `--live` 120 s → press 124/77/96/31/29 + one window-dep key + one replug **while holding** a key → `cat /tmp/sweep.mark` after Ctrl-C → start pktd. This round ADDS: hold POSKey 124 (an AutoRepeat rule) ~40 s without releasing → expect `-- AutoRepeat release (max-hold 30 s)` in the live log and NO key-flood in the editor; and the kill recovery documented in Round 9 §4 (`systemctl restart ydotoold.service` if a `kill -9` cleanup ever leaves a key down).
+1. Reader-lock parity vs pktd flock — pktd stays running untouched as rollback; the new daemon must refuse to start while pktd owns the reader (see question 2).
+2. Mixed literal+macro stays REFUSED — vendor behaviour settles via a Windows keylogger recording; same recording settles `{DELAY}` wait.
+3. `pktm.service` is a template only (placeholders, `--seconds 0`); boot enable = human decision.
+4. Final user 30 s trial with everything on: stop pktd → `--live` 120 s → press 124/77/96/31/29 + one window-dep key + one replug **while holding** a key → `cat /tmp/sweep.mark` after Ctrl-C → start pktd. This round ADDS: hold POSKey 124 (an AutoRepeat rule) ~40 s without releasing → expect `-- AutoRepeat release (max-hold 30 s)` in the live log and NO key-flood in the editor; and the kill recovery documented in Round 9 §4 (`systemctl restart ydotoold.service` if a `kill -9` cleanup ever leaves a key down).
+5. Max-hold semantics question below (is the 30 s cap right for the vendor product) feeds the `leave` decision.
+
+## Question for the next review (round-9 state)
+
+The old kdotool stderr question is ANSWERED and implemented (round 9 §3): exit status + parsed output decide; stderr is informational, logged once per distinct line.
+
+New questions:
+1. Max-hold semantics: vendor AutoRepeat repeats as long as the key is physically held. We cap an open AR hold at 30 s (release + log). Is a >30 s single hold plausible on this POS hardware — or can the cap ship as-is (it turns a would-be-stuck key into a bounded one)?
+2. Reader parity: before any `leave`, what exactly should the flock/`hold_device_lock` equivalence look like — refuse pktm startup while `pktd.service` is active (detectable via flock on the same lockfile), or a lockfile of our own both daemons honour?
+3. Do you want an ASAN-built pktm as evidence for the socket/fd changes, or is the `/proc/<pid>/fd` sample enough?
 
 ## Round-8: --calibrate CLOSED (1790ecc)
 
@@ -36,6 +48,7 @@ All commits pushed to `origin/main` (ssh mr-kendrix/Preh-MCI128-USB-Keyboard-und
 ## Question for the next review
 
 `kdotool` 0.3.0 prints `Unsupported KDE version` on stderr while stdout is correct (works on this Plasma 6 build). pktm parses stdout and ignores stderr. Benign contract, or should a non-empty stderr flip the window to `<unknown-window>` as fail-safe?
+(ANSWERED round 9: decision = exit status + output, stderr logged once — implemented in `c034252`.)
 
 ## Round 9: reviewer round — three fixes + probe hardening (this session)
 
@@ -88,4 +101,13 @@ python3 tools/live_gate.py b/pktm          # GATE: GREEN
 PKT_SWEEP_LOG=/tmp/sweep.mark PKT_HOLD_MS=3000 ./b/pktm "/mnt/Windows/ProgramData/PrehKeyTec/PKT Mapper/MappingLists/Mr.Kendrix.pmap" --live --feed-hex 04e0400000 --calib /home/nonrmy/MK.calib.json
 # SIGTERM ~0.6 s in -> /tmp/sweep.mark: "SWEEP_UP 0006"
 YDOTOOL_SOCKET=/tmp/.does-not-exist ./b/pktm ...  # error: + rc=2
+# round-9 additions:
+# one-socket proof: PKT_HOLD_MS=3000 + 4 down/up pairs; while running:
+#   ls -l /proc/$(pgrep -x pktm)/fd | grep socket   -> exactly ONE socket:[N], same inode across calls
+# flush-on-read-death (fifo stand-in for replug): data arrives, then writer closes:
+#   -- AutoRepeat release (hidraw gone): scancode 0xe040 up sent
+# max-hold on the BOARD (poll on FIFO never wakes on Linux -> board/user only):
+#   PKT_MAX_HOLD_S=5, physically hold POSKey 124 6 s -> -- AutoRepeat release (max-hold): ...
+# window probe now validates exit status: kdotool with bad Plasma -> nonzero exit ->
+#   fail-closed '<unknown-window>' (was: stdout-blind parse); stderr warning logged ONCE.
 ```
