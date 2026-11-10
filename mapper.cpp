@@ -399,30 +399,38 @@ QString literal_to_type(const Rule &r, const Layer &l) {
     return v.isEmpty() ? r.text : v;
 }
 
-QString active_window() {
+// window probe helper chain: kdotool (KDE Wayland/Plasma 6, KWin scripting over
+// D-Bus) preferred; xdotool for X11 sessions; else fail-closed unknown window.
+static bool run_probe(const QString &helper, const QStringList &args, QString &out) {
     QProcess p;
-    p.start(QStringLiteral("xdotool"),
-            {QStringLiteral("getactivewindow"), QStringLiteral("getwindowname")});
-    if (p.error() == QProcess::FailedToStart)
-        return k_unknown;
-    p.waitForFinished(1500);
-    const QString name = QString::fromUtf8(p.readAllStandardOutput()).trimmed();
-    return name.isEmpty() ? k_unknown : name;
+    p.start(helper, args);
+    if (p.error() == QProcess::FailedToStart) return false;
+    p.waitForFinished(3000);   // kdotool loads+runs+deletes a KWin script per call
+    out = QString::fromUtf8(p.readAllStandardOutput()).trimmed();
+    return true;
+}
+
+QString active_window() {
+    for (const QString &h : { QStringLiteral("kdotool"), QStringLiteral("xdotool") }) {
+        QString name;
+        if (run_probe(h, {QStringLiteral("getactivewindow"), QStringLiteral("getwindowname")}, name))
+            return name.isEmpty() ? k_unknown : name;
+    }
+    return k_unknown;
 }
 
 QString active_process() {
     // getactivewindow getwindowpid -> /proc/PID/comm (vendor <Dependency> = process name)
-    QProcess p;
-    p.start(QStringLiteral("xdotool"),
-            {QStringLiteral("getactivewindow"), QStringLiteral("getwindowpid")});
-    if (p.error() == QProcess::FailedToStart)
-        return QString();
-    p.waitForFinished(1500);
-    const QString pid = QString::fromUtf8(p.readAllStandardOutput()).trimmed();
-    if (pid.isEmpty()) return QString();
-    QFile c(QStringLiteral("/proc/%1/comm").arg(pid));
-    if (!c.open(QIODevice::ReadOnly)) return QString();
-    return c.readAll().trimmed();
+    for (const QString &h : { QStringLiteral("kdotool"), QStringLiteral("xdotool") }) {
+        QString pid;
+        if (run_probe(h, {QStringLiteral("getactivewindow"), QStringLiteral("getwindowpid")}, pid)) {
+            if (pid.isEmpty()) return QString();
+            QFile c(QStringLiteral("/proc/%1/comm").arg(pid));
+            if (!c.open(QIODevice::ReadOnly)) return QString();
+            return c.readAll().trimmed();
+        }
+    }
+    return QString();
 }
 
 QString unknown_window() { return k_unknown; }
