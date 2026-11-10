@@ -256,17 +256,30 @@ int ydot_send(const QString &socket_path, const QVector<QPair<int, int>> &events
 }
 int ydot_sweep_fd() { return g_ydot_connected; }
 static int ydot_send_now(const QString &socket_path, const QVector<QPair<int, int>> &events, int gap_us) {
-    QByteArray p = socket_path.toUtf8();
-    sockaddr_un sa{};
-    sa.sun_family = AF_UNIX;
-    std::memcpy(sa.sun_path, p.constData(),
-                qMin(p.size(), int(sizeof(sa.sun_path) - 1)));
-    int fd = ::socket(AF_UNIX, SOCK_DGRAM, 0);
-    if (fd < 0) return -errno;
-    if (::connect(fd, reinterpret_cast<const sockaddr *>(&sa), sizeof(sa))) {
-        const int e = errno; ::close(fd); return -e;
+    // ONE connected socket for the whole daemon lifetime (review 2026-11-10: per-call
+    // socket() leaked one fd per injection — thousands of keypresses = thousands of
+    // leaked descriptors dying silently at the fd limit). Reconnect only after a
+    // failure (or a path change), closing the old fd and invalidating BEFORE close.
+    static QString connected_path;
+    int fd = g_ydot_connected;
+    if (fd >= 0 && connected_path != socket_path) {   // path moved: close old, reconnect below
+        ::close(fd);
+        g_ydot_connected = -1;
+        fd = -1;
     }
-    g_ydot_connected = fd;   // valid from now on: the signal sweep sends into it
+    if (fd < 0) {
+        QByteArray p = socket_path.toUtf8();
+        sockaddr_un sa{};
+        sa.sun_family = AF_UNIX;
+        std::memcpy(sa.sun_path, p.constData(),
+                    qMin(p.size(), int(sizeof(sa.sun_path) - 1)));
+        fd = ::socket(AF_UNIX, SOCK_DGRAM, 0);
+        if (fd < 0) return -errno;
+        if (::connect(fd, reinterpret_cast<const sockaddr *>(&sa), sizeof(sa))) {
+            const int e = errno; ::close(fd); return -e;
+        }
+        g_ydot_connected = fd; connected_path = socket_path;
+    }
     auto send_rec = [&fd](uint16_t type, uint16_t code, int32_t val) -> bool {
         unsigned char rec[24] = {};
         std::memcpy(rec + 16, &type, 2);
@@ -274,10 +287,16 @@ static int ydot_send_now(const QString &socket_path, const QVector<QPair<int, in
         std::memcpy(rec + 20, &val, 4);
         return ::write(fd, rec, sizeof rec) == static_cast<ssize_t>(sizeof rec);
     };
+    auto fail_close = [&](int e) -> int {
+        // invalidate BEFORE close: a signal between the two statements must never
+        // see a stale fd pointing at a closed (or kernel-reused) descriptor
+        if (g_ydot_connected == fd) g_ydot_connected = -1;
+        ::close(fd);
+        return -e;
+    };
     for (const auto &ev : events) {
-        if (!send_rec(1, static_cast<uint16_t>(ev.first), static_cast<int32_t>(ev.second))) {
-            const int e = errno; ::close(fd); return -e;
-        }
+        if (!send_rec(1, static_cast<uint16_t>(ev.first), static_cast<int32_t>(ev.second)))
+            return fail_close(errno);
         // PKT_HOLD_MS: TEST-ONLY hook — hold the key for N ms before its release
         // (lets a SIGTERM land in a real hold window so the sweep can be observed).
         // nanosleep: correct for N >= 1000 (usleep caps at one second).
@@ -291,15 +310,13 @@ static int ydot_send_now(const QString &socket_path, const QVector<QPair<int, in
                 }
             }
         }
-        if (!send_rec(0, 0, 0)) {
-            const int e = errno; ::close(fd); return -e;
-        }
+        if (!send_rec(0, 0, 0))
+            return fail_close(errno);
         if (ev.second == 0 && gap_us > 0)   // vendor SlowOutput: 20 ms/char
             ::usleep(gap_us);
     }
-    // success: keep the connected fd so a later signal-handler sweep can ::send()
-    // into it without any allocation (set AFTER the last send; overwritten per call)
-    g_ydot_connected = fd;
+    // success: the fd stays connected — reused by the NEXT call and by the signal
+    // sweep (never closed here, that would leak one fd per injection)
     return 0;
 }
 
@@ -401,12 +418,31 @@ QString literal_to_type(const Rule &r, const Layer &l) {
 
 // window probe helper chain: kdotool (KDE Wayland/Plasma 6, KWin scripting over
 // D-Bus) preferred; xdotool for X11 sessions; else fail-closed unknown window.
+// A probe counts as VALID only if the helper started AND exited 0 (review 2026-11-10:
+// kdotool 0.3.0's own compat check exits nonzero on unsupported Plasma builds — a
+// nonzero exit must NOT be read as a window). Title = first line of stdout only.
+// Test environment for this chain: kdotool v0.3.0 @ Plasma 6.5.x (Arch, 2026-11-10).
 static bool run_probe(const QString &helper, const QStringList &args, QString &out) {
     QProcess p;
     p.start(helper, args);
     if (p.error() == QProcess::FailedToStart) return false;
     p.waitForFinished(3000);   // kdotool loads+runs+deletes a KWin script per call
-    out = QString::fromUtf8(p.readAllStandardOutput()).trimmed();
+    if (p.state() == QProcess::Running) { p.kill(); return false; }   // hung helper: no window, no freeze
+    const QString err = QString::fromUtf8(p.readAllStandardError()).trimmed();
+    if (!err.isEmpty()) {
+        // one log line per distinct stderr message — the probe runs per press,
+        // a repeating warning would flood the live log (review 2026-11-10).
+        // Informational only: the exit code + output below decide.
+        static QStringList logged;
+        const QString line = err.split('\n').first().simplified();
+        if (!logged.contains(line)) {
+            logged << line;
+            std::printf(">> note: %s stderr '%s' (exit %d)\n",
+                        helper.toUtf8().constData(), line.toUtf8().constData(), p.exitCode());
+        }
+    }
+    if (p.exitCode() != 0) return false;   // helper said no: unknown/process-undeterminable
+    out = QString::fromUtf8(p.readAllStandardOutput()).split('\n').first().trimmed();
     return true;
 }
 
@@ -420,13 +456,21 @@ QString active_window() {
 }
 
 QString active_process() {
-    // getactivewindow getwindowpid -> /proc/PID/comm (vendor <Dependency> = process name)
+    // getactivewindow getwindowpid -> /proc/PID/comm (vendor <Dependency> = process name).
+    // Rules should name the PROCESS, not only a title: the process comes from the
+    // PID (titles are user-settable by any window — review 2026-11-10).
     for (const QString &h : { QStringLiteral("kdotool"), QStringLiteral("xdotool") }) {
         QString pid;
         if (run_probe(h, {QStringLiteral("getactivewindow"), QStringLiteral("getwindowpid")}, pid)) {
             if (pid.isEmpty()) return QString();
+            // PID must be plain digits before it touches /proc (garbage from an
+            // unvalidated helper must never build a path — review 2026-11-10)
+            bool numeric = true;
+            for (const QChar &c : pid)
+                if (!c.isDigit()) { numeric = false; break; }
+            if (!numeric) return QString();
             QFile c(QStringLiteral("/proc/%1/comm").arg(pid));
-            if (!c.open(QIODevice::ReadOnly)) return QString();
+            if (!c.open(QIODevice::ReadOnly)) return QString();   // PID not alive: undeterminable
             return c.readAll().trimmed();
         }
     }

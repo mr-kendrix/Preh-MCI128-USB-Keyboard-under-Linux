@@ -19,10 +19,12 @@
 #include <csignal>
 #include <atomic>
 #include <ctime>
+#include <sys/time.h>   // struct timeval (POSIX poll timeout)
 #include <cerrno>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <unistd.h>
 #include "transport.h"
 #include <dirent.h>
@@ -229,7 +231,7 @@ int main(int argc, char **argv) {
             return 2;
         }
         out.write(js.toUtf8());
-        std::printf("-- calibrate: %d scans -> %s\n", learned.size(), calib.toUtf8().constData());
+        std::printf("-- calibrate: %d scans -> %s\n", int(learned.size()), calib.toUtf8().constData());
         return 0;
     }
 
@@ -317,12 +319,20 @@ int main(int argc, char **argv) {
         // down now and defer the matching up until the release report — the OS
         // typematic then repeats (vendor 250/15 ms are XKB settings, not wire).
         QHash<int, QPair<int, int>> ar_pending;   // scancode -> deferred up event
+        QHash<int, time_t> ar_since;              // scancode -> press time (watchdog below)
+        // AutoRepeat safety net (review 2026-11-10): if the release report never arrives
+        // (lost 0xFE, board unplugged mid-hold) or the daemon lives long, an open AR
+        // down would keep the app-side key held forever. Cap the open hold; PKT_MAX_HOLD_S
+        // overrides for tests (the service keeps the default).
+        int max_hold_s = 30;
+        if (const char *h = getenv("PKT_MAX_HOLD_S")) { const int v = atoi(h); if (v > 0) max_hold_s = v; }
         int presses = 0, injected = 0, skipped = 0;
         auto on_event = [&](int scancode, bool down) {
             if (!down) {
                 held.remove(scancode);
                 if (ar_pending.contains(scancode)) {
                     const QPair<int, int> up = ar_pending.take(scancode);
+                    ar_since.remove(scancode);
                     ydot_send(sock, QVector<QPair<int, int>>{up});
                     std::printf("-- AutoRepeat release (scancode 0x%04x, up sent)\n", scancode);
                 }
@@ -381,6 +391,7 @@ int main(int argc, char **argv) {
                 const int rc = ydot_send(sock, QVector<QPair<int, int>>{seq[0]});
                 if (rc == 0) {
                     ar_pending.insert(scancode, seq[1]);
+                    ar_since.insert(scancode, std::time(nullptr));   // watchdog start
                     ++injected;
                     std::printf("POSKey %d '%s' -> AutoRepeat press (ydotool key %d down only)\n",
                                 pk, typed.toUtf8().constData(), seq[0].first);
@@ -416,6 +427,15 @@ int main(int argc, char **argv) {
             sweep_count.store(0);
             std::printf("-- exit sweep: released %s\n", pairs.toUtf8().constData());
         };
+        auto flush_one = [&](int sc, const char *why) {
+            // one pending AutoRepeat down -> release it now (lost report / replug / watchdog)
+            if (!ar_pending.contains(sc)) return;
+            const QPair<int, int> up = ar_pending.take(sc);
+            ar_since.remove(sc);
+            held.remove(sc);       // the board no longer holds it: a re-press re-injects
+            ydot_send(sock, QVector<QPair<int, int>>{ up });
+            std::printf("-- AutoRepeat release (%s): scancode 0x%04x up sent\n", why, sc);
+        };
 
         if (!feed.isEmpty()) {           // synthetic recorded feed stays batch (gate)
             const QVector<KeyEvent> events = decode_stream(hex_to_bytes(feed));
@@ -426,8 +446,8 @@ int main(int argc, char **argv) {
         }
 
         // REAL event loop: blocking per-report read, replug reopen, --seconds budget
-        std::printf(">> backend=ydotool calib=%d rules=%d (event loop, window per press; Ctrl-C = sweep)\n",
-                    int(table.size()), int(rs.rules.size()));
+        std::printf(">> backend=ydotool calib=%d rules=%d (event loop, window per press; Ctrl-C = sweep; max-hold=%ds)\n",
+                    int(table.size()), int(rs.rules.size()), max_hold_s);
         QString node = device.isEmpty() ? find_hidraw_node() : device;
         int fd = node.isEmpty() ? -1 : ::open(node.toUtf8().constData(), O_RDONLY);
         const time_t t0 = std::time(nullptr);
@@ -436,6 +456,18 @@ int main(int argc, char **argv) {
         int dead_opens = 0;   // open succeeded but read fails immediately, in a row
         while (true) {
             if (secs > 0 && std::time(nullptr) - t0 >= secs) break;
+            // AutoRepeat watchdog: runs EVERY iteration, so a held key without new
+            // IN reports can still be released (see poll below — read would block)
+            if (!ar_since.isEmpty()) {
+                const time_t now = std::time(nullptr);
+                QList<int> overdue;
+                for (auto it = ar_since.cbegin(); it != ar_since.cend(); ++it)
+                    if (now - it.value() >= max_hold_s) overdue << it.key();
+                if (!overdue.isEmpty()) {
+                    for (const int sc : overdue) flush_one(sc, "max-hold");
+                    sweep_count.store(0);   // the released AR downs left the list
+                }
+            }
             if (fd < 0) {
                 ::usleep(200000);
                 node = find_hidraw_node();
@@ -443,10 +475,27 @@ int main(int argc, char **argv) {
                 if (fd >= 0) std::printf(">> reconnected hidraw %s\n", node.toUtf8().constData());
                 continue;
             }
+            // poll before read: while a key is HELD the board sends no reports, a
+            // blocking read would wait forever and the watchdog above could not run
+            {
+                struct pollfd pfd{ fd, 0, -1 };
+                struct timespec tv{ 0, 250000000L };       // 250 ms in NANOseconds (ppoll)
+                // ppoll = glibc's timeval-precision poll; plain poll() in <sys/poll.h>
+                // is the legacy SVID variant (fds FIRST, timeout in ms) — silently
+                // different arg order and units (250000 became 250 s there).
+                const int pr = ::ppoll(&pfd, 1, &tv, nullptr);
+                if (pr == 0) continue;               // empty wait window: watchdog next round
+                if (pr < 0 && errno == EINTR) continue;
+            }
             const ssize_t n = ::read(fd, rep, 64);
             if (n <= 0) {
                 if (n < 0 && (errno == EAGAIN || errno == EINTR)) { ::usleep(20000); continue; }
                 ::close(fd); fd = -1;       // replug/EOF: node died -> reopen next round
+                // a board unplugged mid-hold: those pending AR downs would never get
+                // their release report — flush them NOW instead of leaving them open
+                { const QList<int> arms = ar_pending.keys();
+                  if (!arms.isEmpty()) { for (const int sc : arms) flush_one(sc, "hidraw gone");
+                                         sweep_count.store(0); } }
                 if (++dead_opens >= 5) {    // persistent other-reader (pktd.service?) -> stop spam
                     std::printf(">> hidraw node dead: %d open+read failures (errno %d) — "
                                 "a second reader (pktd.service) owns it? stop it first\n",

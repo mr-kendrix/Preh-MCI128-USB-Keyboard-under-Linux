@@ -66,7 +66,9 @@ QVector<QPair<int, int>> evdev_sequence(const QString &text);
 // daemon's recv reads sizeof(input_event)=24 on x86_64: a 16-byte datagram is
 // silently DROPPED, verified headless against the live ydotoold at /tmp/.ydotool_socket).
 // 0 = all sent; negative = -errno of connect/send failure.
-int ydot_send(const QString &socket_path, const QVector<QPair<int, int>> &events);
+int ydot_send(const QString &socket_path, const QVector<QPair<int, int>> &events, int gap_us = 0);
+// vendor <SlowOutput>: 20 ms between characters (gap_us after each up-event)
+QString calib_board_chk(const QString &path);  // "_board_chk" stamp or empty
 // connected ydotool fd (valid after ydot_send's connect) for async-signal-safe
 // sweep sends in a SIGTERM handler; -1 if none.
 int ydot_sweep_fd();
