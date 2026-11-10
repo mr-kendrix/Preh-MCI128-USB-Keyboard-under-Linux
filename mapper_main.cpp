@@ -328,6 +328,19 @@ int main(int argc, char **argv) {
         int max_hold_s = 30;
         if (const char *h = getenv("PKT_MAX_HOLD_S")) { const int v = atoi(h); if (v > 0) max_hold_s = v; }
         int presses = 0, injected = 0, skipped = 0;
+        // remove one key from the exit-sweep array (normal AR release, flush,
+        // watchdog): swap-remove; a signal inside the swap window may re-up the
+        // swapped key once — up events are idempotent, accepted by ydotool
+        auto sweep_remove = [](int evdev) {
+            const int n = sweep_count.load();
+            for (int i = 0; i < n; ++i)
+                if (int(held_evdev[i]) == (evdev & 0xFFFF)) {
+                    held_evdev[i] = held_evdev[n - 1];
+                    held_evdev[n - 1] = 0;
+                    sweep_count.store(n - 1);
+                    return;
+                }
+        };
         auto on_event = [&](int scancode, bool down) {
             if (!down) {
                 held.remove(scancode);
@@ -335,6 +348,7 @@ int main(int argc, char **argv) {
                     const QPair<int, int> up = ar_pending.take(scancode);
                     ar_since.remove(scancode);
                     ydot_send(sock, QVector<QPair<int, int>>{up});
+                    sweep_remove(up.first);   // sweep must not re-up it at exit
                     std::printf("-- AutoRepeat release (scancode 0x%04x, up sent)\n", scancode);
                 }
                 return;
@@ -376,19 +390,20 @@ int main(int argc, char **argv) {
                             pk, typed.toUtf8().constData());
                 return;
             }
-            // record key-codes for the exit sweep: store BEFORE increment (a signal
-            // between the two must never see an empty slot counted)
-            for (const auto &p : seq)
-                if (p.second == 1 && sweep_count.load() < 64) {
-                    const int i = sweep_count.load();
-                    held_evdev[i] = p.first;
-                    sweep_count.store(i + 1);
-                }
+            // exit-sweep bookkeeping tracks ONLY keys the injection leaves OPEN (AR
+            // press below). Non-AR seqs send their own ups — no tracking (tracking
+            // them caused the exit sweep to re-up already-released keys: user trial
+            // 2026-11-11 marker showed SWEEP_UP 002d x2 after clean AR taps).
             const bool rep = hit->layers[sel].rep.trimmed().toLower() == QStringLiteral("true");
             if (rep && seq.size() == 2 && seq[0].second == 1 && seq[1].second == 0
                 && seq[0].first == seq[1].first) {
-                // down now, up on release (see ar_pending comment); sweep_count NOT
-                // reset: the down stays open, a signal mid-hold releases it via sweep
+                // up deferred -> register FIRST (signal between store and send must
+                // never miss the open key), then send the down
+                if (sweep_count.load() < 64) {
+                    const int si = sweep_count.load();
+                    held_evdev[si] = seq[0].first;
+                    sweep_count.store(si + 1);
+                }
                 const int rc = ydot_send(sock, QVector<QPair<int, int>>{seq[0]});
                 if (rc == 0) {
                     ar_pending.insert(scancode, seq[1]);
@@ -435,6 +450,7 @@ int main(int argc, char **argv) {
             ar_since.remove(sc);
             held.remove(sc);       // the board no longer holds it: a re-press re-injects
             ydot_send(sock, QVector<QPair<int, int>>{ up });
+            sweep_remove(up.first);
             std::printf("-- AutoRepeat release (%s): scancode 0x%04x up sent\n", why, sc);
         };
 

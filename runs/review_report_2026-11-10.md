@@ -164,6 +164,30 @@ Verdict: `stay`. User trial only AFTER this POLLIN fix (before it nothing would 
 - Review round-11 verdict otherwise accepted; next step is the HUMAN trial (checklist
   in OPEN 4) — headless rounds cannot cover real hidraw + Plasma window deps.
 
+## Round 13: sweep bookkeeping + USER TRIAL results (real board, 2026-11-11)
+
+Sweep bookkeeping bug found BY the trial (marker: `SWEEP_UP 002d` x2 after two clean
+AR taps = exit sweep re-sent ups for already-released keys): the down-registration
+tracked EVERY injected key. Fixed: only AR-deferred ups are tracked; `sweep_remove`
+on normal release / flush / watchdog. Proven: mid-hold kill -> exactly ONE SWEEP_UP;
+after clean taps -> marker empty, no `-- exit sweep` line.
+
+User trial on the physical board (Runs A/B1/B3):
+- POSKeys 124/77/96/31/29: 5/5 injected (chat got the `5` — injection follows the
+  FOCUSED window; lesson: focus a terminal/editor during trials, never the chat).
+- 40 s hold POSKey 124 (AR pmap) -> `AutoRepeat release (max-hold)` at 30 s, flood
+  stopped. Replug -> `reconnected hidraw by-id/...-hidraw` (node NAME stable via by-id).
+- Window-dep rule (91, dep Blender, Blender open): `no rule match`, window='<unknown-window>'
+  because **kdotool v0.3.0 is BROKEN on Plasma 6.8.2**: prints 'Unsupported KDE version.
+  kdotool only supports KDE Plasma 6.' exit 1 on EVERY call. The r9 claim "stderr silent
+  @6.8.2, proc 'vivaldi-bin' native" was from a DIFFERENT plasma/kdotool state — current
+  honest state: probe fail-closed everywhere on this box. Window rules need a working
+  focus tool (kdotool version check rejects 6.8.x? check upstream) — OPEN, not blocking
+  the fail-closed design (it degraded correctly).
+- kill test: pktm exited, marker EMPTY (bookkeeping fix verified on board).
+- pktd.service restarted after trial; ydotoold restarted to clear the chat-flood key
+  state (recovery cmd from Round 9 §4 used and works).
+
 ## Repro (headless)
 
 ```bash
