@@ -26,6 +26,7 @@
 #include <unistd.h>
 #include "transport.h"
 #include <dirent.h>
+#include <algorithm>
 
 using namespace pktm;
 
@@ -120,6 +121,7 @@ int main(int argc, char **argv) {
             if (i + 1 < argc) poskey = QString(argv[++i]).toInt();
         }
         else if (a == "--live") mode = QStringLiteral("live");
+        else if (a == "--calibrate") mode = QStringLiteral("calibrate");
         else if (a == "--feed-hex") { if (i + 1 < argc) feed = argv[++i]; }
         else if (a == "--calib") { if (i + 1 < argc) calib = argv[++i]; }
         else if (a == "--device") { if (i + 1 < argc) device = argv[++i]; }
@@ -159,6 +161,75 @@ int main(int argc, char **argv) {
                         r.poskey, v.constData(), d.constData(), fg.constData(),
                         int(r.layers.size()));
         }
+        return 0;
+    }
+
+    // --calibrate: rebuild the scan->POS table prompt-guided: press the key the
+    // user calls POSKey 1, then 2, ... 128. Nothing is injected; on exit (Ctrl-C,
+    // --seconds, or 128 presses) writes --calib as JSON + "_board_chk" stamp so
+    // a later live run can verify the table belongs to this board.
+    if (mode == "calibrate") {
+        if (calib.isEmpty()) {
+            std::fprintf(stderr, "error: --calibrate needs --calib <out.json>\n");
+            return 2;
+        }
+        QHash<int, int> learned;   // scan -> POS
+        int expect = 1;
+        auto learn = [&](int sc, bool down) {
+            if (!down || learned.contains(sc) || expect > 128) return;
+            learned.insert(sc, expect);
+            std::printf("learn scan 0x%04x -> POSKey %d (next: POSKey %d)\n",
+                        sc, expect, expect + 1);
+            ++expect;
+        };
+        if (!feed.isEmpty()) {   // synthetic feed for tests
+            for (const KeyEvent &ev : decode_stream(hex_to_bytes(feed)))
+                learn(ev.scancode, ev.down);
+        } else {
+            QString node = device.isEmpty() ? find_hidraw_node() : device;
+            int fd = node.isEmpty() ? -1
+                                    : ::open(node.toUtf8().constData(), O_RDONLY | O_NONBLOCK);
+            if (fd < 0) {
+                std::fprintf(stderr, "error: no hidraw node (%s)\n", node.toUtf8().constData());
+                return 2;
+            }
+            const time_t t0 = std::time(nullptr);
+            unsigned char rep[64];
+            while (expect <= 128) {
+                if (secs > 0 && std::time(nullptr) - t0 >= secs) break;
+                const ssize_t n = ::read(fd, rep, 64);
+                if (n <= 0) {
+                    if (errno == EAGAIN || errno == EINTR) { ::usleep(20000); continue; }
+                    break;   // node died
+                }
+                QByteArray buf(reinterpret_cast<const char *>(rep), int(n));
+                for (const KeyEvent &ev : decode_stream(buf))
+                    if (ev.scancode >= 0) learn(ev.scancode, ev.down);
+            }
+            if (fd >= 0) ::close(fd);
+        }
+        QString js = QStringLiteral("{\n");
+        int lw = 0;
+        const int chk = device_present() ? board_checksum16(&lw) : -1;
+        if (chk >= 0)
+            js += QStringLiteral("  \"_board_chk\": \"%1\",\n").arg(chk, 4, 16, QLatin1Char('0'));
+        QList<int> keys = learned.keys();
+        std::sort(keys.begin(), keys.end());
+        for (int i = 0; i < keys.size(); ++i) {
+            const int sc = keys[i];
+            const QString k = sc > 0xFFFF ? QStringLiteral("0x%1").arg(sc, 6, 16, QLatin1Char('0'))
+                                          : QStringLiteral("0x%1").arg(sc, 4, 16, QLatin1Char('0'));
+            js += QStringLiteral("  \"%1\": %2%3\n").arg(k).arg(learned[sc])
+                       .arg(i + 1 < keys.size() ? QStringLiteral(",") : QString());
+        }
+        js += QStringLiteral("}\n");
+        QFile out(calib);
+        if (!out.open(QIODevice::WriteOnly)) {
+            std::fprintf(stderr, "error: cannot write %s\n", calib.toUtf8().constData());
+            return 2;
+        }
+        out.write(js.toUtf8());
+        std::printf("-- calibrate: %d scans -> %s\n", learned.size(), calib.toUtf8().constData());
         return 0;
     }
 
