@@ -1,7 +1,7 @@
 # pktm review report — consolidated for Claude, 2026-11-10
 
 All commits pushed to `origin/main` (ssh mr-kendrix/Preh-MCI128-USB-Keyboard-under-Linux):
-`9faa2e9` macro executor · `bbf40bf` {DELAY} refuse · `dd17328` sweep marker · `e89d5c4` hard-fail socket + test-hook warning + nanosleep · `e0c35f2` SlowOutput + calib chk stamp · `93732a1` probe chain kdotool · `79106f7` AutoRepeat · `1790ecc` --calibrate · **`c034252` round-9 review fixes (socket leak, stale fd, AR watchdog, probe hardening)**.
+`9faa2e9` macro executor · `bbf40bf` {DELAY} refuse · `dd17328` sweep marker · `e89d5c4` hard-fail socket + test-hook warning + nanosleep · `e0c35f2` SlowOutput + calib chk stamp · `93732a1` probe chain kdotool · `79106f7` AutoRepeat · `1790ecc` --calibrate · `c034252` r9 socket/fd/AR/probe · `8daebbf` r10 POLLIN+parity · `1526f3e` r11 lock hygiene · `29e2a50` r12 SOCK_CLOEXEC+gate-hook · `d69cf2e` r13 sweep bookkeeping · `e65a982` r14 focus-tool docs.
 (`7c14090` interim fallback was superseded by `e89d5c4` hard-fail per review.)
 
 ## DONE — each row proven by a real run
@@ -22,15 +22,21 @@ All commits pushed to `origin/main` (ssh mr-kendrix/Preh-MCI128-USB-Keyboard-und
 | AutoRepeat safety net (round-9) | 30 s max-hold (`PKT_MAX_HOLD_S` test override) + flush of pending AR downs on read death; event loop polls 250 ms so the watchdog runs while a held key is silent; PROVEN on the real read path via FIFO (round 10): down report arrives, `AutoRepeat press`, then `-- AutoRepeat release (max-hold): scancode 0xe040 up sent` at 1 s with `PKT_MAX_HOLD_S=1`; physical-board max-hold = user trial |
 | Reader parity (round-10) | pktd.service (cmd=inject) never flocks — parity part 1 is a `/proc` cmdline scan (pktd.py `other_pktd_readers` style): pktm refuses (rc=2) while a `pktd.py inject` lives, and pktd's own scan refuses beside pktm. Part 2: flock pair on `/tmp/pktd-hidraw.lock` — pktm LOCK_SH|NB vs pktd calibrate/watch/raw LOCK_EX conflict BOTH ways (proved errno 11 in both orders) + own LOCK_EX file: pktm-vs-pktm refuse rc=2. Kernel drops locks at process exit (no stale locks) |
 | fd-exhaustion test (round-10) | `ulimit -n 64` + 200 injections: `-- 200 presses, 200 injected, 0 unknown` rc=0 — one-socket design survives; ASAN irrelevant for fd counts (reviewer agreed) |
-| Probe hardening (round-9) | probe counts only with exit 0 (else fail-closed `<unknown-window>`); PID validated digits before `/proc`, dead PID -> undeterminable; title = first stdout line; distinct stderr lines logged ONCE. Live run resolved `proc 'vivaldi-bin'` natively; tested env **kdotool v0.3.0 @ plasma-desktop 6.8.2** (stderr silent on 6.8.2) |
+| Probe hardening (round-9) | probe counts only with exit 0 (else fail-closed `<unknown-window>`); PID validated digits before `/proc`, dead PID -> undeterminable; title = first stdout line; distinct stderr lines logged ONCE. NOTE: plain kdotool v0.3.0 later proved broken in user env (see round 14, fork fixes it) |
+| Sweep bookkeeping (round-13) | trial found exit-sweep re-upping released keys (`SWEEP_UP 002d` x2 after clean taps): only AR-deferred keys tracked now (`sweep_remove` on release/flush/watchdog) — mid-hold kill = exactly ONE `SWEEP_UP`, clean taps = empty marker, no `-- exit sweep` line |
+| Focus tool (round-14) | kdotool fork (~/hermes-workspace/kdotool-fork): upstream refused unless `KDE_SESSION_VERSION == "6"` exactly (empty in Plasma-Wayland/terminals = the REAL root cause, not 6.8.2); fork accepts empty/6.x/future, rejects 5/5.x — plain terminal: `getactivewindow getwindowpid` -> 35743 (Blender), `--dry-inject 91` -> window + rule-match YES. Installed over `~/.local/bin/kdotool` (upstream kept `kdotool.upstream`) |
+| USER TRIAL, real board (r13) | 124/77/96/31/29 = 5/5 injected; window-rule test POSKey 30 (B14, 91 is blind!): Blender focus -> 5x `rule match -> injected`; Hermes/KCalc/kate/vivaldi windows -> `no rule match` with correct proc each; 40 s hold -> release at 30 s (max-hold) no flood; replug -> `reconnected` (by-id node stable); kill marker clean |
 
-## OPEN — verdict remains `stay` (do not install pktm.service at boot yet)
+## OPEN — verdict: `leave` possible; still NOT installing pktm.service at boot
 
-1. Reader-lock parity vs pktd flock — pktd stays running untouched as rollback; the new daemon must refuse to start while pktd owns the reader (see question 2).
-2. Mixed literal+macro stays REFUSED — vendor behaviour settles via a Windows keylogger recording; same recording settles `{DELAY}` wait.
-3. `pktm.service` is a template only (placeholders, `--seconds 0`); boot enable = human decision.
-4. Final user 30 s trial with everything on: stop pktd → `--live` 120 s → press 124/77/96/31/29 + one window-dep key + one replug **while holding** a key → `cat /tmp/sweep.mark` after Ctrl-C → start pktd. This round ADDS: hold POSKey 124 (an AutoRepeat rule) ~40 s without releasing → expect `-- AutoRepeat release (max-hold 30 s)` in the live log and NO key-flood in the editor; and the kill recovery documented in Round 9 §4 (`systemctl restart ydotoold.service` if a `kill -9` cleanup ever leaves a key down).
-5. Max-hold semantics question below (is the 30 s cap right for the vendor product) feeds the `leave` decision.
+1. Mixed literal+macro semantics: still REFUSED — settled only by a Windows
+   keylogger recording of the vendor tool (vendor-data question, not code).
+2. `pktm.service` boot enable: HUMAN decision (template packaging/pktm.service
+   has placeholders + `--seconds 0`; pktd.service stays as rollback).
+3. kdotool fork = local patch, upstream PR not filed (offer: PR to jinliu/kdotool
+   would benefit the whole community).
+Closed meanwhile: user trial fully done (round 13), reader parity done (r10),
+focus tool done (r14), max-hold = ship 30 s configurable+logged (r10 Q1).
 
 ## Question for the next review (round-9 state)
 
