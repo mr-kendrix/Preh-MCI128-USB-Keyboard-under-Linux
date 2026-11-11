@@ -12,6 +12,10 @@
 #   exit-sweep trial passed (it HAS: marker tests clean, r13).
 [Unit]
 Description=pktm live POS-key daemon (trial)
+# window probe (kdotool/KWin D-Bus) needs the Plasma session ALIVE, else it sees no
+# windows -> bind the unit to the session target (round-16 review):
+After=graphical-session.target
+PartOf=graphical-session.target
 
 [Service]
 ExecStart=<HOME>/hermes-workspace/pkt-editor-cpp/b/pktm --live <PMAP> --calib <CALIB>
@@ -20,3 +24,12 @@ Environment=YDOTOOL_SOCKET=/tmp/.ydotool_socket
 TimeoutStopSec=10
 # blunt-but-effective after an abnormal stop (kill -9 mid-hold CAN leave a key down):
 # ExecStopPost=/usr/bin/systemctl restart ydotoold.service
+# crash -> mappings back quickly; exit-sweep already released held keys (r13):
+Restart=on-failure
+RestartSec=3
+# SOCKET ORDER: YDOTOOL_SOCKET must match ydotoold's start env; missing socket = hard
+# error rc=2 (by design, r8) -> with Restart=on-failure a misconfigured env would LOOP,
+# so verify ydotoold.service is active BEFORE enabling pktm.
+[Install]
+# USER unit (<HOME>/.config/systemd/user/pktm.service):
+WantedBy=graphical-session.target

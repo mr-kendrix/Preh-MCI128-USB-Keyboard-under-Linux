@@ -3,6 +3,14 @@
 Editor for `.pmap` mapping lists of the PrehKeyTec **MCI-3100** (MCI-128 compatible),
 with native report-4 upload — no Wine, no Python, one binary.
 
+**Machine/vendor notes (shared repo):**
+- Supported keyboards: PrehKeyTec MCI128 family (incl. MCI-3100 combo) and MCI96.
+  Other Preh hardware untested.
+- Example paths in README/scripts/units (`/home/nonrmy/…`, `/mnt/Windows/…`) are THIS
+  machine's — substitute yours (`<HOME>/<PMAP>/<CALIB>` placeholders in `runs/pktm.service`).
+- The "compiler oracle" tooling is optional dev tooling and needs your OWN copy of the
+  vendor DLL — the vendor binaries are NOT included in this repo.
+
 Build (Arch): `cmake -B b -S . && cmake --build b` → `./b/pkteditor Mr.Kendrix.pmap`
 Install (AUR): see `PKGBUILD` — `makepkg -si` gives `/usr/bin/pkteditor`.
 

@@ -227,6 +227,21 @@ pktm --dry-inject 91: window resolved + rule-match YES (Blender focused at probe
 - kdotool fork kept at ~/hermes-workspace/kdotool-fork as local artifact only;
   ~/.local/bin/kdotool = upstream binary restored.
 
+## Round 16: boot-prep deliverables (review approved r15; human part left)
+
+- `runs/pktm.service`: added After/PartOf=graphical-session.target + [Install] WantedBy
+  (window probe needs the Plasma session alive), Restart=on-failure/RestartSec=3
+  (safe since sweep proven r13), socket-order warning (rc=2 + Restart = loop trap).
+- `README.md` housekeeping block: supported keyboards MCI128-family + MCI96, paths are
+  machine-specific (placeholders), compiler-oracle = optional + needs OWN vendor DLL,
+  vendor tools not in repo.
+- `runs/kdotool_issue_draft.md`: upstream issue (env-var check too strict; suggested
+  relaxation "only reject 5.x", D-Bus call = real capability check).
+- `runs/boot_switch_checklist.md`: one-pager — trial daily routine, enable-preconditions,
+  rollback one-liners, known findings pointer.
+- Verdict: nothing in code blocks anymore; remaining = human trial-days + the boot
+  decision. pktd.service ACTIVE = rollback while pktm is hand-run.
+
 ## Repro (headless)
 
 ```bash
