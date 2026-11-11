@@ -222,7 +222,8 @@ pktm --dry-inject 91: window resolved + rule-match YES (Blender focused at probe
 - pktm.service template updated: TimeoutStopSec=10 (sweep runs before SIGKILL),
   commented ExecStopPost ydotoold restart, parity + sweep-trial notes.
 - GUI UploadPanel (gui_main.cpp:488) uses the SAME upload.cpp flow as CLI: EF 0E
-  backup read-back (/tmp/pktup_backup_*.mwx, refuse on blind overwrite), ACK count,
+  backup read-back (~/.local/share/pkteditor/pktup_backup_*.mwx — survives reboot,
+  round-7 move; the old /tmp path only lived in comments), refuse on blind overwrite, ACK count,
   EF 12 checksum verify, half-feed warning. Panel layer is new, the safety path shared.
 - kdotool fork kept at ~/hermes-workspace/kdotool-fork as local artifact only;
   ~/.local/bin/kdotool = upstream binary restored.
@@ -241,6 +242,17 @@ pktm --dry-inject 91: window resolved + rule-match YES (Blender focused at probe
   rollback one-liners, known findings pointer.
 - Verdict: nothing in code blocks anymore; remaining = human trial-days + the boot
   decision. pktd.service ACTIVE = rollback while pktm is hand-run.
+
+## Round 17: review corrections applied (issue draft, checklist, backup-path claim)
+
+- Issue draft rewritten per review: precise claim (session children inherit, session-external
+  processes don't), lib.rs:68 second occurrence, compiles-rust `unwrap_or_default()`,
+  minimal repro `env -u KDE_SESSION_VERSION kdotool …` (verified pattern), proposal tone.
+- Checklist: stop pktm via `systemctl --user stop pktm.service`, session-target
+  check command, After= can't cross user->system unit (retries until ydotoold up
+  = NOT a bug, logged noise), hidraw wording = OUR flock policy not OS limit.
+- Stale claim fixed in code comment (upload.cpp:59) + report: backup lives at
+  ~/.local/share/pkteditor/pktup_backup_*.mwx since round 7 — survives reboot.
 
 ## Repro (headless)
 

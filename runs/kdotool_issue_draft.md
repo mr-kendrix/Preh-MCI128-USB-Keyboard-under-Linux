@@ -1,8 +1,9 @@
-# kdotool upstream — issue draft (2026-11-11)
+# kdotool upstream — issue draft (corrected per review, 2026-11-11)
 
-**Title: `KDE_SESSION_VERSION` check rejects valid Plasma 6 environments`
+**Title: Version check rejects environments without KDE_SESSION_VERSION (systemd user services, systemd user services, TTY logins)**
 
-`main.rs:615`:
+The same check occurs twice: `src/main.rs:615` AND `src/lib.rs:68` (library path
+gets the same limitation):
 
 ```rust
 if std::env::var("KDE_SESSION_VERSION") != Ok("6".to_string()) {
@@ -10,24 +11,32 @@ if std::env::var("KDE_SESSION_VERSION") != Ok("6".to_string()) {
 }
 ```
 
-Problems:
-1. Under a Wayland session, terminal/service processes do NOT inherit
-   `KDE_SESSION_VERSION` (only GUI children of the session get it) → kdotool refuses
-   in exactly the environments where it is most useful (systemd user services,
-   tmux/TTY launched daemons).
-2. It rejects future versions (7.x) as "unsupported" even with feature detection.
+Precise claim: terminals INSIDE your Plasma session do inherit the variable and work.
+What does NOT have it are processes started outside the session environment — systemd
+user services, TTY/login-shell tools, programs launching kdotool as subprocess (QProcess).
+In exactly those, kdotool refuses on a perfectly fine Plasma 6 desktop.
 
-Suggestion: treat an UNSET value as "unknown, try anyway" (the D-Bus call itself
-is the real capability check — if there is no KWin scripting endpoint, the call
-fails non-zero), and only reject known-incompatible majors (5.x). i.e.
+Minimal reproduction (Plasma 6.8.2, kdotool v0.3.0):
 
-```rust
-let v = std::env::var("KDE_SESSION_VERSION").unwrap_or("");
-if v == "5" || v.starts_with("5.") { return Err(...); }
+```
+$ env -u KDE_SESSION_VERSION kdotool getactivewindow getwindowname
+Error: Unsupported KDE version. kdotool only supports KDE Plasma 6.
+$ KDE_SESSION_VERSION=6 kdotool getactivewindow getwindowname
+* (Unsaved) - Blender 5.2.3 LTS
 ```
 
-Affected use case here: pktm's live window probe (POS-key daemon) calls
-`kdotool getactivewindow …` per press from a systemd environment; workaround
-currently = the caller injects `KDE_SESSION_VERSION=6` into the QProcess env.
+Proposal (maintainers decide; the Plasma-6-only restriction itself is deliberate):
+treat an UNSET value as "unknown, try anyway" — the D-Bus call is the real capability
+check and fails non-zero without KWin scripting — and keep rejecting only known-
+incompatible majors (5.x):
 
-Environment: Arch, plasma-desktop 6.8.2, kdotool v0.3.0.
+```rust
+let v = std::env::var("KDE_SESSION_VERSION").unwrap_or_default();
+if v == "5" || v.starts_with("5.") { return Err(anyhow!("...")); }
+```
+
+Affected use case: pktm's live window probe calls `kdotool getactivewindow …` per
+press from a systemd/QProcess environment; workaround today = caller injects
+KDE_SESSION_VERSION=6 into the child env.
+
+Environment: Arch, plasma-desktop 6.8.2, kdotool v0.3.0, Wayland.

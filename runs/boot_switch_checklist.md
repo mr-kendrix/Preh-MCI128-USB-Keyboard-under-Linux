@@ -12,10 +12,16 @@ after pktm ran for days.
 4. replug while holding a key; Ctrl-C mid-press (sweep: marker/`SWEEP_UP`)
 5. `sudo systemctl start pktd.service` — board normal again
    stuck-key recovery if a kill -9 left a key down: `systemctl restart ydotoold.service`
+   once pktm runs as a service, stop it via `systemctl --user stop pktm.service`
+   (SIGTERM + sweep), and verify the session target: `systemctl --user
+   is-active graphical-session.target` must say active, else the probe sees no windows
 
 ## B. Enable pktm at boot — only when ALL hold
 - [ ] pktm ran N days, no unexplained log lines
-- [ ] `ydotoold.service` active BEFORE pktm starts (socket order — missing socket = rc=2 loop)
+- [ ] ydotoold socket present before pktm starts — a USER unit cannot order after the
+      SYSTEM ydotoold.service (After= can't cross); Restart=on-failure/RestartSec=3
+      handles it by design, but expect a few "hard-exit rc=2" journal retries until
+      ydotoold is up — those retries are NOT a bug
 - [ ] unit installed as USER unit ~/.config/systemd/user/pktm.service from runs/pktm.service
       with <HOME>/<PMAP>/<CALIB> filled; WantedBy=graphical-session.target (window probe!)
 - [ ] PartOf=graphical-session.target → pktm stops when the session stops (no orphan daemon)
@@ -26,8 +32,9 @@ after pktm ran for days.
 ## C. Rollback (always available, one command each way)
 - back to pktd: `kill <pktm-pid>; sudo systemctl start pktd.service`
 - sanity: `journalctl --user -u pktm.service -b | tail`, `ls -l /dev/input/by-id/*hidraw`
-- single-consumer reminder: while pktm runs, ONLY POSKeys work (hidraw node owned);
-  normal keys are unaffected (they go via kernel uinput, r10 gate proves down/up)
+- single-consumer reminder: while pktm runs, ONLY POSKeys work — by OUR flock policy,
+  not an OS limit (hidraw nodes allow multiple readers; the OTHER daemon refuses to
+  start); normal keys are unaffected (they go via kernel uinput, r10 gate proves down/up)
 
 ## D. Known findings recorded in review_report (do not re-investigate)
 - kdotool needs KDE_SESSION_VERSION → pktm injects it for the QProcess (r15); upstream

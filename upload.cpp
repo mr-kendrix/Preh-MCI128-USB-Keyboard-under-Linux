@@ -56,7 +56,8 @@ UploadResult run_upload(const std::vector<uint8_t> &payload, bool armed,
         return r;                                // plan only, nothing on the wire
 
     // BACKUP before touching the board: read the live keytable back (EF 0E verb),
-    // refuse to overwrite if the read fails. Dump -> /tmp/pktup_backup_*.mwx
+    // refuse to overwrite if the read fails. Dump -> ~/.local/share/pkteditor/pktup_backup_*.mwx
+    //   (round-7 move: survives reboot, survives /tmp cleaners; see upload.cpp:76)
     {
         QByteArray bak;
         bool ok = true;
