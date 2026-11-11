@@ -425,6 +425,22 @@ QString literal_to_type(const Rule &r, const Layer &l) {
 // Test environment for this chain: kdotool v0.3.0 @ Plasma 6.5.x (Arch, 2026-11-10).
 static bool run_probe(const QString &helper, const QStringList &args, QString &out) {
     QProcess p;
+    // kdotool's compat check (upstream main.rs) needs KDE_SESSION_VERSION == "6"
+    // EXACTLY — plain terminals and systemd services don't export it (only GUI procs
+    // inside a Plasma session do; Wayland even sets it just for children). Upstream
+    // stays UNTOUCHED: we provide the variable for the helper call (review r15). If
+    // this is not a KDE session at all, the D-Bus call below fails -> exit != 0 ->
+    // fail-closed, so setting it cannot produce a false window.
+    if (helper == QStringLiteral("kdotool")) {
+        QProcessEnvironment e;
+        for (char **kv = environ; *kv; ++kv) {   // pktm's real parent env
+            const QString s = QString::fromUtf8(*kv);
+            const int eq = s.indexOf(QLatin1Char('='));
+            if (eq > 0) e.insert(s.left(eq), s.mid(eq + 1));
+        }
+        e.insert(QStringLiteral("KDE_SESSION_VERSION"), QStringLiteral("6"));
+        p.setProcessEnvironment(e);
+    }
     p.start(helper, args);
     if (p.error() == QProcess::FailedToStart) return false;
     p.waitForFinished(3000);   // kdotool loads+runs+deletes a KWin script per call

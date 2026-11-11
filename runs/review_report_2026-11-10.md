@@ -25,6 +25,7 @@ All commits pushed to `origin/main` (ssh mr-kendrix/Preh-MCI128-USB-Keyboard-und
 | Probe hardening (round-9) | probe counts only with exit 0 (else fail-closed `<unknown-window>`); PID validated digits before `/proc`, dead PID -> undeterminable; title = first stdout line; distinct stderr lines logged ONCE. NOTE: plain kdotool v0.3.0 later proved broken in user env (see round 14, fork fixes it) |
 | Sweep bookkeeping (round-13) | trial found exit-sweep re-upping released keys (`SWEEP_UP 002d` x2 after clean taps): only AR-deferred keys tracked now (`sweep_remove` on release/flush/watchdog) — mid-hold kill = exactly ONE `SWEEP_UP`, clean taps = empty marker, no `-- exit sweep` line |
 | Focus tool (round-14) | kdotool fork (~/hermes-workspace/kdotool-fork): upstream refused unless `KDE_SESSION_VERSION == "6"` exactly (empty in Plasma-Wayland/terminals = the REAL root cause, not 6.8.2); fork accepts empty/6.x/future, rejects 5/5.x — plain terminal: `getactivewindow getwindowpid` -> 35743 (Blender), `--dry-inject 91` -> window + rule-match YES. Installed over `~/.local/bin/kdotool` (upstream kept `kdotool.upstream`) |
+| Focus tool (round-14/15) | round-14 fork replaced by round-15 minimal fix: pktm `run_probe` injects `KDE_SESSION_VERSION=6` into the kdotool QProcess only (upstream binary untouched; `~/.local/bin/kdotool` = upstream). Proof systemd env: `systemd-run --user` journal `window='Hermes' ... rule-match=YES`; probe = real env + insert, non-KDE still fails closed |
 | USER TRIAL, real board (r13) | 124/77/96/31/29 = 5/5 injected; window-rule test POSKey 30 (B14, 91 is blind!): Blender focus -> 5x `rule match -> injected`; Hermes/KCalc/kate/vivaldi windows -> `no rule match` with correct proc each; 40 s hold -> release at 30 s (max-hold) no flood; replug -> `reconnected` (by-id node stable); kill marker clean |
 
 ## OPEN — verdict: `leave` possible; still NOT installing pktm.service at boot
@@ -208,6 +209,23 @@ plain terminal, no env: getactivewindow getwindowpid -> 35743 (Blender), getwind
 Installed at ~/.local/bin/kdotool (upstream kept as kdotool.upstream).
 pktm --dry-inject 91: window resolved + rule-match YES (Blender focused at probe time)
 -> degraded-case warning from round 13 no longer applies on this machine.
+
+## Round 15: probe env fix (no fork needed) + reviewer-checklist answers
+
+- Reviewer's alternative beats the fork: pktm's run_probe sets KDE_SESSION_VERSION=6
+  ONLY for the kdotool QProcess (env built from pktm's own environ + insert). Upstream
+  kdotool v0.3.0 runs untouched. Verified headless: `systemd-run --user ... pktm
+  --dry-inject 93` journal shows `window='Hermes' ... rule-match=YES` — probe works
+  in a service env WITHOUT the var (exactly the systemd scenario the reviewer flagged).
+- Mixed literal+macro: ran --dry-inject over POSKey 1..128 of Mr.Kendrix.pmap:
+  **0 REFUSED** -> the open vendor question does not block this file.
+- pktm.service template updated: TimeoutStopSec=10 (sweep runs before SIGKILL),
+  commented ExecStopPost ydotoold restart, parity + sweep-trial notes.
+- GUI UploadPanel (gui_main.cpp:488) uses the SAME upload.cpp flow as CLI: EF 0E
+  backup read-back (/tmp/pktup_backup_*.mwx, refuse on blind overwrite), ACK count,
+  EF 12 checksum verify, half-feed warning. Panel layer is new, the safety path shared.
+- kdotool fork kept at ~/hermes-workspace/kdotool-fork as local artifact only;
+  ~/.local/bin/kdotool = upstream binary restored.
 
 ## Repro (headless)
 
