@@ -254,6 +254,25 @@ pktm --dry-inject 91: window resolved + rule-match YES (Blender focused at probe
 - Stale claim fixed in code comment (upload.cpp:59) + report: backup lives at
   ~/.local/share/pkteditor/pktup_backup_*.mwx since round 7 — survives reboot.
 
+## Phase 0 (2026-11-12): GUI pmap round-trip — the file-saving bug found in review
+
+- Review of the GUI plan found it: save_pmap used serialize_pmap (4 fields) — a
+  real pmap loses ~675 tags (Font/Text/Icon/Keylock/Dependency/…) on save.
+- FIX: lossless DOM (pmap_dom.h/.cpp): slot pool, verbatim text children,
+  attrs/self-close/mismatch detection; dom_serialize(dom_parse(x)) == x.
+- pmaprt gate: 10/10 vendor pmaps RT EXACT (incl. Mr.Kendrix.pmap 131,924 B),
+  counts match old parser, attributes/mismatched close REJECTED, isolated
+  edit = 1 byte diff. FAIL-FAST: structural model changes refused (Phase 1).
+- GUI save_pmap: DOM path, backup BEFORE overwrite ->
+  ~/.local/share/pkteditor/pmap_backup_<ts>_<name>, atomic write (temp +
+  std::filesystem::rename — Qt6 QFile::rename static refused EPERM), re-read
+  verify (DOM RT + model view stable). GUI live-wire (QLineEdit etc.) untouched.
+- pmaprt --gate: `b2/pmaprt <files...>`; pkteditor CLI gate:
+  `b2/pkteditor <pmap> --set V [--cells ..] --save <path>`.
+- Headless proof: copy save -> 158 B diff = ONLY hex-case of Type/Value
+  (vendor used lowercase, to_hex_cp1252 uppercases; semantics identical),
+  675 unknown tags byte-identical; --add -> SAVE BLOCKED, file UNTOUCHED.
+
 ## Repro (headless)
 
 ```bash
