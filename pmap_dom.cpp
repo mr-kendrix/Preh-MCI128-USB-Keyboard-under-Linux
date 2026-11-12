@@ -272,6 +272,11 @@ Pmap dom_view(const DomDoc &d)
                 la.type = unhex_cp1252(dom_text(d, te)).trimmed();
             if (const int ve = dom_find_child(d, le, QStringLiteral("Value")); ve >= 0)
                 la.value = unhex_cp1252(dom_text(d, ve));
+            if (const int de = dom_find_child(d, le, QStringLiteral("Dependency")); de >= 0) {
+                const QString dt = dom_text(d, de);
+                if (!dt.trimmed().isEmpty())     // vendor empty = raw whitespace, not hex
+                    la.dependency = unhex_cp1252(dt);
+            }
             m.layers.push_back(la);
         }
         p.maps.push_back(m);
@@ -361,6 +366,17 @@ static QByteArray dom_apply_model_impl(DomDoc &d, const Pmap &pm, QString &err)
                     if (!dom_set_text(d, ve,
                         format_hex_like(dom_text(d, ve), to_hex_cp1252(src.value)).toUtf8()))
                         { err = QStringLiteral("SAVE BLOCKED: ambiguous Value text"); return {}; }
+            if (fresh || old.dependency != src.dependency) {
+                if (const int ce = dom_find_child(d, domLayers[j], QStringLiteral("Dependency")); ce >= 0) {
+                    if (!dom_set_text(d, ce,
+                        format_hex_like(dom_text(d, ce), to_hex_cp1252(src.dependency)).toUtf8()))
+                        { err = QStringLiteral("SAVE BLOCKED: ambiguous Dependency text"); return {}; }
+                } else if (!src.dependency.isEmpty()) {
+                    const int de = dom_new_elem(d, QStringLiteral("Dependency"),
+                                                to_hex_cp1252(src.dependency));
+                    d.pool[domLayers[j]].children.append(de);
+                }
+            }
         }
         for (int j = m.layers.size(); j < domLayers.size(); ++j)
             dom_erase_child(d, me, domLayers[j]);           // drop extra layers
@@ -372,6 +388,13 @@ static QByteArray dom_apply_model_impl(DomDoc &d, const Pmap &pm, QString &err)
                 dom_set_text(d, te, to_hex_cp1252(m.layers[j].type).toUtf8());
             if (const int ve = dom_find_child(d, le, QStringLiteral("Value")); ve >= 0)
                 dom_set_text(d, ve, to_hex_cp1252(m.layers[j].value).toUtf8());
+            if (const int ce = dom_find_child(d, le, QStringLiteral("Dependency")); ce >= 0)
+                dom_set_text(d, ce, to_hex_cp1252(m.layers[j].dependency).toUtf8());
+            else if (!m.layers[j].dependency.isEmpty()) {
+                const int de = dom_new_elem(d, QStringLiteral("Dependency"),
+                                            to_hex_cp1252(m.layers[j].dependency));
+                d.pool[le].children.append(de);
+            }
             d.pool[me].children.append(le);
         }
     }

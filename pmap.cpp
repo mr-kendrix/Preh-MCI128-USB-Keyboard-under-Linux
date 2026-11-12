@@ -26,6 +26,8 @@ Pmap parse_pmap(const QString &xml) {
                               QRegularExpression::DotMatchesEverythingOption);
     QRegularExpression valRe("<Value>(.*?)</Value>",
                              QRegularExpression::DotMatchesEverythingOption);
+    QRegularExpression depRe("<Dependency>(.*?)</Dependency>",
+                             QRegularExpression::DotMatchesEverythingOption);
 
     {
         QRegularExpressionMatchIterator it = mapRe.globalMatch(xml);
@@ -56,6 +58,14 @@ Pmap parse_pmap(const QString &xml) {
                         if (vm.isValid())
                             la.value = unhex_local(vm.captured(1));
                     }
+                    {
+                        QRegularExpressionMatch dm = depRe.match(lb);
+                        if (dm.isValid()) {
+                            const QString b = dm.captured(1);
+                            if (!b.trimmed().isEmpty())   // vendor empty = whitespace, not hex
+                                la.dependency = unhex_local(b).trimmed();
+                        }
+                    }
                     m.layers.append(la);
                 }
             }
@@ -80,9 +90,13 @@ QString serialize_pmap(const Pmap &p) {
     QString x = "<POSKeyMapper><MAPPING>";
     for (const Map &m : p.maps) {
         x += "<MAP><POSKey>" + to_hex_cp1252(QString::number(m.poskey)) + "</POSKey>";
-        for (const Layer &l : m.layers)
+        for (const Layer &l : m.layers) {
             x += "<LAYER><Type>" + to_hex_cp1252(l.type)
-               + "</Type><Value>" + to_hex_cp1252(l.value) + "</Value></LAYER>";
+               + "</Type><Value>" + to_hex_cp1252(l.value) + "</Value>";
+            if (!l.dependency.isEmpty())
+                x += "<Dependency>" + to_hex_cp1252(l.dependency) + "</Dependency>";
+            x += "</LAYER>";
+        }
         x += "</MAP>";
     }
     x += "</MAPPING><LAYOUT><Name>" + to_hex_cp1252(p.name)

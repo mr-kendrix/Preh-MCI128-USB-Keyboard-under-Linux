@@ -352,3 +352,12 @@ YDOTOOL_SOCKET=/tmp/.does-not-exist ./b/pktm ...  # error: + rc=2
 - GUI add-WEBSITE on Mr.Kendrix H12: 32 maps/49 layers, `--validate` rc=0, panel shows WEBSITE layer; `--addtype … --save … --undo` in ONE run → byte-IDENTICAL to vendor original.
 - pmaprt printout extended: row table now shows ALL 5 rows (POSKey/Type were hidden before) and `counts_ok=` prints the boolean `!(any row mismatch)` (gate always required zero mismatches); vendor + fixtures all show counts_ok=1.
 - UNVERIFIED (accepted): xdg-open spawn under a real desktop session (spawned process verified via /bin/sleep; browser launch is the same exec path). APPLICATION windows-path could be mapped via wine/drive mappings — deliberately refused, not guessed.
+
+# Phase 1c — Dependency model + GUI Undo (2026-11-13)
+
+- `pmap.h Layer` gains `dependency`; `pmap.cpp` parse reads `<Dependency>` (vendor empty = RAW WHITESPACE, not hex — whitespace-only body → empty, same rule as everywhere else) and serialize emits it after Value only when non-empty (vendor order Type→Value→Dependency verified at byte 6366 region of Mr.Kendrix).
+- `dom_view` reads Dependency with the same whitespace-empty rule; `dom_apply_model_impl`: dependency diff (fresh || old≠src) writes text in ORIGINAL hex case; creates `<Dependency>` element appended to LAYER children when model needs one and DOM lacks it; NEW (clone/synth) layer FORCES dependency text to model value — leak gate: `--add` at pk 126 (donor layer dep=`soffice.bin`) → saved file `<Dependency></Dependency>` fresh, donor untouched, diff = single insert block.
+- GUI: `Undo` button next to Save — pops g_undo + write_atomic restore, note in stat line (same shared code as `--undo`; the live-button CLICK itself UNVERIFIED headless, handler mirrors undo-mode block on identical g_undo/write_atomic code).
+- GUI display: panel + live layers line show `DEP='Blender'` — vendor Mr.Kendrix poskey 126-128 show real deps, poskey 124 empty body shows empty (was junk-char before whitespace rule fix).
+- pmaprt on vendor incl. Dependency elements still RT=EXACT/IDOM=OK (empty-vs-empty diff never rewrites whitespace body). pktm --rules-report shows layers=4 after GUI add (own dep parse independent of pmap.h — mapper.cpp unchanged).
+- Clone note (documented behavior): style clone keeps flag children (BringToForeground/AutoRepeat/SlowOutput) of the donor; Type/Value/Dependency are always fresh/model-driven.

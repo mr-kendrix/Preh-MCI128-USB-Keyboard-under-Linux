@@ -521,8 +521,11 @@ int main(int argc, char **argv) {
         std::printf("PANEL maps=%d\n", int(m.pm.maps.size()));
         for (const Map &mp : m.pm.maps) {
             QString l;
-            for (const Layer &ly : mp.layers)
+            for (const Layer &ly : mp.layers) {
                 l += QStringLiteral(" %1='%2'").arg(ly.type).arg(ly.value);
+                if (!ly.dependency.isEmpty())
+                    l += QStringLiteral(" DEP='%1'").arg(ly.dependency);
+            }
             std::printf("  poskey=%-4d %s\n", mp.poskey, l.trimmed().toUtf8().constData());
         }
         return 0;
@@ -625,10 +628,12 @@ int main(int argc, char **argv) {
     QPushButton setbtn(QStringLiteral("Set"), &win);
     QPushButton delbtn(QStringLiteral("Delete Layer"), &win);
     QPushButton savebtn(QStringLiteral("Save"), &win);
+    QPushButton undobtn(QStringLiteral("Undo"), &win);
     addbtn.move(260, 662);
     setbtn.move(384, 662);
     delbtn.move(508, 662);
     savebtn.move(632, 662);
+    undobtn.move(756, 662);
     // LB5: button + QProgressDialog + mapped errors, one mount (upload.h)
     UploadPanel upload(&win, &pm->pm, mwx,
                        up_arm || getenv("PKT_UPLOAD_ARM") != nullptr);
@@ -680,8 +685,11 @@ int main(int argc, char **argv) {
         const Map *mp = find_map_c(pm->pm, pk);
         if (mp && !mp->layers.isEmpty()) {
             QStringList ls;
-            for (const Layer &l : mp->layers)
-                ls << QStringLiteral("%1 '%2'").arg(l.type).arg(l.value);
+            for (const Layer &l : mp->layers) {
+                QString s = QStringLiteral("%1 '%2'").arg(l.type).arg(l.value);
+                if (!l.dependency.isEmpty()) s += QStringLiteral(" DEP=%1").arg(l.dependency);
+                ls << s;
+            }
             layers.setText(QStringLiteral("layers (%1): %2").arg(mp->layers.size())
                                                               .arg(ls.join(" | ")));
         } else {
@@ -703,6 +711,18 @@ int main(int argc, char **argv) {
         del_top_layer(pm->pm, pm->sel); refresh(false); });
     savebtn.connect(&savebtn, &QPushButton::clicked, [pm, &out, &save_note, &refresh]{
         save_note = save_pmap(*pm, pm->path.isEmpty() ? out : pm->path); refresh(true); });
+    undobtn.connect(&undobtn, &QPushButton::clicked, [&save_note, &refresh]{
+        if (g_undo.isEmpty()) save_note = QStringLiteral("undo: nothing in this session");
+        else {
+            const QPair<QString, QByteArray> last = g_undo.last();   // copy, then pop
+            const QString e = write_atomic(last.first, last.second);
+            g_undo.removeLast();
+            save_note = e.isEmpty()
+                            ? QStringLiteral("undo restored %1 (%2 B)")
+                                  .arg(last.first).arg((long long)last.second.size())
+                            : e;
+        }
+        refresh(true); });
 
     refresh(false);
     pm->notify = [&]() { refresh(false); };
