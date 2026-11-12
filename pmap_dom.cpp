@@ -171,6 +171,49 @@ bool dom_set_text(DomDoc &d, int slot, const QByteArray &t)
     return false;   // ambiguous multi-text: refuse, keep file untouched
 }
 
+// model view of the DOM, decoded exactly like parse_pmap does
+Pmap dom_view(const DomDoc &d)
+{
+    Pmap p;
+    int root = -1;
+    for (int r : d.roots)
+        if (!d.pool[r].is_text) { root = r; break; }
+    if (root < 0 || d.pool[root].name != QStringLiteral("POSKeyMapper"))
+        return p;
+    if (const int layout = dom_find_child(d, root, QStringLiteral("LAYOUT")); layout >= 0)
+        if (const int ne = dom_find_child(d, layout, QStringLiteral("Name")); ne >= 0)
+            p.name = unhex_cp1252(dom_text(d, ne)).trimmed();
+    const int mapping = dom_find_child(d, root, QStringLiteral("MAPPING"));
+    if (mapping < 0) return p;
+    for (int me : dom_find_all(d, mapping, QStringLiteral("MAP"))) {
+        Map m;
+        if (const int pk = dom_find_child(d, me, QStringLiteral("POSKey")); pk >= 0)
+            m.poskey = unhex_cp1252(dom_text(d, pk)).toInt();
+        for (int le : dom_find_all(d, me, QStringLiteral("LAYER"))) {
+            Layer la;
+            if (const int te = dom_find_child(d, le, QStringLiteral("Type")); te >= 0)
+                la.type = unhex_cp1252(dom_text(d, te)).trimmed();
+            if (const int ve = dom_find_child(d, le, QStringLiteral("Value")); ve >= 0)
+                la.value = unhex_cp1252(dom_text(d, ve));
+            m.layers.push_back(la);
+        }
+        p.maps.push_back(m);
+    }
+    return p;
+}
+
+// hex of val in the letter-case of the original text (first hex letter wins)
+static QString format_hex_like(const QString &orig_text, const QString &hex)
+{
+    for (const QChar &c : orig_text) {
+        if (c >= QLatin1Char('a') && c <= QLatin1Char('f'))
+            return hex.toLower();
+        if (c >= QLatin1Char('A') && c <= QLatin1Char('F'))
+            return hex;   // our hex is produced uppercase; keep
+    }
+    return hex;
+}
+
 static QByteArray dom_apply_model_impl(DomDoc &d, const Pmap &pm, QString &err)
 {
     int root = -1;
@@ -180,10 +223,14 @@ static QByteArray dom_apply_model_impl(DomDoc &d, const Pmap &pm, QString &err)
         err = QStringLiteral("SAVE BLOCKED: root is not POSKeyMapper");
         return {};
     }
-    // Name (LAYOUT block)
+    const Pmap view = dom_view(d);   // diff base: current file content
+    // Name — only if it actually differs, keeping the original hex case
     if (const int layout = dom_find_child(d, root, QStringLiteral("LAYOUT")); layout >= 0)
-        if (const int nameEl = dom_find_child(d, layout, QStringLiteral("Name")); nameEl >= 0)
-            dom_set_text(d, nameEl, to_hex_cp1252(pm.name).toUtf8());
+        if (const int ne = dom_find_child(d, layout, QStringLiteral("Name")); ne >= 0)
+            if (pm.name != view.name)
+                dom_set_text(d, ne,
+                             format_hex_like(dom_text(d, ne), to_hex_cp1252(pm.name))
+                             .toUtf8());
     const int mapping = dom_find_child(d, root, QStringLiteral("MAPPING"));
     const QVector<int> domMaps = mapping >= 0 ? dom_find_all(d, mapping, QStringLiteral("MAP")) : QVector<int>{};
     if (domMaps.size() != pm.maps.size()) {
@@ -195,25 +242,32 @@ static QByteArray dom_apply_model_impl(DomDoc &d, const Pmap &pm, QString &err)
         const int me = domMaps[i];
         const int pk = dom_find_child(d, me, QStringLiteral("POSKey"));
         if (pk < 0) { err = QStringLiteral("SAVE BLOCKED: MAP without POSKey"); return {}; }
-        const int dompk = unhex_cp1252(dom_text(d, pk)).toInt();
-        if (dompk != pm.maps[i].poskey) {
-            err = QStringLiteral("SAVE BLOCKED: DOM/model POSKey mismatch at map %1 (%2 vs %3)"
-            ).arg(i).arg(dompk).arg(pm.maps[i].poskey);
+        if (view.maps[i].poskey != pm.maps[i].poskey) {
+            err = QStringLiteral("SAVE BLOCKED: structural edit (POSKey %1->%2) not yet supported"
+            ).arg(view.maps[i].poskey).arg(pm.maps[i].poskey);
             return {};
         }
         const QVector<int> domLayers = dom_find_all(d, me, QStringLiteral("LAYER"));
-        if (domLayers.size() != pm.maps[i].layers.size()) {
+        if (domLayers.size() != view.maps[i].layers.size()
+            || view.maps[i].layers.size() != pm.maps[i].layers.size()) {
             err = QStringLiteral("SAVE BLOCKED: structural edit on POSKey %1 (layers %2->%3) not yet supported"
-            ).arg(pm.maps[i].poskey).arg(domLayers.size()).arg(pm.maps[i].layers.size());
+            ).arg(pm.maps[i].poskey).arg(view.maps[i].layers.size()).arg(pm.maps[i].layers.size());
             return {};
         }
         for (int j = 0; j < domLayers.size(); ++j) {
-            const int te = dom_find_child(d, domLayers[j], QStringLiteral("Type"));
-            const int ve = dom_find_child(d, domLayers[j], QStringLiteral("Value"));
-            if (te >= 0 && !dom_set_text(d, te, to_hex_cp1252(pm.maps[i].layers[j].type).toUtf8()))
-                { err = QStringLiteral("SAVE BLOCKED: ambiguous Type text"); return {}; }
-            if (ve >= 0 && !dom_set_text(d, ve, to_hex_cp1252(pm.maps[i].layers[j].value).toUtf8()))
-                { err = QStringLiteral("SAVE BLOCKED: ambiguous Value text"); return {}; }
+            // rewrite ONLY the fields that differ from the file
+            if (view.maps[i].layers[j].type != pm.maps[i].layers[j].type)
+                if (const int te = dom_find_child(d, domLayers[j], QStringLiteral("Type")); te >= 0)
+                    if (!dom_set_text(d, te,
+                        format_hex_like(dom_text(d, te), to_hex_cp1252(pm.maps[i].layers[j].type))
+                        .toUtf8()))
+                        { err = QStringLiteral("SAVE BLOCKED: ambiguous Type text"); return {}; }
+            if (view.maps[i].layers[j].value != pm.maps[i].layers[j].value)
+                if (const int ve = dom_find_child(d, domLayers[j], QStringLiteral("Value")); ve >= 0)
+                    if (!dom_set_text(d, ve,
+                        format_hex_like(dom_text(d, ve), to_hex_cp1252(pm.maps[i].layers[j].value))
+                        .toUtf8()))
+                        { err = QStringLiteral("SAVE BLOCKED: ambiguous Value text"); return {}; }
         }
     }
     return dom_serialize(d);

@@ -28,7 +28,12 @@ static int run_file(const QString &path)
     if (!dom_parse(raw, d)) { std::printf("PARSE-FAIL %s (%lld B)\n", path.toUtf8().constData(), (long long)raw.size()); return 1; }
     const QByteArray back = dom_serialize(d);
     const bool same = (back == raw);
-    // old model view vs DOM element counts
+    // Phase-0 idempotency: applying the FILE's own view must change NOTHING
+    const Pmap own = dom_view(d);
+    QString aerr;
+    const QByteArray again = dom_apply_model(d, own, aerr);
+    const bool idem = (again == raw && aerr.isEmpty());
+    // old model view vs DOM counts
     const Pmap old = parse_pmap(QString::fromLatin1(raw));     // latin1 = byte-preserving
     struct Row { const char *tag; int oldc; int domc; } rows[] = {
         {"MAP", 0, count_tag_dom(d, "MAP")},
@@ -70,11 +75,12 @@ static int run_file(const QString &path)
             diffcount = dd;
         }
     }
-    std::printf("%-64s %7lld B  RT=%s %s=%d/%d %s=%d/%d %s=%d/%d  counts_ok=%d editdiff=%d\n",
+    std::printf("%-64s %7lld B  RT=%s IDOM=%s %s=%d/%d %s=%d/%d %s=%d/%d  counts_ok=%d editdiff=%d\n",
         path.toUtf8().constData(), (long long)raw.size(), same ? "EXACT" : "LOSSY",
+        idem ? "OK" : "NO",
         "MAP", rows[0].oldc, rows[0].domc, "LAYER", rows[2].oldc, rows[2].domc,
         "Value", rows[4].oldc, rows[4].domc, mism, diffcount);
-    return (same && !mism) ? 0 : 3;
+    return (same && idem && !mism) ? 0 : 3;
 }
 
 int main(int argc, char **argv)
@@ -83,8 +89,12 @@ int main(int argc, char **argv)
     QStringList files;
     for (int i = 1; i < argc; ++i) files << argv[i];
     if (files.isEmpty()) { std::printf("usage: pmaprt <pmap files...> (or via runs/pmaprt.sh)\n"); return 2; }
-    int fails = 0;
-    for (const auto &p : files) if (run_file(p) != 0) ++fails;
+    int fails = 0, skipped = 0;
+    for (const auto &p : files) {
+        if (!QFile::exists(p)) { ++skipped; std::printf("SKIP (absent): %s\n", p.toUtf8().constData()); continue; }
+        const int rc = run_file(p);
+        if (rc != 0) ++fails;
+    }
     // negative tests
     const QByteArray neg1 = "<A B=\"1\">x</A>";
     const QByteArray neg2 = "<A><B>1</C></A>";

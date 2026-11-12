@@ -33,6 +33,10 @@ QByteArray dom_text(const DomDoc &d, int slot);
 QVector<int> dom_find_all(const DomDoc &d, int slot, const QString &tag);
 // set the single text payload of element slot (creates one if absent)
 bool dom_set_text(DomDoc &d, int slot, const QByteArray &t);
+// model view of the DOM (decoded exactly like parse_pmap does) — for diffing
+Pmap dom_view(const DomDoc &d);
+
 // model view re-applied onto a DOM (Phase 0: value edits only; structural
-// changes => err + empty return). to_hex_cp1252/unhex_cp1252 from pmap.cpp.
+// changes => err + empty return). ONLY changed fields are rewritten, in the
+// hex case of the original text — unedited layers stay byte-identical.
 QByteArray dom_apply_model(DomDoc &d, const Pmap &pm, QString &err);

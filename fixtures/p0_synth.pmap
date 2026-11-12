@@ -1,0 +1,16 @@
+<POSKeyMapper><MAPPING>
+  <MAP>
+    <POSKey>313234</POSKey>
+    <LAYER>
+      <Type>54455854</Type>
+      <Value>7b4e357d</Value>
+    </LAYER>
+  </MAP>
+  <MAP>
+    <POSKey>313235</POSKey>
+    <LAYER>
+      <Type>74657874</Type>
+      <Value>6162818d</Value>
+    </LAYER>
+  </MAP>
+</MAPPING><LAYOUT><Name>74c3817374</Name></LAYOUT></POSKeyMapper>

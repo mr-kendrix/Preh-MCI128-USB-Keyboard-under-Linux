@@ -34,6 +34,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <algorithm>
+#include <fcntl.h>
+#include <unistd.h>
 #include <filesystem>
 #include <system_error>
 #include <QHash>
@@ -271,13 +274,44 @@ static QString save_pmap(Model &m, const QString &path) {
                             .arg(stamp)
                             .arg(QFileInfo(path).fileName());
     { QFile bk(bakk);
-      if (bk.open(QIODevice::WriteOnly)) { bk.write(raw); bk.close(); } }
+      bool bok = false;
+      if (bk.open(QIODevice::WriteOnly)) {
+          const qint64 bw = bk.write(raw);
+          bok = (bw == raw.size());
+          bk.close();
+      }
+      if (!bok)
+          return QStringLiteral("SAVE BLOCKED: backup not writable — refusing overwrite"); }
+    // keep the 30 newest backups (vendor tool keeps its own history too)
+    { QStringList bs;
+      try {
+          for (const auto &e : std::filesystem::directory_iterator(
+                   std::filesystem::path(bakdir.toStdString())))
+              if (e.path().filename().string().rfind("pmap_backup_", 0) == 0)
+                  bs.push_back(QString::fromStdString(e.path().filename().string()));
+      } catch (const std::filesystem::filesystem_error &) {}
+      std::sort(bs.begin(), bs.end());
+      while (bs.size() > 30)
+          QFile::remove(bakdir + QStringLiteral("/") + bs.takeFirst()); }
     // atomic write: temp + rename (same as QSaveFile does internally)
     const QString tmp = QStringLiteral("%1.tmp_%2").arg(path).arg(stamp);
     { QFile tf(tmp);
       if (!tf.open(QIODevice::WriteOnly))
           return QStringLiteral("SAVE FAILED: cannot open temp");
-      tf.write(out);
+      const qint64 w = tf.write(out);
+      if (w != out.size()) {
+          tf.close(); QFile::remove(tmp);
+          return QStringLiteral("SAVE FAILED: short temp write (%1 of %2)")
+                 .arg(w).arg(out.size());
+      }
+      tf.flush();
+      { const int fd = ::open(tmp.toUtf8().constData(), O_FSYNC);
+        if (fd < 0 || ::fsync(fd) != 0) {
+            if (fd >= 0) ::close(fd);
+            tf.close(); QFile::remove(tmp);
+            return QStringLiteral("SAVE FAILED: fsync error");
+        }
+        ::close(fd); }
       tf.close(); }
     {      std::error_code ec;
       std::filesystem::rename(std::filesystem::path(tmp.toStdString()),
