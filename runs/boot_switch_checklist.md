@@ -37,7 +37,11 @@ after pktm ran for days.
   not an OS limit (hidraw nodes allow multiple readers; the OTHER daemon refuses to
   start); normal keys are unaffected (they go via kernel uinput, r10 gate proves down/up)
 
-## D. Known findings recorded in review_report (do not re-investigate)
+## D. Known-good board table OUTSIDE the repo (restore never depends on a workdir)
+- ~/.local/share/pkteditor/known_good_pos_mci128.mwx (1480 B, sha256 83c36bf4…dd62e,
+  copied 2026-11-12 from fixtures/uploads/00_pos_mci128.mwx; plus live pktup_backup_* dumps)
+
+## E. Known findings recorded in review_report (do not re-investigate)
 - kdotool needs KDE_SESSION_VERSION → pktm injects it for the QProcess (r15); upstream
   issue draft in runs/kdotool_issue_draft.md
 - 0/128 rules in Mr.Kendrix.pmap REFUSED → mixed literal+macro not blocking (r15)
