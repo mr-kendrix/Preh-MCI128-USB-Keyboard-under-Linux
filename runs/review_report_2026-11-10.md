@@ -361,3 +361,9 @@ YDOTOOL_SOCKET=/tmp/.does-not-exist ./b/pktm ...  # error: + rc=2
 - GUI display: panel + live layers line show `DEP='Blender'` — vendor Mr.Kendrix poskey 126-128 show real deps, poskey 124 empty body shows empty (was junk-char before whitespace rule fix).
 - pmaprt on vendor incl. Dependency elements still RT=EXACT/IDOM=OK (empty-vs-empty diff never rewrites whitespace body). pktm --rules-report shows layers=4 after GUI add (own dep parse independent of pmap.h — mapper.cpp unchanged).
 - Clone note (documented behavior): style clone keeps flag children (BringToForeground/AutoRepeat/SlowOutput) of the donor; Type/Value/Dependency are always fresh/model-driven.
+
+## Phase 1d — live Dependency edit (2026-11-13)
+
+- `set_top_dep(pm, poskey, dep)` model fn next to `set_top_value`; gate_click gained `depv` param + report now prints `dep='%6'`; CLI `--setdep VALUE`; live GUI `Set Dep` button (2nd row at 260,700 — clear of UploadPanel x=900 and stat label) uses the QLineEdit text as dep of the TOP layer (mirrors `Set` semantics).
+- Gates (real runs): CLEAR — pk 126 top layer `soffice.bin`→'' → diff EXACTLY one line `<Dependency>736f...62696e</Dependency>` → `<Dependency></Dependency>`, layers 3->3, panel shows dep gone. CREATE — p1_action WEBSITE layer (no Dependency element) + `--setdep Blender` → element appended, panel `WEBSITE='www.example.com' DEP='Blender'`, pmaprt on SAVED file RT=EXACT IDOM=OK. UNDO — `--setdep TESTDEP --save --undo` → byte-IDENTICAL restore.
+- Button-click itself still UNVERIFIED headless (same handler shape as Set/addbtn; set_top_dep covered via CLI + model identity).

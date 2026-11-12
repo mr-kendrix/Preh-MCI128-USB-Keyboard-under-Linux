@@ -167,6 +167,12 @@ static void set_top_value(Pmap &pm, int poskey, const QString &value) {
     else m.layers.last().value = value;
 }
 
+static void set_top_dep(Pmap &pm, int poskey, const QString &dep) {
+    Map &m = ensure_map(pm, poskey);
+    if (m.layers.isEmpty()) m.layers.append(Layer{QStringLiteral("TEXT"), QString(), dep});
+    else m.layers.last().dependency = dep;
+}
+
 static void add_layer(Pmap &pm, int poskey, const QString &value,
                       const QString &type = QStringLiteral("TEXT")) {
     ensure_map(pm, poskey).layers.append(Layer{type, value});
@@ -384,7 +390,8 @@ static int gate_smoke(Model &m) {
 
 static int gate_click(Model &m, const QStringList &cells, const QString &setv,
                       const QString &addv, bool del, const QString &out,
-                      const QString &addtype = QString()) {
+                      const QString &addtype = QString(),
+                      const QString &depv = QString()) {
     m.cells = layout_cells(QSize(1024, 512));   // board the gates simulate
     QString rep;
     for (const QString &spec : cells) {
@@ -401,11 +408,14 @@ static int gate_click(Model &m, const QStringList &cells, const QString &setv,
         if (!addv.isNull()) add_layer(m.pm, pk, addv,
                                       addtype.isNull() ? QStringLiteral("TEXT") : addtype);
         if (del) del_top_layer(m.pm, pk);
+        if (!depv.isNull()) set_top_dep(m.pm, pk, depv);
         const Map *after = find_map_c(m.pm, pk);
-        rep += QStringLiteral("%1 pk=%2 layers %3->%4 val='%5'; ")
+        rep += QStringLiteral("%1 pk=%2 layers %3->%4 val='%5' dep='%6'; ")
                     .arg(spec).arg(pk).arg(n_before).arg((int)(after ? after->layers.size() : -1))
                     .arg(after && !after->layers.isEmpty()
-                             ? after->layers.last().value : QString());
+                             ? after->layers.last().value : QString())
+                    .arg(after && !after->layers.isEmpty()
+                             ? after->layers.last().dependency : QString());
     }
     QString save_to = out;
     if (save_to.isEmpty()) save_to = m.path + QStringLiteral(".edited");
@@ -463,7 +473,8 @@ int main(int argc, char **argv) {
     QStringList cells;
     QString path, shot, setv, addv, out, mode, mwx;
     QString addtype;                       // --addtype TYPE (else TEXT)
-    bool del = false, have_set = false, have_add = false, up_arm = false;
+    QString setdepv;                       // --setdep VALUE (null = untouched)
+    bool del = false, have_set = false, have_add = false, have_setdep = false, up_arm = false;
     QString calib;
     for (int i = 1; i < argc; ++i) {
         const QString a = argv[i];
@@ -483,6 +494,7 @@ int main(int argc, char **argv) {
             next(addtype); next(addv); have_add = true;
         }
         else if (a == "--del") { mode = "click"; del = true; }
+        else if (a == "--setdep") { mode = "click"; next(setdepv); have_setdep = true; }
         else if (a == "--arm-upload") up_arm = true;
         else if (a == "--calib") next(calib);
         else if (a == "--watch") { mode = "watch"; }
@@ -506,9 +518,10 @@ int main(int argc, char **argv) {
 
     if (mode == "undo") {
         // undo chain: run the save first (if edit args given), then pop stack
-        if (!cells.isEmpty() || have_set || have_add || del)
+        if (!cells.isEmpty() || have_set || have_add || have_setdep || del)
             gate_click(m, cells, have_set ? setv : QString(), have_add ? addv : QString(),
-                       del, out, have_add ? addtype : QString());
+                       del, out, have_add ? addtype : QString(),
+                       have_setdep ? setdepv : QString());
         if (g_undo.isEmpty()) { std::printf("undo: stack empty\n"); return 1; }
         const QPair<QString, QByteArray> &last = g_undo.last();
         const QString e = write_atomic(last.first, last.second);
@@ -589,7 +602,8 @@ int main(int argc, char **argv) {
     }
     if (mode == "click" || !cells.isEmpty())
         return gate_click(m, cells, have_set ? setv : QString(), have_add ? addv : QString(),
-                          del, out, have_add ? addtype : QString());
+                          del, out, have_add ? addtype : QString(),
+                          have_setdep ? setdepv : QString());
 
     // live window
     static char off1[] = "--platform";
@@ -629,11 +643,13 @@ int main(int argc, char **argv) {
     QPushButton delbtn(QStringLiteral("Delete Layer"), &win);
     QPushButton savebtn(QStringLiteral("Save"), &win);
     QPushButton undobtn(QStringLiteral("Undo"), &win);
+    QPushButton depbtn(QStringLiteral("Set Dep"), &win);
     addbtn.move(260, 662);
     setbtn.move(384, 662);
     delbtn.move(508, 662);
     savebtn.move(632, 662);
     undobtn.move(756, 662);
+    depbtn.move(260, 700);      // 2nd row: edit text -> dependency of top layer
     // LB5: button + QProgressDialog + mapped errors, one mount (upload.h)
     UploadPanel upload(&win, &pm->pm, mwx,
                        up_arm || getenv("PKT_UPLOAD_ARM") != nullptr);
@@ -705,6 +721,8 @@ int main(int argc, char **argv) {
     };
     addbtn.connect(&addbtn, &QPushButton::clicked, [pm, &edit, &save_note, &refresh]{
         add_layer(pm->pm, pm->sel, edit.text()); refresh(false); });
+    depbtn.connect(&depbtn, &QPushButton::clicked, [pm, &edit, &save_note, &refresh]{
+        set_top_dep(pm->pm, pm->sel, edit.text()); refresh(false); });
     setbtn.connect(&setbtn, &QPushButton::clicked, [pm, &edit, &save_note, &refresh]{
         set_top_value(pm->pm, pm->sel, edit.text()); refresh(false); });
     delbtn.connect(&delbtn, &QPushButton::clicked, [pm, &save_note, &refresh]{
