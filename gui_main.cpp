@@ -242,14 +242,48 @@ static int cell_at(const Model &m, const QPoint &p) {
 
 // ------------------------------------------------------------------- save ----
 
+static QString write_atomic(const QString &path, const QByteArray &bytes)
+{
+    const QString stamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_Hhmmss_zzz"));
+    const QString tmp = QStringLiteral("%1.tmp_%2").arg(path).arg(stamp);
+    { QFile tf(tmp);
+      if (!tf.open(QIODevice::WriteOnly))
+          return QStringLiteral("atomic: cannot open temp");
+      const qint64 w = tf.write(bytes);
+      if (w != bytes.size()) {
+          tf.close(); QFile::remove(tmp);
+          return QStringLiteral("atomic: short write %1/%2").arg(w).arg(bytes.size());
+      }
+      tf.flush();
+      { const int fd = ::open(tmp.toUtf8().constData(), O_FSYNC);
+        if (fd < 0 || ::fsync(fd) != 0) {
+            if (fd >= 0) ::close(fd);
+            tf.close(); QFile::remove(tmp);
+            return QStringLiteral("atomic: fsync error");
+        }
+        ::close(fd); }
+      tf.close(); }
+    std::error_code ec;
+    std::filesystem::rename(std::filesystem::path(tmp.toStdString()),
+                            std::filesystem::path(path.toStdString()), ec);
+    if (ec) { QFile::remove(tmp); return QStringLiteral("atomic: rename %1").arg(ec.message().c_str()); }
+    return QString();
+}
+
+// Undo stack: every save_pmap pushes (path, pre-save bytes); --undo pops.
+static QVector<QPair<QString, QByteArray>> g_undo;
+
 static QString save_pmap(Model &m, const QString &path) {
     // Phase 0 (2026-11-12): lossless DOM path — original bytes + targeted text
-    // edits only; structural changes refused (Phase 1). Backup + atomic write.
+    // edits only; structural changes DOM-native (Phase 1). Backup + atomic write.
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly))
         return QStringLiteral("SAVE FAILED: cannot read original %1").arg(path);
     const QByteArray raw = f.readAll();
     f.close();
+    g_undo.append({path, raw});
+    if (g_undo.size() > 50)
+        g_undo.removeFirst();
     DomDoc d;
     if (!dom_parse(raw, d))
         return QStringLiteral("SAVE BLOCKED: file not in supported pmap dialect");
@@ -293,33 +327,9 @@ static QString save_pmap(Model &m, const QString &path) {
       std::sort(bs.begin(), bs.end());
       while (bs.size() > 30)
           QFile::remove(bakdir + QStringLiteral("/") + bs.takeFirst()); }
-    // atomic write: temp + rename (same as QSaveFile does internally)
-    const QString tmp = QStringLiteral("%1.tmp_%2").arg(path).arg(stamp);
-    { QFile tf(tmp);
-      if (!tf.open(QIODevice::WriteOnly))
-          return QStringLiteral("SAVE FAILED: cannot open temp");
-      const qint64 w = tf.write(out);
-      if (w != out.size()) {
-          tf.close(); QFile::remove(tmp);
-          return QStringLiteral("SAVE FAILED: short temp write (%1 of %2)")
-                 .arg(w).arg(out.size());
-      }
-      tf.flush();
-      { const int fd = ::open(tmp.toUtf8().constData(), O_FSYNC);
-        if (fd < 0 || ::fsync(fd) != 0) {
-            if (fd >= 0) ::close(fd);
-            tf.close(); QFile::remove(tmp);
-            return QStringLiteral("SAVE FAILED: fsync error");
-        }
-        ::close(fd); }
-      tf.close(); }
-    {      std::error_code ec;
-      std::filesystem::rename(std::filesystem::path(tmp.toStdString()),
-                              std::filesystem::path(path.toStdString()), ec);
-      if (ec) {
-          QFile::remove(tmp);
-          return QStringLiteral("SAVE FAILED: rename error %1").arg(ec.message().c_str());
-      } }
+    const QString werr = write_atomic(path, out);
+    if (!werr.isEmpty())
+        return QStringLiteral("SAVE FAILED: ") + werr;
     // verify: re-read parses + RT exact + model view survives
     QFile r(path);
     const QByteArray reread = r.open(QIODevice::ReadOnly) ? r.readAll() : QByteArray();
@@ -470,6 +480,7 @@ int main(int argc, char **argv) {
         else if (a == "--watch") { mode = "watch"; }
         else if (a == "--mwx") next(mwx);
         else if (a == "--save") next(out);
+        else if (a == "--undo") mode = "undo";
         else if (!a.startsWith("--")) path = a;
     }
 
@@ -483,6 +494,19 @@ int main(int argc, char **argv) {
         m.path = path;
     }
 
+    if (mode == "undo") {
+        // undo chain: run the save first (if edit args given), then pop stack
+        if (!cells.isEmpty() || have_set || have_add || del)
+            gate_click(m, cells, have_set ? setv : QString(), have_add ? addv : QString(),
+                       del, out);
+        if (g_undo.isEmpty()) { std::printf("undo: stack empty\n"); return 1; }
+        const QPair<QString, QByteArray> &last = g_undo.last();
+        const QString e = write_atomic(last.first, last.second);
+        std::printf("undo restored %s (%lld B) %s\n", last.first.toUtf8().constData(),
+                    (long long)last.second.size(), e.isEmpty() ? "OK" : e.toUtf8().constData());
+        g_undo.removeLast();
+        return e.isEmpty() ? 0 : 1;
+    }
     if (mode == "smoke") return gate_smoke(m);
     if (mode == "watch") {
         const QHash<int, int> cal = load_calib(

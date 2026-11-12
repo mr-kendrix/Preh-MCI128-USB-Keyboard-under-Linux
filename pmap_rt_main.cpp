@@ -75,12 +75,49 @@ static int run_file(const QString &path)
             diffcount = dd;
         }
     }
-    std::printf("%-64s %7lld B  RT=%s IDOM=%s %s=%d/%d %s=%d/%d %s=%d/%d  counts_ok=%d editdiff=%d\n",
+    // Phase 1 structural test: add layer to map0, drop LAST map, add NEW map 999
+    int struct_ok = -1;
+    {
+        DomDoc dd;
+        if (dom_parse(raw, dd)) {
+            Pmap mod = dom_view(dd);
+            if (!mod.maps.isEmpty()) {
+                Layer la; la.type = QStringLiteral("TEXT"); la.value = QStringLiteral("P1ADD");
+                mod.maps[0].layers.append(la);
+            }
+            if (mod.maps.size() >= 2)
+                mod.maps.removeLast();
+            {
+                Layer nl; nl.type = QStringLiteral("TEXT"); nl.value = QStringLiteral("P1NEW");
+                Map nm; nm.poskey = 999; nm.layers.append(nl);
+                mod.maps.append(nm);
+            }
+            QString serr;
+            const QByteArray s3 = dom_apply_model(dd, mod, serr);
+            DomDoc d3;
+            if (!serr.isEmpty() || !dom_parse(s3, d3) || dom_serialize(d3) != s3)
+                struct_ok = serr.isEmpty() ? 0 : -1;
+            else {
+                const Pmap back = dom_view(d3);
+                bool eq = back.maps.size() == mod.maps.size();
+                for (int i = 0; i < back.maps.size() && eq; ++i) {
+                    eq &= back.maps[i].poskey == mod.maps[i].poskey;
+                    eq &= back.maps[i].layers.size() == mod.maps[i].layers.size();
+                    for (int j = 0; eq && j < back.maps[i].layers.size(); ++j) {
+                        eq &= back.maps[i].layers[j].value == mod.maps[i].layers[j].value;
+                        eq &= back.maps[i].layers[j].type == mod.maps[i].layers[j].type;
+                    }
+                }
+                struct_ok = eq ? 1 : 0;
+            }
+        }
+    }
+    std::printf("%-64s %7lld B  RT=%s IDOM=%s %s=%d/%d %s=%d/%d %s=%d/%d  counts_ok=%d struct=%d editdiff=%d\n",
         path.toUtf8().constData(), (long long)raw.size(), same ? "EXACT" : "LOSSY",
         idem ? "OK" : "NO",
         "MAP", rows[0].oldc, rows[0].domc, "LAYER", rows[2].oldc, rows[2].domc,
-        "Value", rows[4].oldc, rows[4].domc, mism, diffcount);
-    return (same && idem && !mism) ? 0 : 3;
+        "Value", rows[4].oldc, rows[4].domc, mism, struct_ok, diffcount);
+    return (same && idem && !mism && struct_ok == 1) ? 0 : 3;
 }
 
 int main(int argc, char **argv)

@@ -18,6 +18,83 @@ static int append_text(DomDoc &out, const QByteArray &t)
     return idx;
 }
 
+#include <algorithm>
+
+// --- Phase 1: structural DOM edit helpers ------------------------------
+static int dom_clone(DomDoc &d, int src)
+{
+    const DomSlot copy = d.pool[src];   // value copy: realloc-safe
+    DomSlot ns;
+    ns.name = copy.name;
+    ns.selfclose = copy.selfclose;
+    for (int c : copy.children) {
+        const DomSlot cs = d.pool[c];
+        if (cs.is_text) {
+            const int ti = d.pool.size();
+            d.pool.append(DomSlot{});
+            d.pool[ti].is_text = true;
+            d.pool[ti].text = cs.text;
+            ns.children.append(ti);
+        } else {
+            ns.children.append(dom_clone(d, c));
+        }
+    }
+    const int idx = d.pool.size();
+    d.pool.append(ns);
+    return idx;
+}
+
+static int dom_new_elem(DomDoc &d, const QString &name, const QString &hexText)
+{
+    QVector<int> kids;
+    if (!hexText.isNull()) {
+        const int ti = d.pool.size();
+        d.pool.append(DomSlot{});
+        d.pool[ti].is_text = true;
+        d.pool[ti].text = hexText.toUtf8();
+        kids.append(ti);
+    }
+    const int idx = d.pool.size();
+    d.pool.append(DomSlot{});
+    d.pool[idx].name = name;
+    d.pool[idx].children = kids;
+    return idx;
+}
+
+static int dom_new_layer(DomDoc &d)
+{
+    const int te = dom_new_elem(d, QStringLiteral("Type"), QString());
+    const int ve = dom_new_elem(d, QStringLiteral("Value"), QString());
+    const int le = d.pool.size();
+    d.pool.append(DomSlot{});
+    d.pool[le].name = QStringLiteral("LAYER");
+    d.pool[le].children = {te, ve};
+    return le;
+}
+
+static int dom_new_map(DomDoc &d, int poskey)
+{
+    const int pk = dom_new_elem(d, QStringLiteral("POSKey"),
+                                to_hex_cp1252(QString::number(poskey)));
+    const int me = d.pool.size();
+    d.pool.append(DomSlot{});
+    d.pool[me].name = QStringLiteral("MAP");
+    d.pool[me].children = {pk};
+    return me;
+}
+
+static void dom_erase_child(DomDoc &d, int parent, int child)
+{
+    QVector<int> &kids = d.pool[parent].children;
+    kids.erase(std::find(kids.begin(), kids.end(), child));
+}
+
+static int dom_poskey(const DomDoc &d, int mapIdx)
+{
+    const int pk = dom_find_child(d, mapIdx, QStringLiteral("POSKey"));
+    return pk >= 0 ? unhex_cp1252(dom_text(d, pk)).toInt() : -1;
+}
+
 static bool parse_element(const QByteArray &raw, int &i, DomDoc &out,
                           int &slot_out, int depth)
 {
@@ -139,7 +216,7 @@ static void ser_node(const DomDoc &d, int slot, QByteArray &out)
 {
     const DomSlot &s = d.pool[slot];
     if (s.is_text) { out += s.text; return; }
-    if (s.selfclose) { out += '<' + s.name.toUtf8() + " />"; return; }
+    if (s.selfclose && s.children.isEmpty()) { out += '<' + s.name.toUtf8() + " />"; return; }
     out += '<' + s.name.toUtf8() + '>';
     for (int c : s.children)
         ser_node(d, c, out);
@@ -232,42 +309,70 @@ static QByteArray dom_apply_model_impl(DomDoc &d, const Pmap &pm, QString &err)
                              format_hex_like(dom_text(d, ne), to_hex_cp1252(pm.name))
                              .toUtf8());
     const int mapping = dom_find_child(d, root, QStringLiteral("MAPPING"));
-    const QVector<int> domMaps = mapping >= 0 ? dom_find_all(d, mapping, QStringLiteral("MAP")) : QVector<int>{};
-    if (domMaps.size() != pm.maps.size()) {
-        err = QStringLiteral("SAVE BLOCKED: structural edit (maps %1->%2) not yet supported — Phase 1"
-        ).arg(domMaps.size()).arg(pm.maps.size());
-        return {};
+    if (mapping < 0) { err = QStringLiteral("SAVE BLOCKED: no MAPPING block"); return {}; }
+    // 1) remove DOM MAPs the model dropped (poskey identity, order-safe loop)
+    for (int me : dom_find_all(d, mapping, QStringLiteral("MAP"))) {
+        bool keep = false;
+        const int p = dom_poskey(d, me);
+        for (const Map &m : pm.maps)
+            if (m.poskey == p) { keep = true; break; }
+        if (!keep && p >= 0)
+            dom_erase_child(d, mapping, me);
     }
-    for (int i = 0; i < domMaps.size(); ++i) {
-        const int me = domMaps[i];
-        const int pk = dom_find_child(d, me, QStringLiteral("POSKey"));
-        if (pk < 0) { err = QStringLiteral("SAVE BLOCKED: MAP without POSKey"); return {}; }
-        if (view.maps[i].poskey != pm.maps[i].poskey) {
-            err = QStringLiteral("SAVE BLOCKED: structural edit (POSKey %1->%2) not yet supported"
-            ).arg(view.maps[i].poskey).arg(pm.maps[i].poskey);
-            return {};
+    // 2) per model map: reuse, clone (style donor = first DOM MAP) or synth
+    for (const Map &m : pm.maps) {
+        int me = -1;
+        bool fresh = false;
+        for (int cand : dom_find_all(d, mapping, QStringLiteral("MAP")))
+            if (dom_poskey(d, cand) == m.poskey) { me = cand; break; }
+        if (me < 0) {
+            fresh = true;
+            const QVector<int> donors = dom_find_all(d, mapping, QStringLiteral("MAP"));
+            if (!donors.isEmpty()) {
+                me = dom_clone(d, donors.first());
+                if (const int pk = dom_find_child(d, me, QStringLiteral("POSKey")); pk >= 0)
+                    dom_set_text(d, pk, to_hex_cp1252(QString::number(m.poskey))
+                                 .toUtf8());   // digits: no case issue
+                else { dom_erase_child(d, mapping, me); me = dom_new_map(d, m.poskey); }
+                d.pool[mapping].children.append(me);
+            } else {
+                me = dom_new_map(d, m.poskey);
+                d.pool[mapping].children.append(me);
+            }
         }
-        const QVector<int> domLayers = dom_find_all(d, me, QStringLiteral("LAYER"));
-        if (domLayers.size() != view.maps[i].layers.size()
-            || view.maps[i].layers.size() != pm.maps[i].layers.size()) {
-            err = QStringLiteral("SAVE BLOCKED: structural edit on POSKey %1 (layers %2->%3) not yet supported"
-            ).arg(pm.maps[i].poskey).arg(view.maps[i].layers.size()).arg(pm.maps[i].layers.size());
-            return {};
-        }
-        for (int j = 0; j < domLayers.size(); ++j) {
-            // rewrite ONLY the fields that differ from the file
-            if (view.maps[i].layers[j].type != pm.maps[i].layers[j].type)
+        // POSKey text style untouched on reuse; layers:
+        const int vmi = [&]() {           // view map with same poskey, if any
+            for (int i = 0; i < view.maps.size(); ++i)
+                if (view.maps[i].poskey == m.poskey) return i;
+            return -1; }();
+        const QVector<Layer> vlay = vmi >= 0 ? view.maps[vmi].layers
+                                             : QVector<Layer>{};
+        QVector<int> domLayers = dom_find_all(d, me, QStringLiteral("LAYER"));
+        for (int j = 0; j < domLayers.size() && j < m.layers.size(); ++j) {
+            const Layer &src = m.layers[j];
+            const Layer &old = j < vlay.size() ? vlay[j] : Layer{};
+            if (fresh || old.type != src.type)
                 if (const int te = dom_find_child(d, domLayers[j], QStringLiteral("Type")); te >= 0)
                     if (!dom_set_text(d, te,
-                        format_hex_like(dom_text(d, te), to_hex_cp1252(pm.maps[i].layers[j].type))
-                        .toUtf8()))
+                        format_hex_like(dom_text(d, te), to_hex_cp1252(src.type)).toUtf8()))
                         { err = QStringLiteral("SAVE BLOCKED: ambiguous Type text"); return {}; }
-            if (view.maps[i].layers[j].value != pm.maps[i].layers[j].value)
+            if (fresh || old.value != src.value)
                 if (const int ve = dom_find_child(d, domLayers[j], QStringLiteral("Value")); ve >= 0)
                     if (!dom_set_text(d, ve,
-                        format_hex_like(dom_text(d, ve), to_hex_cp1252(pm.maps[i].layers[j].value))
-                        .toUtf8()))
+                        format_hex_like(dom_text(d, ve), to_hex_cp1252(src.value)).toUtf8()))
                         { err = QStringLiteral("SAVE BLOCKED: ambiguous Value text"); return {}; }
+        }
+        for (int j = m.layers.size(); j < domLayers.size(); ++j)
+            dom_erase_child(d, me, domLayers[j]);           // drop extra layers
+        const QVector<int> styleDonors = domLayers;
+        for (int j = domLayers.size(); j < m.layers.size(); ++j) {
+            const int le = !styleDonors.isEmpty() ? dom_clone(d, styleDonors.first())
+                                                  : dom_new_layer(d);
+            if (const int te = dom_find_child(d, le, QStringLiteral("Type")); te >= 0)
+                dom_set_text(d, te, to_hex_cp1252(m.layers[j].type).toUtf8());
+            if (const int ve = dom_find_child(d, le, QStringLiteral("Value")); ve >= 0)
+                dom_set_text(d, ve, to_hex_cp1252(m.layers[j].value).toUtf8());
+            d.pool[me].children.append(le);
         }
     }
     return dom_serialize(d);
