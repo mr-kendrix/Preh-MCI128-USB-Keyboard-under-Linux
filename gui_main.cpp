@@ -167,8 +167,9 @@ static void set_top_value(Pmap &pm, int poskey, const QString &value) {
     else m.layers.last().value = value;
 }
 
-static void add_layer(Pmap &pm, int poskey, const QString &value) {
-    ensure_map(pm, poskey).layers.append(Layer{QStringLiteral("TEXT"), value});
+static void add_layer(Pmap &pm, int poskey, const QString &value,
+                      const QString &type = QStringLiteral("TEXT")) {
+    ensure_map(pm, poskey).layers.append(Layer{type, value});
 }
 
 static void del_top_layer(Pmap &pm, int poskey) {
@@ -382,7 +383,8 @@ static int gate_smoke(Model &m) {
 }
 
 static int gate_click(Model &m, const QStringList &cells, const QString &setv,
-                      const QString &addv, bool del, const QString &out) {
+                      const QString &addv, bool del, const QString &out,
+                      const QString &addtype = QString()) {
     m.cells = layout_cells(QSize(1024, 512));   // board the gates simulate
     QString rep;
     for (const QString &spec : cells) {
@@ -396,7 +398,8 @@ static int gate_click(Model &m, const QStringList &cells, const QString &setv,
         const int n_before = before ? before->layers.size() : -1;
         if (addv.isNull() && setv.isNull() && !del) m.sel = pk; // pure select
         if (!setv.isNull()) set_top_value(m.pm, pk, setv);
-        if (!addv.isNull()) add_layer(m.pm, pk, addv);
+        if (!addv.isNull()) add_layer(m.pm, pk, addv,
+                                      addtype.isNull() ? QStringLiteral("TEXT") : addtype);
         if (del) del_top_layer(m.pm, pk);
         const Map *after = find_map_c(m.pm, pk);
         rep += QStringLiteral("%1 pk=%2 layers %3->%4 val='%5'; ")
@@ -459,6 +462,7 @@ int main(int argc, char **argv) {
     Model m;
     QStringList cells;
     QString path, shot, setv, addv, out, mode, mwx;
+    QString addtype;                       // --addtype TYPE (else TEXT)
     bool del = false, have_set = false, have_add = false, up_arm = false;
     QString calib;
     for (int i = 1; i < argc; ++i) {
@@ -474,6 +478,10 @@ int main(int argc, char **argv) {
             for (const QString &t : v.split(sep)) if (!t.isEmpty()) cells << t; }
         else if (a == "--set") { mode = "click"; next(setv); have_set = true; }
         else if (a == "--add") { mode = "click"; next(addv); have_add = true; }
+        else if (a == "--addtype") {                 // vendor ACTION layers
+            mode = "click";
+            next(addtype); next(addv); have_add = true;
+        }
         else if (a == "--del") { mode = "click"; del = true; }
         else if (a == "--arm-upload") up_arm = true;
         else if (a == "--calib") next(calib);
@@ -481,6 +489,8 @@ int main(int argc, char **argv) {
         else if (a == "--mwx") next(mwx);
         else if (a == "--save") next(out);
         else if (a == "--undo") mode = "undo";
+        else if (a == "--panel") mode = "panel";
+        else if (a == "--validate") mode = "validate";
         else if (!a.startsWith("--")) path = a;
     }
 
@@ -498,7 +508,7 @@ int main(int argc, char **argv) {
         // undo chain: run the save first (if edit args given), then pop stack
         if (!cells.isEmpty() || have_set || have_add || del)
             gate_click(m, cells, have_set ? setv : QString(), have_add ? addv : QString(),
-                       del, out);
+                       del, out, have_add ? addtype : QString());
         if (g_undo.isEmpty()) { std::printf("undo: stack empty\n"); return 1; }
         const QPair<QString, QByteArray> &last = g_undo.last();
         const QString e = write_atomic(last.first, last.second);
@@ -506,6 +516,30 @@ int main(int argc, char **argv) {
                     (long long)last.second.size(), e.isEmpty() ? "OK" : e.toUtf8().constData());
         g_undo.removeLast();
         return e.isEmpty() ? 0 : 1;
+    }
+    if (mode == "panel") {          // per-key editor view: layers with vendor TYPE
+        std::printf("PANEL maps=%d\n", int(m.pm.maps.size()));
+        for (const Map &mp : m.pm.maps) {
+            QString l;
+            for (const Layer &ly : mp.layers)
+                l += QStringLiteral(" %1='%2'").arg(ly.type).arg(ly.value);
+            std::printf("  poskey=%-4d %s\n", mp.poskey, l.trimmed().toUtf8().constData());
+        }
+        return 0;
+    }
+    if (mode == "validate") {       // layer types the executor/model knows about
+        static const QSet<QString> known{QStringLiteral("TEXT"), QStringLiteral("APPLICATION"),
+                                         QStringLiteral("WEBSITE")};
+        QSet<QString> seen;
+        int unknown = 0;
+        for (const Map &mp : m.pm.maps)
+            for (const Layer &ly : mp.layers)
+                if (!known.contains(ly.type.toUpper())) { seen.insert(ly.type); ++unknown; }
+        QStringList sn;
+        for (const QString &s : seen) sn << s;
+        std::printf("VALIDATE layers-types-unknown=%d %s\n", unknown,
+                    sn.join(QLatin1Char(' ')).toUtf8().constData());
+        return unknown == 0 ? 0 : 1;
     }
     if (mode == "smoke") return gate_smoke(m);
     if (mode == "watch") {
@@ -552,7 +586,7 @@ int main(int argc, char **argv) {
     }
     if (mode == "click" || !cells.isEmpty())
         return gate_click(m, cells, have_set ? setv : QString(), have_add ? addv : QString(),
-                          del, out);
+                          del, out, have_add ? addtype : QString());
 
     // live window
     static char off1[] = "--platform";

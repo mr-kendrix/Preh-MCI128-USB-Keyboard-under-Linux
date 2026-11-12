@@ -112,11 +112,11 @@ static int run_file(const QString &path)
             }
         }
     }
-    std::printf("%-64s %7lld B  RT=%s IDOM=%s %s=%d/%d %s=%d/%d %s=%d/%d  counts_ok=%d struct=%d editdiff=%d\n",
-        path.toUtf8().constData(), (long long)raw.size(), same ? "EXACT" : "LOSSY",
-        idem ? "OK" : "NO",
-        "MAP", rows[0].oldc, rows[0].domc, "LAYER", rows[2].oldc, rows[2].domc,
-        "Value", rows[4].oldc, rows[4].domc, mism, struct_ok, diffcount);
+    std::printf("%-64s ", path.toUtf8().constData());
+    for (const Row &r : rows) std::printf("%s=%d/%d ", r.tag, r.oldc, r.domc);
+    std::printf("%7lld B  RT=%s IDOM=%s counts_ok=%d struct=%d editdiff=%d\n",
+        (long long)raw.size(), same ? "EXACT" : "LOSSY", idem ? "OK" : "NO",
+        int(mism == 0), struct_ok, diffcount);
     return (same && idem && !mism && struct_ok == 1) ? 0 : 3;
 }
 

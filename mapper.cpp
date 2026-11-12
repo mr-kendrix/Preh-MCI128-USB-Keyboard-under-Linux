@@ -18,6 +18,8 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <sys/wait.h>
 
 namespace pktm {
 
@@ -225,6 +227,67 @@ QHash<int, int> load_calib_json(const QString &path) {
         m.insert(k.toInt(nullptr, 16), it.value().toInteger());
     }
     return m;
+}
+
+// ---- Phase-1b vendor ACTION layers (WEBSITE/APPLICATION) ---------------
+bool layer_is_action(const Layer &l)
+{
+    return l.type.compare(QStringLiteral("WEBSITE"), Qt::CaseInsensitive) == 0
+        || l.type.compare(QStringLiteral("APPLICATION"), Qt::CaseInsensitive) == 0;
+}
+
+QString action_command(const Layer &l, QString &why)
+{
+    why.clear();
+    if (l.value.isEmpty()) { why = QStringLiteral("action layer: empty value"); return {}; }
+    if (l.value.contains(QLatin1Char('\'')) || l.value.contains(QLatin1Char('`'))
+        || l.value.contains(QLatin1Char('"'))) {
+        why = QStringLiteral("action value: unquoted quotes"); return {};
+    }
+    if (l.type.compare(QStringLiteral("WEBSITE"), Qt::CaseInsensitive) == 0) {
+        QString u = l.value.trimmed();
+        const bool http = u.startsWith(QStringLiteral("http://"), Qt::CaseInsensitive)
+                          || u.startsWith(QStringLiteral("https://"), Qt::CaseInsensitive);
+        if (!http && u.contains(QLatin1Char(':'))) {
+            why = QStringLiteral("website: non-http scheme"); return {};
+        }
+        if (!http) u = QStringLiteral("https://") + u;
+        return QStringLiteral("xdg-open '%1' > /dev/null 2>&1").arg(u);
+    }
+    // APPLICATION: the vendor samples store WINDOWS paths (C:\\...\\notepad.exe)
+    // — cannot exec those on Linux: refuse honestly, never wine-spawn on a keypress.
+    if (l.value.contains(QLatin1Char('\\'))
+        || (l.value.size() >= 2 && l.value[0].isLetter() && l.value[1] == QLatin1Char(':'))) {
+        why = QStringLiteral("application: windows path, no linux exec"); return {};
+    }
+    return l.value.trimmed();
+}
+
+void spawn_detached(const QString &cmdline)
+{
+    const pid_t p = ::fork();
+    if (p == 0) {
+        const pid_t q = ::fork();
+        if (q == 0) {
+            ::setsid();
+            for (int fd = 0; fd < 1024; ++fd) ::close(fd); // hidraw/lock/ydot fds
+                                                   // must not leak into sh
+            const int rd = ::open("/dev/null", O_RDONLY | O_CLOEXEC);
+            if (rd >= 0) { ::dup(rd); ::close(rd); }        // lands on fd 0
+            const int wr = ::open("/dev/null", O_WRONLY | O_CLOEXEC);
+            if (wr >= 0) { ::dup(wr); ::dup(wr); ::close(wr); } // fds 1 and 2
+            const static char *sh = "/bin/sh";
+            const static char *c = "-c";
+            const QByteArray cb = cmdline.toUtf8();
+            const char *av[] = { sh, c, cb.data(), nullptr };
+            ::execvp(sh, (char **)av);
+            _exit(127);
+        }
+        _exit(0);
+    } else if (p > 0) {
+        int st = 0;
+        ::waitpid(p, &st, 0);   // intermediate exits immediately; no zombie
+    }
 }
 
 // board-checksum stamp written by a human/pktup when calib was recorded:

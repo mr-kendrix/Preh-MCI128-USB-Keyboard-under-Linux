@@ -73,4 +73,16 @@ QString calib_board_chk(const QString &path);  // "_board_chk" stamp or empty
 // sweep sends in a SIGTERM handler; -1 if none.
 int ydot_sweep_fd();
 
+// ---- Phase-1b vendor ACTION layers ---------------------------------------
+// PKT Mapper stores non-typing actions as layers: Type=WEBSITE (Value=URL,
+// "open a webpage") and Type=APPLICATION (Value=program, "start a program").
+bool layer_is_action(const Layer &l);
+// command to exec (xdg-open 'url' / APPLICATION command); empty -> refused,
+// why = reason. CAUTION: the string comes from the user's OWN pmap and is run
+// via /bin/sh -c — editor-config trust, same as PKT Mapper on Windows.
+QString action_command(const Layer &l, QString &why);
+// fire-and-forget spawn: double-fork (init reparents, no zombies), close every
+// inherited fd (hidraw/lock/ydot fds must not leak into sh), exec /bin/sh -c.
+void spawn_detached(const QString &cmdline);
+
 }

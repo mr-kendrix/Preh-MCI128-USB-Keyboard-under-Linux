@@ -339,3 +339,16 @@ YDOTOOL_SOCKET=/tmp/.does-not-exist ./b/pktm ...  # error: + rc=2
 # window probe now validates exit status: kdotool with bad Plasma -> nonzero exit ->
 #   fail-closed '<unknown-window>' (was: stdout-blind parse); stderr warning logged ONCE.
 ```
+
+## Phase 1b — vendor ACTION layers (2026-11-13)
+
+- Ground truth from vendor samples (`BeispielMCI30.pmap`): `<LAYER><Type>` ∈ {TEXT, APPLICATION, WEBSITE}; APPLICATION Value = Windows path (`C:\WINDOWS\explorer.exe`), WEBSITE = `www.prehkeytec.de`.
+- pktm: `layer_is_action/action_command/spawn_detached` (mapper.cpp). WEBSITE → `xdg-open` (https:// prefix if no scheme, non-http schemes REFUSED). APPLICATION with backslashes or `X:` drive prefix → REFUSED (windows path, honest). Linux path → `/bin/sh -c` spawn.
+- spawn_detached: DOUBLE-fork (grandchild re-parented to init — no zombies), child closes ALL fds 0..1023 before exec (hidraw fd, flock lock file, ydot socket must never leak into sh — a sh inheriting the lock fd would hold the peer lock and block pktd), stdin/out → /dev/null. Config-file trust note documented.
+- live/dry paths wired BEFORE typing: dry prints `action='WEBSITE url (would spawn: …)' rule-match=YES`; live spawns detached and types nothing. `--rules-report` now carries `type='%s'`.
+- GUI: `--addtype TYPE VALUE` (DOM clone-style keeps sibling shape; model Layer{type,value}); `--panel` per-key layer view (TYPE='value' per line); `--validate` = types ∉ {TEXT,APPLICATION,WEBSITE} listed + count (rc 1 if unknown).
+- Fixture `fixtures/p1_action.pmap` (no `<?xml` prolog — vendor pmaps have none; prolog would hit the `=`-reject in parse_element): pmaprt RT=EXACT IDOM=OK counts_ok=1 struct=1; all 3 rules dry-printed (windows-path REFUSED confirmed).
+- LIVE spawn gate: `--feed-hex '04 02 00 00 04 FE 00 00'` calib 0x0002→POSKey 2 → `POSKey 2 -> ACTION APPLICATION '/bin/sleep 30' -> spawned detached`; sleep alive after pktm exits (PID pgrep), no zombie, cleanup verified.
+- GUI add-WEBSITE on Mr.Kendrix H12: 32 maps/49 layers, `--validate` rc=0, panel shows WEBSITE layer; `--addtype … --save … --undo` in ONE run → byte-IDENTICAL to vendor original.
+- pmaprt printout extended: row table now shows ALL 5 rows (POSKey/Type were hidden before) and `counts_ok=` prints the boolean `!(any row mismatch)` (gate always required zero mismatches); vendor + fixtures all show counts_ok=1.
+- UNVERIFIED (accepted): xdg-open spawn under a real desktop session (spawned process verified via /bin/sleep; browser launch is the same exec path). APPLICATION windows-path could be mapped via wine/drive mappings — deliberately refused, not guessed.

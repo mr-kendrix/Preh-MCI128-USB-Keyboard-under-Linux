@@ -160,9 +160,9 @@ int main(int argc, char **argv) {
             if (l.slow == QStringLiteral("True")) flags += QStringLiteral("+SLOW");
             if (flags.isEmpty()) flags = QStringLiteral("-");
             const QByteArray v = l.value.toUtf8(), d = dep.toUtf8(), fg = flags.toUtf8();
-            std::printf("poskey=%d value='%s' dep='%s' flags=%s layers=%d\n",
-                        r.poskey, v.constData(), d.constData(), fg.constData(),
-                        int(r.layers.size()));
+            std::printf("poskey=%d type='%s' value='%s' dep='%s' flags=%s layers=%d\n",
+                        r.poskey, l.type.toUtf8().constData(), v.constData(),
+                        d.constData(), fg.constData(), int(r.layers.size()));
         }
         return 0;
     }
@@ -378,7 +378,22 @@ int main(int argc, char **argv) {
             }
             QVector<QPair<int, int>> seq;
             QString why;
-            if (!value_script(*hit, hit->layers[sel], seq, why)) {
+            const Layer &L = hit->layers[sel];
+            if (layer_is_action(L)) {           // vendor ACTION layer: exec, not typing
+                const QString cmd = action_command(L, why);
+                if (cmd.isEmpty())
+                    std::printf("POSKey %d -> ACTION %s '%s' -> REFUSED (%s), nothing run\n",
+                                pk, L.type.toUtf8().constData(),
+                                L.value.toUtf8().constData(), why.toUtf8().constData());
+                else {
+                    std::printf("POSKey %d -> ACTION %s '%s' -> spawned detached '%s'\n",
+                                pk, L.type.toUtf8().constData(),
+                                L.value.toUtf8().constData(), cmd.toUtf8().constData());
+                    spawn_detached(cmd);
+                }
+                return;
+            }
+            if (!value_script(*hit, L, seq, why)) {
                 std::printf("POSKey %d -> %s -> REFUSED, nothing injected\n",
                             pk, why.toUtf8().constData());
                 return;
@@ -613,6 +628,17 @@ int main(int argc, char **argv) {
         if (r.poskey == poskey) { hit = &r; break; }
     int idx = hit ? match_layer(*hit, proc, win) : -1;
     QString typed;
+    if (hit && idx >= 0 && layer_is_action(hit->layers[idx])) {
+        const Layer &L = hit->layers[idx];
+        QString why;
+        const QString cmd = action_command(L, why);
+        typed = cmd.isEmpty() ? why + QStringLiteral(" -> REFUSED")
+                              : L.type + QStringLiteral(" ") + L.value
+                                + QStringLiteral(" (would spawn: %1)").arg(cmd);
+        std::printf("POSKey %d window='%s' action='%s' rule-match=YES\n",
+                    poskey, active_window().toUtf8().constData(), typed.toUtf8().constData());
+        return 0;
+    }
     if (idx >= 0) {
         QVector<QPair<int, int>> seq;
         QString why;
