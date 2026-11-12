@@ -289,6 +289,28 @@ pktm --dry-inject 91: window resolved + rule-match YES (Blender focused at probe
 - UNVERIFIED-by-me: vendor MapMyKey opening a GUI-saved copy (human check if
   the Windows tool is available); undo is NOT the backup — Phase 1 adds undo.
 
+## Phase 1a: DOM-native structural edit + undo (2026-11-12, 0988143)
+
+- dom_apply_model now edits STRUCTURALLY: add layers (clone style from first
+  existing LAYER of the map, or synth), remove layers, add MAPs (clone from
+  donor w/ POSKey restamp + forced texts, else synth), remove MAPs by poskey
+  identity. fresh=true forces texts on cloned subtrees (donor values never
+  leak). selfclose serialize condition: `<X />` ONLY while children empty
+  (fix: adding to empty <MAPPING /> now emits open form — pmaprt caught it).
+- pmaprt struct test: mod = view + layer@map0 + NEW map 999 - last map;
+  apply→reparse→serialize==bytes→view==mod. struct=1 on all 4 samples
+  (incl. <MAPPING /> empty-form files), fails=0.
+- Undo: save_pmap pushes (path, raw-bytes) to g_undo (cap 50); CLI --undo pops
+  and write_atomic restores BYTE-EXACT (chain test: add layer then undo ->
+  cmp IDENTICAL). GUI undo button wiring = Phase 1b (API + CLI proven now).
+- Real-file gates: H12 --add -> 32 maps / 49 layers saved (byte-level cmp
+  = that one LAYER block inserted); H12 --del -> 47 layers, maps untouched.
+- write_atomic refactor: one function (temp+write-check+fsync+rename) used by
+  save and undo.
+- Known cosmetic: removing an element keeps the surrounding whitespace text
+  nodes -> possible double-newline; XML-valid, vendor tolerant (verify on
+  Windows tool if in doubt). Not byte-preserving for REORDER operations.
+
 ## Repro (headless)
 
 ```bash
