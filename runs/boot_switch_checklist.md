@@ -30,7 +30,8 @@ after pktm ran for days.
 - [ ] TimeoutStopSec=10 + Restart=on-failure in place (sweep before SIGKILL, mappings back)
 
 ## C. Rollback (always available, one command each way)
-- back to pktd: `kill <pktm-pid>; sudo systemctl start pktd.service`
+- back to pktd: Ctrl-C if pktm was started by hand; `systemctl --user stop pktm.service`
+  if it runs as a service — then `sudo systemctl start pktd.service`
 - sanity: `journalctl --user -u pktm.service -b | tail`, `ls -l /dev/input/by-id/*hidraw`
 - single-consumer reminder: while pktm runs, ONLY POSKeys work — by OUR flock policy,
   not an OS limit (hidraw nodes allow multiple readers; the OTHER daemon refuses to

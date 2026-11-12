@@ -1,6 +1,6 @@
 # kdotool upstream — issue draft (corrected per review, 2026-11-11)
 
-**Title: Version check rejects environments without KDE_SESSION_VERSION (systemd user services, systemd user services, TTY logins)**
+**Title: Version check rejects environments without KDE_SESSION_VERSION (systemd user services, TTY/SSH sessions)**
 
 The same check occurs twice: `src/main.rs:615` AND `src/lib.rs:68` (library path
 gets the same limitation):
@@ -22,7 +22,7 @@ Minimal reproduction (Plasma 6.8.2, kdotool v0.3.0):
 $ env -u KDE_SESSION_VERSION kdotool getactivewindow getwindowname
 Error: Unsupported KDE version. kdotool only supports KDE Plasma 6.
 $ KDE_SESSION_VERSION=6 kdotool getactivewindow getwindowname
-* (Unsaved) - Blender 5.2.3 LTS
+* Untitled — Kate        # neutral example; any window title
 ```
 
 Proposal (maintainers decide; the Plasma-6-only restriction itself is deliberate):
