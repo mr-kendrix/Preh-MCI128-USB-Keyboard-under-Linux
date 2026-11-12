@@ -273,6 +273,22 @@ pktm --dry-inject 91: window resolved + rule-match YES (Blender focused at probe
   (vendor used lowercase, to_hex_cp1252 uppercases; semantics identical),
   675 unknown tags byte-identical; --add -> SAVE BLOCKED, file UNTOUCHED.
 
+## Phase 0b: review fixes on the save path (2026-11-12, a8156bb)
+
+- dom_apply_model now diffs against dom_view(file) — ONLY changed fields are
+  rewritten, in the ORIGINAL hex case (format_hex_like); unedited files save
+  as no-op (no backup, no rewrite), one-layer edit = exactly that element
+  differs (verified prefix/suffix on Mr.Kendrix.pmap and on repo fixture).
+- Repo fixture fixtures/p0_synth.pmap: lowercase hex + cp1252 UNDEFINED bytes
+  0x81/0x8D in a Value — round trip EXACT, edit writes lowercase style.
+- save_pmap: backup-write failure ABORTS (short write detected), temp write
+  byte-count checked + ::fsync(fd) before rename, backup rotation keeps 30
+  newest pmap_backup_* (lexicographic == timestamp).
+- pmaprt adds IDOM (apply(view)==raw byte-exact) per file + MISSING→SKIP for
+  repo-independent gating; negative tests unchanged.
+- UNVERIFIED-by-me: vendor MapMyKey opening a GUI-saved copy (human check if
+  the Windows tool is available); undo is NOT the backup — Phase 1 adds undo.
+
 ## Repro (headless)
 
 ```bash
