@@ -7,10 +7,14 @@ set(CMAKE_CXX_STANDARD 20)
 set(PKT_SRC pmap.cpp transport.cpp)
 
 add_executable(pktest test_main.cpp ${PKT_SRC})
-add_executable(pkteditor gui_main.cpp upload.cpp ${PKT_SRC})
+add_executable(pkteditor gui_main.cpp upload.cpp pmap_dom.cpp ${PKT_SRC})
 add_executable(pktxc pktxc_main.cpp pktxc.cpp)
 # LB5 upload engine + gate (own target: upload.cpp needs Qt6 Widgets, pktest must not)
 add_executable(pktup upload_main.cpp upload.cpp pmap.cpp transport.cpp)
+# Phase 0 (2026-11-12): lossless pmap DOM round-trip gate + lib for GUI/CLI
+add_executable(pmaprt pmap_rt_main.cpp pmap_dom.cpp pmap.cpp)
+target_include_directories(pmaprt PRIVATE /usr/include/qt6 /usr/include/qt6/QtCore)
+target_link_libraries(pmaprt PRIVATE Qt6Core)
 
 foreach(t IN ITEMS pktest pkteditor pktup)
   target_include_directories(${t} PRIVATE /usr/include/qt6 /usr/include/qt6/QtCore)

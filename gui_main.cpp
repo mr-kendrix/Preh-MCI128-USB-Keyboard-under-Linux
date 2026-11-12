@@ -30,14 +30,22 @@
 #include <QFile>
 #include <QTextStream>
 #include <cstdio>
+#include <cerrno>
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <filesystem>
+#include <system_error>
 #include <QHash>
 #include <QSet>
 #include <QTimer>
 #include <vector>
 #include "pmap.h"
+#include "pmap_dom.h"
+#include <QSaveFile>
+#include <QDateTime>
+#include <QFileInfo>
+#include <QDir>
 #include "upload.h"
 #include "transport.h"
 
@@ -232,22 +240,66 @@ static int cell_at(const Model &m, const QPoint &p) {
 // ------------------------------------------------------------------- save ----
 
 static QString save_pmap(Model &m, const QString &path) {
-    const QString xml = serialize_pmap(m.pm);
+    // Phase 0 (2026-11-12): lossless DOM path — original bytes + targeted text
+    // edits only; structural changes refused (Phase 1). Backup + atomic write.
     QFile f(path);
-    if (!f.open(QIODevice::WriteOnly)) return QStringLiteral("SAVE FAILED: %1").arg(path);
-    f.write(xml.toUtf8());
+    if (!f.open(QIODevice::ReadOnly))
+        return QStringLiteral("SAVE FAILED: cannot read original %1").arg(path);
+    const QByteArray raw = f.readAll();
     f.close();
-    QFile r(path);
-    const Pmap back = r.open(QIODevice::ReadOnly) ? parse_pmap(r.readAll()) : Pmap{};
-    int layers_back = 0;
-    for (const Map &mm : back.maps) layers_back += mm.layers.size();
+    DomDoc d;
+    if (!dom_parse(raw, d))
+        return QStringLiteral("SAVE BLOCKED: file not in supported pmap dialect");
+    if (dom_serialize(d) != raw)
+        return QStringLiteral("SAVE BLOCKED: round trip not byte-exact, refusing");
+    QString err;
+    const QByteArray out = dom_apply_model(d, m.pm, err);
+    if (!err.isEmpty())
+        return err;
     int layers_here = 0;
     for (const Map &mm : m.pm.maps) layers_here += mm.layers.size();
-    const bool stable = back.name == m.pm.name && back.maps.size() == m.pm.maps.size()
+    if (out == raw)
+        return QStringLiteral("saved %1 maps / %2 layers (no changes to write)")
+               .arg(m.pm.maps.size()).arg(layers_here);
+    // backup of the ORIGINAL before overwrite
+    const QString bakdir = QStringLiteral("%1/.local/share/pkteditor")
+                              .arg(QDir::homePath());
+    QDir().mkdir(bakdir);
+    const QString stamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_Hhmmss"));
+    const QString bakk = QStringLiteral("%1/pmap_backup_%2_%3")
+                            .arg(bakdir)
+                            .arg(stamp)
+                            .arg(QFileInfo(path).fileName());
+    { QFile bk(bakk);
+      if (bk.open(QIODevice::WriteOnly)) { bk.write(raw); bk.close(); } }
+    // atomic write: temp + rename (same as QSaveFile does internally)
+    const QString tmp = QStringLiteral("%1.tmp_%2").arg(path).arg(stamp);
+    { QFile tf(tmp);
+      if (!tf.open(QIODevice::WriteOnly))
+          return QStringLiteral("SAVE FAILED: cannot open temp");
+      tf.write(out);
+      tf.close(); }
+    {      std::error_code ec;
+      std::filesystem::rename(std::filesystem::path(tmp.toStdString()),
+                              std::filesystem::path(path.toStdString()), ec);
+      if (ec) {
+          QFile::remove(tmp);
+          return QStringLiteral("SAVE FAILED: rename error %1").arg(ec.message().c_str());
+      } }
+    // verify: re-read parses + RT exact + model view survives
+    QFile r(path);
+    const QByteArray reread = r.open(QIODevice::ReadOnly) ? r.readAll() : QByteArray();
+    DomDoc d2;
+    if (!dom_parse(reread, d2) || dom_serialize(d2) != reread)
+        return QStringLiteral("SAVE VERIFIED-FAIL: re-read inconsistent");
+    const Pmap back = parse_pmap(QString::fromLatin1(reread));
+    int layers_back = 0;
+    for (const Map &mm : back.maps) layers_back += mm.layers.size();
+    const bool stable = back.name == m.pm.name
+                        && back.maps.size() == m.pm.maps.size()
                         && layers_back == layers_here;
-    return QStringLiteral("saved %1 maps / %2 layers / %3 bytes -> reload %4 maps name '%5' STABLE=%6")
-               .arg(m.pm.maps.size()).arg(layers_here).arg(xml.size())
-               .arg(back.maps.size()).arg(back.name).arg(stable ? "yes" : "NO");
+    return QStringLiteral("saved %1 maps / %2 layers / DOM-lossless / atomic / backup %3 / reread STABLE=%4")
+           .arg(m.pm.maps.size()).arg(layers_here).arg(bakk).arg(stable ? "yes" : "NO");
 }
 
 // ------------------------------------------------------------------- gates ----
