@@ -1,4 +1,5 @@
 #pragma once
+#include "pmap.h"
 #include <QString>
 #include <QVector>
 #include <QByteArray>
@@ -77,6 +78,7 @@ int ydot_sweep_fd();
 // PKT Mapper stores non-typing actions as layers: Type=WEBSITE (Value=URL,
 // "open a webpage") and Type=APPLICATION (Value=program, "start a program").
 bool layer_is_action(const Layer &l);
+QString preview_map(const Map &mp, int idx1);   // LIVE PREVIEW: global ::Map (pmap.h), readable action
 // exec target as PROGRAM + ARGUMENT LIST — never a shell string: an action
 // value can never run a command line, only exec one binary with argv.
 // APPLICATION vendor dialect: "prog::arg1::arg2" (no expansion). Empty

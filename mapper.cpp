@@ -100,14 +100,15 @@ QVector<QPair<int, int>> evdev_sequence(const QString &text) {
 // faithfully. ev_key numbers verified against the XKB evdev keycodes table
 // (value = ev_key + 8: TAB 23->15, ESC 9->1, BKSP 22->14, DELE 119->111) and
 // the live journal ('5' -> key 6). Never guess an unknown token's meaning.
+// MACROS at file scope: macro_evdev AND preview (key_name) share the table.
+static const struct { const char *tok; int ev; } MACROS[] = {
+    {"N0",11},{"N1",2},{"N2",3},{"N3",4},{"N4",5},{"N5",6},{"N6",7},{"N7",8},
+    {"N8",9},{"N9",10},
+    {"BS",14},{"DEL",111},{"ESC",1},{"TAB",15},{"SPACE",57},{"ENTER",28},
+    {"UP",103},{"DOWN",108},{"LEFT",105},{"RIGHT",106},{"PGUP",104},{"PGDN",109},
+    {"SHIFT",42},{"CTRL",29},{"ALT",56},{"CAPS",58},{"NUMLOCK",69},{"SCROLL-LOCK",70},
+};
 static int macro_evdev(const QString &tok) {
-    static const struct { const char *tok; int ev; } MACROS[] = {
-        {"N0",11},{"N1",2},{"N2",3},{"N3",4},{"N4",5},{"N5",6},{"N6",7},{"N7",8},
-        {"N8",9},{"N9",10},
-        {"BS",14},{"DEL",111},{"ESC",1},{"TAB",15},{"SPACE",57},{"ENTER",28},
-        {"UP",103},{"DOWN",108},{"LEFT",105},{"RIGHT",106},{"PGUP",104},{"PGDN",109},
-        {"SHIFT",42},{"CTRL",29},{"ALT",56},{"CAPS",58},{"NUMLOCK",69},{"SCROLL-LOCK",70},
-    };
     for (const auto &e : MACROS)
         if (tok.compare(QString::fromUtf8(e.tok), Qt::CaseInsensitive) == 0) return e.ev;
     return -1;
@@ -229,6 +230,50 @@ QHash<int, int> load_calib_json(const QString &path) {
         m.insert(k.toInt(nullptr, 16), it.value().toInteger());
     }
     return m;
+}
+
+// ---- LIVE PREVIEW (GUI + --preview): reuses value_script/action_argv from
+// THIS file — preview and executor can never drift apart (review rule).
+static QString key_name(int ev) {
+    for (const auto &e : MACROS)
+        if (e.ev == ev) return QString::fromUtf8(e.tok);
+    for (const auto &e : CHARMAP)
+        if (e.evdev == ev) { QChar c(e.ch); if (c.isPrint() && !c.isSpace()) return QString(c); }
+    for (const auto &e : WORDS)
+        if (e.evdev == ev) return QString::fromUtf8(e.word).toUpper();
+    return QStringLiteral("code %1").arg(ev);
+}
+
+QString preview_map(const Map &mp, int idx1) {
+    if (mp.layers.isEmpty()) return QStringLiteral("EMPTY (no layer)");
+    const ::Layer &pl = mp.layers.at(qBound(1, idx1, mp.layers.size()) - 1);  // pmap Layer
+    const pktm::Layer l{pl.type, pl.value, pl.dependency};                    // executor Layer
+    QString out;
+    if (layer_is_action(l)) {
+        QString why;
+        const QVector<QString> av = action_argv(l, why);
+        if (av.isEmpty()) out = QStringLiteral("REJECTED: %1").arg(why);
+        else {
+            QStringList q;
+            for (const QString &a : av) q << QStringLiteral("'%1'").arg(a);
+            out = QStringLiteral("RUN %1 — only with 'pktm --live --allow-actions'").arg(q.join(' '));
+        }
+    } else {
+        pktm::Rule r; r.poskey = mp.poskey;
+        QVector<QPair<int, int>> seq; QString why;
+        if (!value_script(r, l, seq, why))
+            out = QStringLiteral("REJECTED: %1").arg(why);   // unmappable char etc. BEFORE save
+        else if (seq.isEmpty())
+            out = QStringLiteral("NOTHING (empty value)");
+        else {
+            QStringList parts;
+            for (const auto &p : seq)
+                parts << QStringLiteral("%1 %2").arg(key_name(p.first)).arg(p.second ? "down" : "up");
+            out = QStringLiteral("TYPES %1").arg(parts.join(", "));
+        }
+    }
+    if (!l.dep.isEmpty()) out += QStringLiteral("  (only while DEP '%1' matches)").arg(l.dep);
+    return out;
 }
 
 // ---- Phase-1b vendor ACTION layers (WEBSITE/APPLICATION) ---------------

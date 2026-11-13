@@ -48,6 +48,7 @@
 #include <vector>
 #include "pmap.h"
 #include "pmap_dom.h"
+#include "mapper.h"
 #include <QSaveFile>
 #include <QDateTime>
 #include <QFileInfo>
@@ -553,6 +554,7 @@ int main(int argc, char **argv) {
         else if (a == "--save") next(out);
         else if (a == "--undo") mode = "undo";
         else if (a == "--panel") mode = "panel";
+        else if (a == "--preview") mode = "preview";
         else if (a == "--validate") mode = "validate";
         else if (!a.startsWith("--")) path = a;
     }
@@ -567,6 +569,14 @@ int main(int argc, char **argv) {
         m.path = path;
     }
 
+    if (mode == "preview") {
+        if (m.pm.maps.isEmpty()) { std::printf("preview: pmap empty\n"); return 1; }
+        for (const Map &mp : m.pm.maps)
+            for (int i = 1; i <= mp.layers.size(); ++i)
+                std::printf("preview poskey=%d layer %d: %s\n", mp.poskey, i,
+                            pktm::preview_map(mp, i).toUtf8().constData());
+        return 0;
+    }
     if (mode == "undo") {
         // undo chain: run the save first (if edit args given), then pop stack
         if (!cells.isEmpty() || have_set || have_add || have_setdep || del)
@@ -722,6 +732,11 @@ int main(int argc, char **argv) {
     addbtn.setObjectName("add");   setbtn.setObjectName("set");   delbtn.setObjectName("del");
     depbtn.setObjectName("dep");   renbtn.setObjectName("ren");   copybtn.setObjectName("copy");
     savebtn.setObjectName("save"); undobtn.setObjectName("undo");
+    QPushButton prevbtn(QStringLiteral("Preview"), &win);
+    QLabel prevlbl(&win);
+    prevbtn.move(632, 700);
+    prevbtn.setObjectName("preview");
+    prevlbl.move(10, 726);
     // LB5: button + QProgressDialog + mapped errors, one mount (upload.h)
     UploadPanel upload(&win, &pm->pm, mwx,
                        up_arm || getenv("PKT_UPLOAD_ARM") != nullptr);
@@ -815,6 +830,15 @@ int main(int argc, char **argv) {
     auto f_dep = [&](const QString &v){ set_layer_dep(pm->pm, pm->sel, spinl.value(), v.isEmpty() ? edit.text() : v); refresh(false); };
     auto f_ren = [&](const QString &v){ set_layer_type(pm->pm, pm->sel, spinl.value(), v.isEmpty() ? edit.text().toUpper() : v.toUpper()); refresh(false); };
     auto f_copy = [&]{ copy_layer(pm->pm, pm->sel, spinl.value()); refresh(false); };
+    auto f_prev = [&]{
+        const Map *mp = find_map_c(pm->pm, pm->sel);
+        const QString t = mp ? pktm::preview_map(*mp, spinl.value())
+                             : QStringLiteral("no rule for selected cell");
+        prevlbl.setText(t);
+        std::printf("preview: %s\n", t.toUtf8().constData());
+        refresh(false);
+    };
+    prevbtn.connect(&prevbtn, &QPushButton::clicked, [&]{ f_prev(); });
     addbtn.connect(&addbtn, &QPushButton::clicked, [pm, &edit, &save_note, &refresh, f_add]{ f_add(edit.text()); });
     depbtn.connect(&depbtn, &QPushButton::clicked, [pm, &edit, &save_note, &refresh, f_dep]{ f_dep(edit.text()); });
     setbtn.connect(&setbtn, &QPushButton::clicked, [pm, &edit, &save_note, &refresh, f_set]{ f_set(edit.text()); });
@@ -866,7 +890,8 @@ int main(int argc, char **argv) {
         };
         int gfail = 0;
         if (!(find_btn("add") && find_btn("set") && find_btn("del")
-              && find_btn("dep") && find_btn("ren") && find_btn("copy")))
+              && find_btn("dep") && find_btn("ren") && find_btn("copy")
+              && find_btn("preview")))
             { std::printf("clicktest FAIL: button by objectName missing\n"); ++gfail; }
         edit.setText(QStringLiteral("L1")); press_btn("add");
         edit.setText(QStringLiteral("L2")); press_btn("add");
@@ -889,6 +914,10 @@ int main(int argc, char **argv) {
                         n_a == n_b ? "OK" : "FAIL", n_b, n_a);
             if (n_a != n_b) ++gfail;
         }
+        spinl.setValue(1);
+        press_btn("preview");
+        spinl.setValue(2);
+        press_btn("preview");
         {
             const Map *mp = find_map_c(pm->pm, pm->sel);
             std::printf("clicktest layers(sel=%d): %d\n", pm->sel, mp ? mp->layers.size() : -1);
