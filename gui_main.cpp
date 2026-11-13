@@ -50,6 +50,7 @@
 #include <QFileInfo>
 #include <QDir>
 #include "upload.h"
+#include <QDebug>
 #include "transport.h"
 
 static const char *ROWS[] = {"H", "G", "F", "E", "D", "C", "B", "A"}; // top row first
@@ -455,8 +456,17 @@ public:
         // nothing ever marks the widget dirty, so paintEvent() ran only after
         // move/resize events (= minimize/reopen symptom). QWidget::repaint()
         // is a slot in Qt6 -> heartbeat forces the grid repaint.
-        rt.connect(&rt, static_cast<void (QTimer::*)()>(&QTimer::start),
-                   [this] { QWidget::repaint(); });
+        // NOTE the SIGNAL: start() is a Q_SLOT and NEVER emits — the emitted
+        // one is QTimer::timeout (QPrivateSignal, handled by connect).
+        const QMetaObject::Connection hc = rt.connect(
+            &rt, &QTimer::timeout,
+            [this] {
+                static int hb = 0;
+                if (++hb % 125 == 0)
+                    qWarning("pkteditor heartbeat #%d", hb);
+                QWidget::repaint();
+            });
+        if (!hc) qWarning("pkteditor: heartbeat signal NOT connected (bug!)");
     }
     void start_heartbeat() { rt.start(); }
     void paintEvent(QPaintEvent *) override {   // QPainter paint of the grid
@@ -667,8 +677,10 @@ int main(int argc, char **argv) {
         calib.isEmpty() ? QStringLiteral("/home/nonrmy/MK.calib.json") : calib);
     QTimer poll;
     poll.setInterval(50);
-    poll.connect(&poll,
-                 static_cast<void (QTimer::*)()>(&QTimer::start), [&]() {
+    // signal = timeout (start() never emits!): the IN-stream loop was DEAD
+    // with the start()-cast — pressed set never updated live.
+    const QMetaObject::Connection pc = poll.connect(
+        &poll, &QTimer::timeout, [&]() {
         bool touched = false;
         unsigned char buf[5];
         int n;
@@ -693,7 +705,10 @@ int main(int argc, char **argv) {
             }
         }
         if (touched && pm->notify) pm->notify();
+        if (touched)
+            qWarning("pkteditor IN: pressed set now %d", (int)pm->pressed.size());
     });
+    if (!pc) qWarning("pkteditor: IN-poll signal NOT connected (bug!)");
 
     QString save_note;
     auto refresh = [&](bool saved) {
