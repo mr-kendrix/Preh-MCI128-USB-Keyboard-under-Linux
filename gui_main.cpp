@@ -451,6 +451,12 @@ public:
     QTimer rt;                                   // steady repaint heartbeat
     MapView(QWidget *parent = nullptr) : QWidget(parent), rt(this) {
         rt.setInterval(40);
+        // CRITICAL: a QTimer alone only counts — without a connected slot
+        // nothing ever marks the widget dirty, so paintEvent() ran only after
+        // move/resize events (= minimize/reopen symptom). QWidget::repaint()
+        // is a slot in Qt6 -> heartbeat forces the grid repaint.
+        rt.connect(&rt, static_cast<void (QTimer::*)()>(&QTimer::start),
+                   [this] { QWidget::repaint(); });
     }
     void start_heartbeat() { rt.start(); }
     void paintEvent(QPaintEvent *) override {   // QPainter paint of the grid
@@ -663,6 +669,7 @@ int main(int argc, char **argv) {
     poll.setInterval(50);
     poll.connect(&poll,
                  static_cast<void (QTimer::*)()>(&QTimer::start), [&]() {
+        bool touched = false;
         unsigned char buf[5];
         int n;
         while ((n = poll_in(buf, 5, 0)) > 0) {
@@ -681,10 +688,11 @@ int main(int argc, char **argv) {
                 ++i;
                 const int pk = cal.value(sc, -1);
                 if (pk < 0) continue;
-                if (down) pm->pressed.insert(pk);
-                else pm->pressed.remove(pk);
+                if (down) { if (!pm->pressed.contains(pk)) { pm->pressed.insert(pk); touched = true; } }
+                else if (pm->pressed.remove(pk)) touched = true;
             }
         }
+        if (touched && pm->notify) pm->notify();
     });
 
     QString save_note;

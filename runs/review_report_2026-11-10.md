@@ -367,3 +367,8 @@ YDOTOOL_SOCKET=/tmp/.does-not-exist ./b/pktm ...  # error: + rc=2
 - `set_top_dep(pm, poskey, dep)` model fn next to `set_top_value`; gate_click gained `depv` param + report now prints `dep='%6'`; CLI `--setdep VALUE`; live GUI `Set Dep` button (2nd row at 260,700 — clear of UploadPanel x=900 and stat label) uses the QLineEdit text as dep of the TOP layer (mirrors `Set` semantics).
 - Gates (real runs): CLEAR — pk 126 top layer `soffice.bin`→'' → diff EXACTLY one line `<Dependency>736f...62696e</Dependency>` → `<Dependency></Dependency>`, layers 3->3, panel shows dep gone. CREATE — p1_action WEBSITE layer (no Dependency element) + `--setdep Blender` → element appended, panel `WEBSITE='www.example.com' DEP='Blender'`, pmaprt on SAVED file RT=EXACT IDOM=OK. UNDO — `--setdep TESTDEP --save --undo` → byte-IDENTICAL restore.
 - Button-click itself still UNVERIFIED headless (same handler shape as Set/addbtn; set_top_dep covered via CLI + model identity).
+
+## Bugfix — Live-Window no Repaint (2026-11-13, user symptom)
+
+- Symptom: pressing board keys showed nothing in the grid until minimize/reopen. Root cause: `MapView::rt` heartbeat QTimer was started but had NO connected slot — a QTimer alone only counts; `paintEvent` ran only on incidental move/resize (= reopen) events. Fix: ctor `rt.connect(&rt, static_cast<void (QTimer::*)()>(&QTimer::start), [this]{ QWidget::repaint(); })` — QWidget::repaint() is a Qt6 slot (verified in /usr/include/qt6/QtWidgets/qwidget.h, 6.12). Bonus: poll lambda now notifies head refresh on pressed-change (head `pressed=N` text follows the board).
+- Headless UNVERIFIED: visible-window repaint chain — needs the user re-test (one keypress, grid ring without touching the window).
