@@ -462,8 +462,8 @@ public:
             &rt, &QTimer::timeout,
             [this] {
                 static int hb = 0;
-                if (++hb % 125 == 0)
-                    qWarning("pkteditor heartbeat #%d", hb);
+                if (++hb == 1)               // one-shot proof line, no spam
+                    qWarning("pkteditor: heartbeat running (repaint every 40 ms)");
                 QWidget::repaint();
             });
         if (!hc) qWarning("pkteditor: heartbeat signal NOT connected (bug!)");
@@ -705,8 +705,11 @@ int main(int argc, char **argv) {
             }
         }
         if (touched && pm->notify) pm->notify();
-        if (touched)
-            qWarning("pkteditor IN: pressed set now %d", (int)pm->pressed.size());
+        if (touched) {
+            static int inlog = 0;
+            if (++inlog <= 3)
+                qWarning("pkteditor IN: pressed set now %d", (int)pm->pressed.size());
+        }
     });
     if (!pc) qWarning("pkteditor: IN-poll signal NOT connected (bug!)");
 
