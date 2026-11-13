@@ -278,8 +278,11 @@ static QString write_atomic(const QString &path, const QByteArray &bytes)
     return QString();
 }
 
-// Undo stack: every save_pmap pushes (path, pre-save bytes); --undo pops.
-static QVector<QPair<QString, QByteArray>> g_undo;
+// Undo stack: save_pmap pushes (path, pre-save raw, post-save bytes) AFTER a
+// successful write; undo restores ONLY if the file still equals post — a file
+// changed by someone else in between is reported, never clobbered.
+struct UndoSnap { QString path; QByteArray pre; QByteArray post; };
+static QVector<UndoSnap> g_undo;
 
 static QString save_pmap(Model &m, const QString &path) {
     // Phase 0 (2026-11-12): lossless DOM path — original bytes + targeted text
@@ -289,9 +292,6 @@ static QString save_pmap(Model &m, const QString &path) {
         return QStringLiteral("SAVE FAILED: cannot read original %1").arg(path);
     const QByteArray raw = f.readAll();
     f.close();
-    g_undo.append({path, raw});
-    if (g_undo.size() > 50)
-        g_undo.removeFirst();
     DomDoc d;
     if (!dom_parse(raw, d))
         return QStringLiteral("SAVE BLOCKED: file not in supported pmap dialect");
@@ -350,6 +350,9 @@ static QString save_pmap(Model &m, const QString &path) {
     const bool stable = back.name == m.pm.name
                         && back.maps.size() == m.pm.maps.size()
                         && layers_back == layers_here;
+    g_undo.append({path, raw, reread});   // post = reread bytes = what is on disk
+    if (g_undo.size() > 50)
+        g_undo.removeFirst();
     return QStringLiteral("saved %1 maps / %2 layers / DOM-lossless / atomic / backup %3 / reread STABLE=%4")
            .arg(m.pm.maps.size()).arg(layers_here).arg(bakk).arg(stable ? "yes" : "NO");
 }
@@ -539,11 +542,19 @@ int main(int argc, char **argv) {
                        del, out, have_add ? addtype : QString(),
                        have_setdep ? setdepv : QString());
         if (g_undo.isEmpty()) { std::printf("undo: stack empty\n"); return 1; }
-        const QPair<QString, QByteArray> &last = g_undo.last();
-        const QString e = write_atomic(last.first, last.second);
-        std::printf("undo restored %s (%lld B) %s\n", last.first.toUtf8().constData(),
-                    (long long)last.second.size(), e.isEmpty() ? "OK" : e.toUtf8().constData());
+        const UndoSnap last = g_undo.last();
+        QFile cur(last.path);
+        const QByteArray now = cur.open(QIODevice::ReadOnly) ? cur.readAll() : QByteArray();
+        if (now != last.post) {
+            std::printf("undo: file %s changed since save by something else — NOT restored (use backups)\n",
+                        last.path.toUtf8().constData());
+            g_undo.removeLast();
+            return 1;
+        }
+        const QString e = write_atomic(last.path, last.pre);
         g_undo.removeLast();
+        std::printf("undo restored %s (%lld B) %s\n", last.path.toUtf8().constData(),
+                    (long long)last.pre.size(), e.isEmpty() ? "OK" : e.toUtf8().constData());
         return e.isEmpty() ? 0 : 1;
     }
     if (mode == "panel") {          // per-key editor view: layers with vendor TYPE
@@ -758,13 +769,15 @@ int main(int argc, char **argv) {
     undobtn.connect(&undobtn, &QPushButton::clicked, [&save_note, &refresh]{
         if (g_undo.isEmpty()) save_note = QStringLiteral("undo: nothing in this session");
         else {
-            const QPair<QString, QByteArray> last = g_undo.last();   // copy, then pop
-            const QString e = write_atomic(last.first, last.second);
+            const UndoSnap last = g_undo.last();
+            QFile cur(last.path);
+            const QByteArray now = cur.open(QIODevice::ReadOnly) ? cur.readAll() : QByteArray();
+            if (now != last.post) save_note = QStringLiteral("undo: file changed since save — NOT restored");
+            else {
+                const QString e = write_atomic(last.path, last.pre);
+                save_note = e.isEmpty() ? QStringLiteral("undo restored %1").arg(last.path) : e;
+            }
             g_undo.removeLast();
-            save_note = e.isEmpty()
-                            ? QStringLiteral("undo restored %1 (%2 B)")
-                                  .arg(last.first).arg((long long)last.second.size())
-                            : e;
         }
         refresh(true); });
 

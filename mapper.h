@@ -77,12 +77,16 @@ int ydot_sweep_fd();
 // PKT Mapper stores non-typing actions as layers: Type=WEBSITE (Value=URL,
 // "open a webpage") and Type=APPLICATION (Value=program, "start a program").
 bool layer_is_action(const Layer &l);
-// command to exec (xdg-open 'url' / APPLICATION command); empty -> refused,
-// why = reason. CAUTION: the string comes from the user's OWN pmap and is run
-// via /bin/sh -c — editor-config trust, same as PKT Mapper on Windows.
-QString action_command(const Layer &l, QString &why);
-// fire-and-forget spawn: double-fork (init reparents, no zombies), close every
-// inherited fd (hidraw/lock/ydot fds must not leak into sh), exec /bin/sh -c.
-void spawn_detached(const QString &cmdline);
+// exec target as PROGRAM + ARGUMENT LIST — never a shell string: an action
+// value can never run a command line, only exec one binary with argv.
+// APPLICATION vendor dialect: "prog::arg1::arg2" (no expansion). Empty
+// vector -> refused, why = reason. Execution is additionally gated by the
+// --allow-actions daemon flag (default OFF) + per-key cooldown.
+QVector<QString> action_argv(const Layer &l, QString &why);
+// fire-and-forget execvp(argv[0], argv...): double-fork (init reparents, no
+// zombies), child closes every inherited fd (hidraw/lock/ydot fds must not
+// leak into the child), stdio -> /dev/null. ALL strings converted to bytes
+// BEFORE the fork.
+void spawn_argv(const QVector<QString> &argvv);
 
 }

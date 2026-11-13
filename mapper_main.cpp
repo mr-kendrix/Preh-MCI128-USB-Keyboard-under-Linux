@@ -30,6 +30,11 @@
 #include "transport.h"
 #include <dirent.h>
 #include <algorithm>
+#include <QElapsedTimer>
+#include <QHash>
+#include <QVector>
+#include <limits>
+#include <chrono>
 
 using namespace pktm;
 
@@ -114,6 +119,8 @@ int main(int argc, char **argv) {
     QString path;
     QString mode;
     int poskey = -1;
+    bool allow_actions = false;   // actions OFF by default (shell-free argv exec,
+                                  // still: only run what the user explicitly allows)
     QString feed, calib, device;
     int secs = 0;   // --live default: run until signalled; tests pass explicit time
     for (int i = 1; i < argc; ++i) {
@@ -129,12 +136,13 @@ int main(int argc, char **argv) {
         else if (a == "--calib") { if (i + 1 < argc) calib = argv[++i]; }
         else if (a == "--device") { if (i + 1 < argc) device = argv[++i]; }
         else if (a == "--seconds") { if (i + 1 < argc) secs = QString(argv[++i]).toInt(); }
+        else if (a == "--allow-actions") allow_actions = true;
         else if (path.isEmpty()) path = a;
     }
     if (path.isEmpty() || mode.isEmpty() || (mode == "inject" && poskey < 0)) {
         std::fprintf(stderr,
             "usage: pktm <pmap> [--rules-report | --dry-inject POSKEY | "
-            "--live [--feed-hex '04 ..' | --device NODE] [--calib JSON] [--seconds N]]\n");
+            "--live [--feed-hex '04 ..' | --device NODE] [--calib JSON] [--seconds N] [--allow-actions]]\n");
         return 1;
     }
 
@@ -239,6 +247,26 @@ int main(int argc, char **argv) {
     // --live: vendor IN stream -> calib -> rules -> ydotool socket. Never
     // starts/stops daemons or units; a human decides which reader runs.
     if (mode == "live") {
+        // ACTIONS: list every action the loaded pmap contains; execution is OFF
+        // unless --allow-actions was given explicitly (per-key 500 ms cooldown).
+        {
+            int nact = 0;
+            for (const Rule &r : rs.rules)
+                for (const Layer &l : r.layers)
+                    if (pktm::layer_is_action(l)) {
+                        QString why;
+                        const QVector<QString> av = pktm::action_argv(l, why);
+                        std::printf("ACTION found: poskey=%d %s -> %s%s\n", r.poskey,
+                                    l.type.toUtf8().constData(),
+                                    av.isEmpty() ? "REFUSED " : "",
+                                    why.isEmpty() ? av.join(QLatin1Char(' ')).toUtf8().constData()
+                                                  : why.toUtf8().constData());
+                        ++nact;
+                    }
+            if (nact > 0)
+                std::printf("actions=%d allow=%s (per-key 500ms cooldown)\n", nact,
+                            allow_actions ? "YES" : "NO --allow-actions missing");
+        }
         // exit sweep, SIGNAL-SAFE: handler sends up-events over the persistent
         // socket fd via raw ::send and _Exits; fixed array + atomic counter,
         // no heap / no stdio inside the handler. Normal exit sweeps via do_sweep().
@@ -380,16 +408,33 @@ int main(int argc, char **argv) {
             QString why;
             const Layer &L = hit->layers[sel];
             if (layer_is_action(L)) {           // vendor ACTION layer: exec, not typing
-                const QString cmd = action_command(L, why);
-                if (cmd.isEmpty())
+                const QVector<QString> av = action_argv(L, why);
+                if (av.isEmpty())
                     std::printf("POSKey %d -> ACTION %s '%s' -> REFUSED (%s), nothing run\n",
                                 pk, L.type.toUtf8().constData(),
                                 L.value.toUtf8().constData(), why.toUtf8().constData());
-                else {
-                    std::printf("POSKey %d -> ACTION %s '%s' -> spawned detached '%s'\n",
+                else if (!allow_actions)
+                    std::printf("POSKey %d -> ACTION %s '%s' -> BLOCKED (add --allow-actions)\n",
                                 pk, L.type.toUtf8().constData(),
-                                L.value.toUtf8().constData(), cmd.toUtf8().constData());
-                    spawn_detached(cmd);
+                                L.value.toUtf8().constData());
+                else {
+                    // per-key 500 ms cooldown: key bounce must never re-exec
+                    static QHash<int, qint64> act_lastms;
+                    static std::chrono::steady_clock::time_point act_t0{};
+                    if (act_t0.time_since_epoch().count() == 0)
+                        act_t0 = std::chrono::steady_clock::now();
+                    const qint64 t = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - act_t0).count();
+                    if (act_lastms.contains(pk) && t - act_lastms[pk] < 500) {
+                        std::printf("POSKey %d -> ACTION %s -> COOLDOWN (<500ms), skipped\n",
+                                    pk, L.type.toUtf8().constData());
+                    } else {
+                        act_lastms.insert(pk, t);
+                        std::printf("POSKey %d -> ACTION %s -> exec '%s'\n",
+                                    pk, L.type.toUtf8().constData(),
+                                    av.join(QLatin1Char(' ')).toUtf8().constData());
+                        spawn_argv(av);
+                    }
                 }
                 return;
             }
@@ -631,10 +676,10 @@ int main(int argc, char **argv) {
     if (hit && idx >= 0 && layer_is_action(hit->layers[idx])) {
         const Layer &L = hit->layers[idx];
         QString why;
-        const QString cmd = action_command(L, why);
-        typed = cmd.isEmpty() ? why + QStringLiteral(" -> REFUSED")
-                              : L.type + QStringLiteral(" ") + L.value
-                                + QStringLiteral(" (would spawn: %1)").arg(cmd);
+        const QVector<QString> av = action_argv(L, why);
+        typed = av.isEmpty() ? why + QStringLiteral(" -> REFUSED")
+                             : L.type + QStringLiteral(" ") + L.value
+                               + QStringLiteral(" (would exec: %1)").arg(av.join(QLatin1Char(' ')));
         std::printf("POSKey %d window='%s' action='%s' rule-match=YES\n",
                     poskey, active_window().toUtf8().constData(), typed.toUtf8().constData());
         return 0;

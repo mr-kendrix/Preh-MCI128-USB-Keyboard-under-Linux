@@ -236,14 +236,16 @@ bool layer_is_action(const Layer &l)
         || l.type.compare(QStringLiteral("APPLICATION"), Qt::CaseInsensitive) == 0;
 }
 
-QString action_command(const Layer &l, QString &why)
+QVector<QString> action_argv(const Layer &l, QString &why)
 {
     why.clear();
     if (l.value.isEmpty()) { why = QStringLiteral("action layer: empty value"); return {}; }
-    if (l.value.contains(QLatin1Char('\'')) || l.value.contains(QLatin1Char('`'))
-        || l.value.contains(QLatin1Char('"'))) {
-        why = QStringLiteral("action value: unquoted quotes"); return {};
-    }
+    // control chars (incl. newline/NUL) in ANY token: refuse — they must never
+    // smuggle a second command into exec.
+    for (const QChar &c : l.value)
+        if (c < QChar(0x20) || c == QChar(0x7f)) {
+            why = QStringLiteral("action value: control chars"); return {};
+        }
     if (l.type.compare(QStringLiteral("WEBSITE"), Qt::CaseInsensitive) == 0) {
         QString u = l.value.trimmed();
         const bool http = u.startsWith(QStringLiteral("http://"), Qt::CaseInsensitive)
@@ -252,35 +254,48 @@ QString action_command(const Layer &l, QString &why)
             why = QStringLiteral("website: non-http scheme"); return {};
         }
         if (!http) u = QStringLiteral("https://") + u;
-        return QStringLiteral("xdg-open '%1' > /dev/null 2>&1").arg(u);
+        // URL = ONE argv entry; shell never involved, quotes inside are data.
+        return { QStringLiteral("xdg-open"), u };
     }
-    // APPLICATION: the vendor samples store WINDOWS paths (C:\\...\\notepad.exe)
-    // — cannot exec those on Linux: refuse honestly, never wine-spawn on a keypress.
-    if (l.value.contains(QLatin1Char('\\'))
-        || (l.value.size() >= 2 && l.value[0].isLetter() && l.value[1] == QLatin1Char(':'))) {
+    // APPLICATION vendor dialect "prog::arg1::arg2" — split at '::' (no shell,
+    // no globbing, no expansion). Windows paths refused (never wine-exec).
+    const QStringList toks = l.value.split(QStringLiteral("::"));
+    QString prog = toks.first().trimmed();
+    if (prog.isEmpty()) { why = QStringLiteral("application: empty program"); return {}; }
+    if (prog.contains(QLatin1Char('\\'))
+        || (prog.size() >= 2 && prog[0].isLetter() && prog[1] == QLatin1Char(':'))) {
         why = QStringLiteral("application: windows path, no linux exec"); return {};
     }
-    return l.value.trimmed();
+    QVector<QString> out;
+    out.append(prog);
+    for (int i = 1; i < toks.size(); ++i)
+        if (!toks[i].isEmpty()) out.append(toks[i]);
+    return out;
 }
 
-void spawn_detached(const QString &cmdline)
+void spawn_argv(const QVector<QString> &argvv)
 {
+    if (argvv.isEmpty()) return;
+    // ALL bytes built BEFORE the fork (no allocation in the child).
+    QVector<QByteArray> raw;
+    raw.reserve(argvv.size());
+    for (const QString &s : argvv) raw.append(s.toUtf8());
     const pid_t p = ::fork();
     if (p == 0) {
         const pid_t q = ::fork();
         if (q == 0) {
             ::setsid();
-            for (int fd = 0; fd < 1024; ++fd) ::close(fd); // hidraw/lock/ydot fds
-                                                   // must not leak into sh
+            for (int fd = 0; fd < 1024; ++fd) ::close(fd); // daemon fds must not
+                                                            // leak into the child
             const int rd = ::open("/dev/null", O_RDONLY | O_CLOEXEC);
-            if (rd >= 0) { ::dup(rd); ::close(rd); }        // lands on fd 0
+            if (rd >= 0) { ::dup(rd); ::close(rd); }             // lands on fd 0
             const int wr = ::open("/dev/null", O_WRONLY | O_CLOEXEC);
-            if (wr >= 0) { ::dup(wr); ::dup(wr); ::close(wr); } // fds 1 and 2
-            const static char *sh = "/bin/sh";
-            const static char *c = "-c";
-            const QByteArray cb = cmdline.toUtf8();
-            const char *av[] = { sh, c, cb.data(), nullptr };
-            ::execvp(sh, (char **)av);
+            if (wr >= 0) { ::dup(wr); ::dup(wr); ::close(wr); }  // fds 1 and 2
+            QVector<char *> av;
+            av.reserve(raw.size() + 1);
+            for (const QByteArray &b : raw) av.append(const_cast<char *>(b.data()));
+            av.append(nullptr);
+            ::execvp(av[0], av.data());
             _exit(127);
         }
         _exit(0);

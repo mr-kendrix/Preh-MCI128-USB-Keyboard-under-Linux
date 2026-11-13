@@ -368,6 +368,15 @@ YDOTOOL_SOCKET=/tmp/.does-not-exist ./b/pktm ...  # error: + rc=2
 - Gates (real runs): CLEAR — pk 126 top layer `soffice.bin`→'' → diff EXACTLY one line `<Dependency>736f...62696e</Dependency>` → `<Dependency></Dependency>`, layers 3->3, panel shows dep gone. CREATE — p1_action WEBSITE layer (no Dependency element) + `--setdep Blender` → element appended, panel `WEBSITE='www.example.com' DEP='Blender'`, pmaprt on SAVED file RT=EXACT IDOM=OK. UNDO — `--setdep TESTDEP --save --undo` → byte-IDENTICAL restore.
 - Button-click itself still UNVERIFIED headless (same handler shape as Set/addbtn; set_top_dep covered via CLI + model identity).
 
+## Security pass — ACTION execution (2026-11-13, reviewer round)
+
+- `action_command` → `action_command`/`spawn_detached` was SHELL: `/bin/sh -c <value>` with only quote/backtick filtering → `touch /tmp/x`, `$(...)`, `;` chains all executed. Replaced: `action_command`/`spawn_argv` = program+argv, `execvp(av[0], av)` — NO shell, no word splitting, no substitution. APPLICATION format `prog::arg1::arg2`. Control chars (<0x20/0x7f) in value → REFUSED. Bytes built BEFORE fork (no heap in child).
+- Gate `--allow-actions` (default OFF): without it live prints BLOCKED, nothing execs. At live start every action of the pmap is listed (`ACTION found poskey=… -> prog args` + REFUSED reasons).
+- Per-key COOLDOWN 500 ms (std::chrono steady_clock; QElapsedTimer start()/msecsSinceStart not available on this Qt build — fixed compile error).
+- Gates (real): `touch /tmp/pwn1` as APPLICATION value = ONE program-name → PATH lookup fails, **/tmp/pwn1 NEVER created** (pwn-gate PASS); `/usr/bin/touch::/tmp/argvA::/tmp/argvB` → BOTH files exist = argv split; control-char URL `http://a\nb` → REFUSED in dry+live; without flag → BLOCKED, no files.
+- undo: UndoSnap now stores (path, pre, post=reread); undo compares file vs post before restoring — foreign change → "changed since save — NOT restored" (UNVERIFIED in one CLI run: cross-process stack; GUI flow uses same code).
+- Cooldown line COULD NOT be observed in the --feed-hex double-press test (event loop consumed 2nd down once) — code path is the contains()+delta check, flagged as not fully exercised.
+
 ## Bugfix — Live-Window no Repaint (2026-11-13, user symptom)
 
 - Symptom: pressing board keys showed nothing in the grid until minimize/reopen. Two-stage root cause: (1) `MapView::rt` heartbeat had NO connected slot at all; (2) my first fix used `connect(&rt, &QTimer::start, …)` which COMPILES but NEVER RUNS — `start()` is a Q_SLOT that does not emit; the emitted signal is `QTimer::timeout(QPrivateSignal)`. Final fix: `rt.connect(&rt, &QTimer::timeout, [this]{ QWidget::repaint(); })` + same for the hidapi IN `poll` timer (that one had the dead start()-cast from the beginning → IN stream never read live).
