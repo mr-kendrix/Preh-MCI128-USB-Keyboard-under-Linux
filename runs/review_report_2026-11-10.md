@@ -382,3 +382,11 @@ YDOTOOL_SOCKET=/tmp/.does-not-exist ./b/pktm ...  # error: + rc=2
 
 - Symptom: pressing board keys showed nothing in the grid until minimize/reopen. Two-stage root cause: (1) `MapView::rt` heartbeat had NO connected slot at all; (2) my first fix used `connect(&rt, &QTimer::start, …)` which COMPILES but NEVER RUNS — `start()` is a Q_SLOT that does not emit; the emitted signal is `QTimer::timeout(QPrivateSignal)`. Final fix: `rt.connect(&rt, &QTimer::timeout, [this]{ QWidget::repaint(); })` + same for the hidapi IN `poll` timer (that one had the dead start()-cast from the beginning → IN stream never read live).
 - VERIFIED by user 2026-11-13: window run in terminal → `pkteditor heartbeat #125` line on stderr + rings/selection appear live without touching the window (root cause confirmed: start()-cast connect never emitted; timeout-cast works). Debug proof lines reduced to one-shot heartbeat + first-3 IN changes.
+
+## GUI Phase 1a — Layer Picker (2026-11-13, commit 4d503d4)
+
+- QSpinBox `spinl` = layer picker (1-based, refresh clamps max to layer count; selected layer shown with `> ` prefix in the live-window layer string). Buttons `Set`/`Delete Layer`/`Set Dep` now act on the PICKED layer (model fns set_layer_value/set_layer_dep/del_layer); new buttons `Type` (rename layer TYPE incl. WEBSITE/APPLICATION) and `Copy` (duplicate picked layer to end) — model fns set_layer_type/copy_layer, all clamp idx inside.
+- CLI mirror: `--at N` (1-based) on --set/--setdep/--del; gate_click indexed branch.
+- GATES REAL: (1) `--clicktest` offscreen invokes every button handler (f_* lambdas — Qt6 removed QMeta::Clicked, wiring itself stays untestable): add/add/set@1/dep@1/rename@WEBSITE/copy/del@3 on poskey 63 → dump `WEBSITE='AAA' dep='DEP1'` + `TEXT='L2'` = exact expected. (2) `--at` chain on /tmp/at.pmap: `--set XX --at 2` → panel: TEXT='FIRST' DEP='D1' TEXT='XX' → value on layer 2, DEP on layer 1 — right slot, no top-only fallback.
+- ACTION layers: `> panel`/live-window prefix `\u2691` on non-TEXT layers + header note 'runs only in pktm --live --allow-actions'.
+- UNTESTED: physical QPushButton .clicked() path (QMeta removed in Qt6) — handler logic covered, plumbing not.
