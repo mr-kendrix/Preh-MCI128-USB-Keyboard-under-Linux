@@ -137,12 +137,29 @@ int main(int argc, char **argv) {
         else if (a == "--device") { if (i + 1 < argc) device = argv[++i]; }
         else if (a == "--seconds") { if (i + 1 < argc) secs = QString(argv[++i]).toInt(); }
         else if (a == "--allow-actions") allow_actions = true;
+        else if (a == "--cooldown-test") mode = "cooldown-test";
         else if (path.isEmpty()) path = a;
+    }
+    // cooldown unit test: (key,last,now,table) logic independent of event loop
+    if (mode == "cooldown-test") {
+        struct C { int pk; qint64 t; bool want; };
+        const C cs[] = { {2, 0, true},    {2, 100, false},  {2, 600, true},
+                         {3, 650, true}, {3, 700, false},  {2, 1100, true} };
+        QHash<int, qint64> tbl;
+        int fails = 0;
+        for (const C &c : cs) {
+            const bool got = action_cooldown_check(c.pk, tbl, c.t, 500);
+            if (got != c.want) { ++fails; std::printf("FAIL pk=%d t=%lld got=%d want=%d\n", c.pk, (long long)c.t, (int)got, (int)c.want); }
+        }
+        std::printf("COOLDOWN-TEST %zu cases fails=%d %s\n", sizeof(cs) / sizeof(cs[0]), fails, fails ? "BAD" : "OK");
+        return fails ? 1 : 0;
     }
     if (path.isEmpty() || mode.isEmpty() || (mode == "inject" && poskey < 0)) {
         std::fprintf(stderr,
             "usage: pktm <pmap> [--rules-report | --dry-inject POSKEY | "
-            "--live [--feed-hex '04 ..' | --device NODE] [--calib JSON] [--seconds N] [--allow-actions]]\n");
+            "--live [--feed-hex '04 ..' | --device NODE] [--calib JSON] [--seconds N] [--allow-actions]]\n"
+            "  APPLICATION value syntax: prog::arg1::arg2 (each arg own '::'). Actions run ONLY with --allow-actions:\n"
+            "  the pmap is the user's own file — a pmap may still ask for /bin/sh::-c::anything, so the flag IS the trust boundary.\n");
         return 1;
     }
 
@@ -418,18 +435,17 @@ int main(int argc, char **argv) {
                                 pk, L.type.toUtf8().constData(),
                                 L.value.toUtf8().constData());
                 else {
-                    // per-key 500 ms cooldown: key bounce must never re-exec
+                    // time base = first action; cooldown via unit-testable fn
                     static QHash<int, qint64> act_lastms;
                     static std::chrono::steady_clock::time_point act_t0{};
                     if (act_t0.time_since_epoch().count() == 0)
                         act_t0 = std::chrono::steady_clock::now();
                     const qint64 t = std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::steady_clock::now() - act_t0).count();
-                    if (act_lastms.contains(pk) && t - act_lastms[pk] < 500) {
+                    if (!action_cooldown_check(pk, act_lastms, t)) {
                         std::printf("POSKey %d -> ACTION %s -> COOLDOWN (<500ms), skipped\n",
                                     pk, L.type.toUtf8().constData());
                     } else {
-                        act_lastms.insert(pk, t);
                         std::printf("POSKey %d -> ACTION %s -> exec '%s'\n",
                                     pk, L.type.toUtf8().constData(),
                                     av.join(QLatin1Char(' ')).toUtf8().constData());

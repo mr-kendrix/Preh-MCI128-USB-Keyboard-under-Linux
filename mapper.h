@@ -87,6 +87,10 @@ QVector<QString> action_argv(const Layer &l, QString &why);
 // zombies), child closes every inherited fd (hidraw/lock/ydot fds must not
 // leak into the child), stdio -> /dev/null. ALL strings converted to bytes
 // BEFORE the fork.
-void spawn_argv(const QVector<QString> &argvv);
+void spawn_argv(const QVector<QString> &argv);
+// per-key action cooldown (extracted for unit-testing — see pktm --cooldown-test):
+// true = allowed NOW and recorded; false = within window_ms of pk's last exec.
+bool action_cooldown_check(int pk, QHash<int, qint64> &tbl, qint64 now_ms,
+                   int window_ms = 500);
 
 }

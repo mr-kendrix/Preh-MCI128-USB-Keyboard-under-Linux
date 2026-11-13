@@ -558,13 +558,16 @@ int main(int argc, char **argv) {
         return e.isEmpty() ? 0 : 1;
     }
     if (mode == "panel") {          // per-key editor view: layers with vendor TYPE
-        std::printf("PANEL maps=%d\n", int(m.pm.maps.size()));
+        std::printf("PANEL maps=%d  \u2691=ACTION-Layer: runs only in pktm --live --allow-actions\n", int(m.pm.maps.size()));
         for (const Map &mp : m.pm.maps) {
             QString l;
             for (const Layer &ly : mp.layers) {
-                l += QStringLiteral(" %1='%2'").arg(ly.type).arg(ly.value);
+                QString s = QStringLiteral(" %1='%2'").arg(ly.type).arg(ly.value);
                 if (!ly.dependency.isEmpty())
-                    l += QStringLiteral(" DEP='%1'").arg(ly.dependency);
+                    s += QStringLiteral(" DEP='%1'").arg(ly.dependency);
+                if (ly.type.compare(QStringLiteral("TEXT"), Qt::CaseInsensitive) != 0)
+                    s = QStringLiteral(" \u2691") + s;
+                l += s;
             }
             std::printf("  poskey=%-4d %s\n", mp.poskey, l.trimmed().toUtf8().constData());
         }
@@ -741,6 +744,8 @@ int main(int argc, char **argv) {
             for (const Layer &l : mp->layers) {
                 QString s = QStringLiteral("%1 '%2'").arg(l.type).arg(l.value);
                 if (!l.dependency.isEmpty()) s += QStringLiteral(" DEP=%1").arg(l.dependency);
+                if (l.type.compare(QStringLiteral("TEXT"), Qt::CaseInsensitive) != 0)
+                    s = QStringLiteral("\u2691 ACTION %1").arg(s);  // needs --allow-actions in pktm
                 ls << s;
             }
             layers.setText(QStringLiteral("layers (%1): %2").arg(mp->layers.size())

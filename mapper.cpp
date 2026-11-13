@@ -4,6 +4,8 @@
 #include "pmap.h"
 #include <vector>
 #include <algorithm>
+#include <sys/syscall.h>
+#include <unistd.h>
 #include <QProcess>
 #include <QRegularExpression>
 #include <QJsonDocument>
@@ -273,10 +275,19 @@ QVector<QString> action_argv(const Layer &l, QString &why)
     return out;
 }
 
+bool action_cooldown_check(int pk, QHash<int, qint64> &tbl, qint64 now_ms,
+                           int window_ms)
+{
+    if (tbl.contains(pk) && now_ms - tbl.value(pk) < window_ms)
+        return false;
+    tbl.insert(pk, now_ms);
+    return true;
+}
+
 void spawn_argv(const QVector<QString> &argvv)
 {
     if (argvv.isEmpty()) return;
-    // ALL bytes built BEFORE the fork (no allocation in the child).
+    // ALL bytes built BEFORE fork (no heap in the child).
     QVector<QByteArray> raw;
     raw.reserve(argvv.size());
     for (const QString &s : argvv) raw.append(s.toUtf8());
@@ -285,8 +296,12 @@ void spawn_argv(const QVector<QString> &argvv)
         const pid_t q = ::fork();
         if (q == 0) {
             ::setsid();
-            for (int fd = 0; fd < 1024; ++fd) ::close(fd); // daemon fds must not
-                                                            // leak into the child
+            // modern kernel: one range call; fd 0..2 closed separately so the
+            // /dev/null dups below land exactly on 0,1,2.
+            ::close(0); ::close(1); ::close(2);
+            int rc = (int)syscall(SYS_close_range, 3, 0xffffffffu, 0);
+            if (rc != 0)
+                for (int fd = 3; fd < 1024; ++fd) ::close(fd);   // fallback
             const int rd = ::open("/dev/null", O_RDONLY | O_CLOEXEC);
             if (rd >= 0) { ::dup(rd); ::close(rd); }             // lands on fd 0
             const int wr = ::open("/dev/null", O_WRONLY | O_CLOEXEC);

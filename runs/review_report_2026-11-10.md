@@ -375,7 +375,8 @@ YDOTOOL_SOCKET=/tmp/.does-not-exist ./b/pktm ...  # error: + rc=2
 - Per-key COOLDOWN 500 ms (std::chrono steady_clock; QElapsedTimer start()/msecsSinceStart not available on this Qt build — fixed compile error).
 - Gates (real): `touch /tmp/pwn1` as APPLICATION value = ONE program-name → PATH lookup fails, **/tmp/pwn1 NEVER created** (pwn-gate PASS); `/usr/bin/touch::/tmp/argvA::/tmp/argvB` → BOTH files exist = argv split; control-char URL `http://a\nb` → REFUSED in dry+live; without flag → BLOCKED, no files.
 - undo: UndoSnap now stores (path, pre, post=reread); undo compares file vs post before restoring — foreign change → "changed since save — NOT restored" (UNVERIFIED in one CLI run: cross-process stack; GUI flow uses same code).
-- Cooldown line COULD NOT be observed in the --feed-hex double-press test (event loop consumed 2nd down once) — code path is the contains()+delta check, flagged as not fully exercised.
+- Cooldown: extracted to `action_cooldown_check(pk, tbl, now_ms, window)` per reviewer note → REAL UNIT-TEST `pktm --cooldown-test`: 6 cases (same-key inside/outside window, cross-key independence) → **fails=0 RC=0** — no more "unobserved", the double-press-in-feed trap was my feed missing the 5th byte ('04 02 00 00 00' = full report).
+- Reviewer small items done: `close_range(3,~0,0)` syscall (+loop fallback, explicit close 0..2 so dups land on 0/1/2); GUI shows ⚑ on every ACTION layer + `⚑=ACTION-Layer: runs only in pktm --live --allow-actions` header in panel AND live window; usage documents `prog::arg1::arg2` per-arg syntax + trust boundary ("flag IS the trust boundary").
 
 ## Bugfix — Live-Window no Repaint (2026-11-13, user symptom)
 
