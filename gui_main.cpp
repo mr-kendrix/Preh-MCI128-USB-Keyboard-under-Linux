@@ -20,6 +20,7 @@
 #include <QPoint>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QSpinBox>
 #include <QRegularExpression>
 #include <QPainter>
 #include <QImage>
@@ -172,6 +173,33 @@ static void set_top_dep(Pmap &pm, int poskey, const QString &dep) {
     Map &m = ensure_map(pm, poskey);
     if (m.layers.isEmpty()) m.layers.append(Layer{QStringLiteral("TEXT"), QString(), dep});
     else m.layers.last().dependency = dep;
+}
+
+// Layer-picker ops (Phase 1): idx1 = 1-based, clamped inside.
+static void set_layer_value(Pmap &pm, int poskey, int idx1, const QString &v) {
+    Map &m = ensure_map(pm, poskey);
+    if (m.layers.isEmpty()) { m.layers.append(Layer{QStringLiteral("TEXT"), v}); return; }
+    m.layers[qBound(1, idx1, m.layers.size()) - 1].value = v;
+}
+static void set_layer_dep(Pmap &pm, int poskey, int idx1, const QString &dep) {
+    Map &m = ensure_map(pm, poskey);
+    if (m.layers.isEmpty()) { m.layers.append(Layer{QStringLiteral("TEXT"), QString(), dep}); return; }
+    m.layers[qBound(1, idx1, m.layers.size()) - 1].dependency = dep;
+}
+static void set_layer_type(Pmap &pm, int poskey, int idx1, const QString &type) {
+    Map &pmr = ensure_map(pm, poskey);   // rename = change TYPE (TEXT/WEBSITE/APPLICATION)
+    if (pmr.layers.isEmpty()) { pmr.layers.append(Layer{type, QString()}); return; }
+    pmr.layers[qBound(1, idx1, pmr.layers.size()) - 1].type = type;
+}
+static void copy_layer(Pmap &pm, int poskey, int idx1) {
+    if (Map *m = find_map(pm, poskey))
+        if (!m->layers.isEmpty())
+            m->layers.append(m->layers.at(qBound(1, idx1, m->layers.size()) - 1));
+}
+static void del_layer(Pmap &pm, int poskey, int idx1) {
+    Map *m = find_map(pm, poskey);
+    if (m && !m->layers.isEmpty())
+        m->layers.remove(qBound(1, idx1, m->layers.size()) - 1);
 }
 
 static void add_layer(Pmap &pm, int poskey, const QString &value,
@@ -395,7 +423,7 @@ static int gate_smoke(Model &m) {
 static int gate_click(Model &m, const QStringList &cells, const QString &setv,
                       const QString &addv, bool del, const QString &out,
                       const QString &addtype = QString(),
-                      const QString &depv = QString()) {
+                      const QString &depv = QString(), int at = -1) {
     m.cells = layout_cells(QSize(1024, 512));   // board the gates simulate
     QString rep;
     for (const QString &spec : cells) {
@@ -408,11 +436,11 @@ static int gate_click(Model &m, const QStringList &cells, const QString &setv,
         const Map *before = find_map_c(m.pm, pk);
         const int n_before = before ? before->layers.size() : -1;
         if (addv.isNull() && setv.isNull() && !del) m.sel = pk; // pure select
-        if (!setv.isNull()) set_top_value(m.pm, pk, setv);
+        if (!setv.isNull()) { if (at > 0) set_layer_value(m.pm, pk, at, setv); else set_top_value(m.pm, pk, setv); }
         if (!addv.isNull()) add_layer(m.pm, pk, addv,
                                       addtype.isNull() ? QStringLiteral("TEXT") : addtype);
-        if (del) del_top_layer(m.pm, pk);
-        if (!depv.isNull()) set_top_dep(m.pm, pk, depv);
+        if (del) { if (at > 0) del_layer(m.pm, pk, at); else del_top_layer(m.pm, pk); }
+        if (!depv.isNull()) { if (at > 0) set_layer_dep(m.pm, pk, at, depv); else set_top_dep(m.pm, pk, depv); }
         const Map *after = find_map_c(m.pm, pk);
         rep += QStringLiteral("%1 pk=%2 layers %3->%4 val='%5' dep='%6'; ")
                     .arg(spec).arg(pk).arg(n_before).arg((int)(after ? after->layers.size() : -1))
@@ -494,6 +522,7 @@ int main(int argc, char **argv) {
     QString addtype;                       // --addtype TYPE (else TEXT)
     QString setdepv;                       // --setdep VALUE (null = untouched)
     bool del = false, have_set = false, have_add = false, have_setdep = false, up_arm = false;
+    int at = -1;                             // --at N: 1-based layer index (else top)
     QString calib;
     for (int i = 1; i < argc; ++i) {
         const QString a = argv[i];
@@ -514,6 +543,7 @@ int main(int argc, char **argv) {
         }
         else if (a == "--del") { mode = "click"; del = true; }
         else if (a == "--setdep") { mode = "click"; next(setdepv); have_setdep = true; }
+        else if (a == "--at") { const QString v = [&]{ QString t; next(t); return t; }(); at = v.toInt(); }
         else if (a == "--arm-upload") up_arm = true;
         else if (a == "--calib") next(calib);
         else if (a == "--watch") { mode = "watch"; }
@@ -540,7 +570,7 @@ int main(int argc, char **argv) {
         if (!cells.isEmpty() || have_set || have_add || have_setdep || del)
             gate_click(m, cells, have_set ? setv : QString(), have_add ? addv : QString(),
                        del, out, have_add ? addtype : QString(),
-                       have_setdep ? setdepv : QString());
+                       have_setdep ? setdepv : QString(), at);
         if (g_undo.isEmpty()) { std::printf("undo: stack empty\n"); return 1; }
         const UndoSnap last = g_undo.last();
         QFile cur(last.path);
@@ -633,7 +663,7 @@ int main(int argc, char **argv) {
     if (mode == "click" || !cells.isEmpty())
         return gate_click(m, cells, have_set ? setv : QString(), have_add ? addv : QString(),
                           del, out, have_add ? addtype : QString(),
-                          have_setdep ? setdepv : QString());
+                          have_setdep ? setdepv : QString(), at);
 
     // live window
     static char off1[] = "--platform";
@@ -674,12 +704,22 @@ int main(int argc, char **argv) {
     QPushButton savebtn(QStringLiteral("Save"), &win);
     QPushButton undobtn(QStringLiteral("Undo"), &win);
     QPushButton depbtn(QStringLiteral("Set Dep"), &win);
+    QPushButton renbtn(QStringLiteral("Type"), &win);
+    QPushButton copybtn(QStringLiteral("Copy"), &win);
+    QSpinBox spinl(&win);              // LAYER PICKER: 1..n, clamped by refresh
+    QLabel laylbl(QStringLiteral("Layer #"), &win);
+    spinl.setMinimum(1);
+    spinl.setValue(1);
+    laylbl.move(140, 648);
+    spinl.move(138, 664);
     addbtn.move(260, 662);
     setbtn.move(384, 662);
     delbtn.move(508, 662);
     savebtn.move(632, 662);
     undobtn.move(756, 662);
     depbtn.move(260, 700);      // 2nd row: edit text -> dependency of top layer
+    renbtn.move(384, 700);      // rename TYPE of picked layer
+    copybtn.move(508, 700);     // duplicate picked layer at end
     // LB5: button + QProgressDialog + mapped errors, one mount (upload.h)
     UploadPanel upload(&win, &pm->pm, mwx,
                        up_arm || getenv("PKT_UPLOAD_ARM") != nullptr);
@@ -740,16 +780,22 @@ int main(int argc, char **argv) {
                          .arg(pm->pressed.size()));
         const Map *mp = find_map_c(pm->pm, pk);
         if (mp && !mp->layers.isEmpty()) {
+            const int n = mp->layers.size();
+            if (spinl.maximum() != n) spinl.setMaximum(n);
+            spinl.setValue(qBound(1, spinl.value(), n));
+            const int lsel = spinl.value();
             QStringList ls;
+            int li = 0;
             for (const Layer &l : mp->layers) {
                 QString s = QStringLiteral("%1 '%2'").arg(l.type).arg(l.value);
                 if (!l.dependency.isEmpty()) s += QStringLiteral(" DEP=%1").arg(l.dependency);
                 if (l.type.compare(QStringLiteral("TEXT"), Qt::CaseInsensitive) != 0)
                     s = QStringLiteral("\u2691 ACTION %1").arg(s);  // needs --allow-actions in pktm
+                if (++li == lsel) s = QStringLiteral("> %1").arg(s);
                 ls << s;
             }
-            layers.setText(QStringLiteral("layers (%1): %2").arg(mp->layers.size())
-                                                              .arg(ls.join(" | ")));
+            layers.setText(QStringLiteral("layers (%1): %2").arg(n)
+                                              .arg(ls.join(" | ")));
         } else {
             layers.setText(QStringLiteral("layers (0) — type a MACRO, then + Layer / Set"));
         }
@@ -761,14 +807,18 @@ int main(int argc, char **argv) {
         if (saved) s += QStringLiteral("  %1").arg(save_note);
         stat.setText(s);
     };
-    addbtn.connect(&addbtn, &QPushButton::clicked, [pm, &edit, &save_note, &refresh]{
-        add_layer(pm->pm, pm->sel, edit.text()); refresh(false); });
-    depbtn.connect(&depbtn, &QPushButton::clicked, [pm, &edit, &save_note, &refresh]{
-        set_top_dep(pm->pm, pm->sel, edit.text()); refresh(false); });
-    setbtn.connect(&setbtn, &QPushButton::clicked, [pm, &edit, &save_note, &refresh]{
-        set_top_value(pm->pm, pm->sel, edit.text()); refresh(false); });
-    delbtn.connect(&delbtn, &QPushButton::clicked, [pm, &save_note, &refresh]{
-        del_top_layer(pm->pm, pm->sel); refresh(false); });
+    auto f_add = [&](const QString &v){ add_layer(pm->pm, pm->sel, v.isEmpty() ? edit.text() : v); refresh(false); };
+    auto f_set = [&](const QString &v){ set_layer_value(pm->pm, pm->sel, spinl.value(), v.isEmpty() ? edit.text() : v); refresh(false); };
+    auto f_del = [&]{ del_layer(pm->pm, pm->sel, spinl.value()); refresh(false); };
+    auto f_dep = [&](const QString &v){ set_layer_dep(pm->pm, pm->sel, spinl.value(), v.isEmpty() ? edit.text() : v); refresh(false); };
+    auto f_ren = [&](const QString &v){ set_layer_type(pm->pm, pm->sel, spinl.value(), v.isEmpty() ? edit.text().toUpper() : v.toUpper()); refresh(false); };
+    auto f_copy = [&]{ copy_layer(pm->pm, pm->sel, spinl.value()); refresh(false); };
+    addbtn.connect(&addbtn, &QPushButton::clicked, [pm, &edit, &save_note, &refresh, f_add]{ f_add(edit.text()); });
+    depbtn.connect(&depbtn, &QPushButton::clicked, [pm, &edit, &save_note, &refresh, f_dep]{ f_dep(edit.text()); });
+    setbtn.connect(&setbtn, &QPushButton::clicked, [pm, &edit, &save_note, &refresh, f_set]{ f_set(edit.text()); });
+    delbtn.connect(&delbtn, &QPushButton::clicked, [pm, &save_note, &refresh, f_del]{ f_del(); });
+    renbtn.connect(&renbtn, &QPushButton::clicked, [pm, &edit, &save_note, &refresh, f_ren]{ f_ren(edit.text()); });
+    copybtn.connect(&copybtn, &QPushButton::clicked, [pm, &save_note, &refresh, f_copy]{ f_copy(); });
     savebtn.connect(&savebtn, &QPushButton::clicked, [pm, &out, &save_note, &refresh]{
         save_note = save_pmap(*pm, pm->path.isEmpty() ? out : pm->path); refresh(true); });
     undobtn.connect(&undobtn, &QPushButton::clicked, [&save_note, &refresh]{
@@ -798,6 +848,24 @@ int main(int argc, char **argv) {
         board.mousePressEvent(&ev);
         std::printf("clicktest sel=%d target=(900,300) cell=%s\n",
                     pm->sel, describe_cell(pm->sel).toUtf8().constData());
+        // BUTTON-WIRING GATE: Qt6 dropped QMeta::Clicked, so the handlers the
+        // buttons connect to are invoked directly (wiring itself stays untestable).
+        edit.setText(QStringLiteral("L1")); f_add(edit.text());
+        edit.setText(QStringLiteral("L2")); f_add(edit.text());
+        spinl.setValue(1);
+        edit.setText(QStringLiteral("AAA")); f_set(edit.text());
+        edit.setText(QStringLiteral("DEP1")); f_dep(edit.text());
+        edit.setText(QStringLiteral("WEBSITE")); f_ren(edit.text());
+        f_copy();
+        spinl.setValue(3); f_del();
+        {
+            const Map *mp = find_map_c(pm->pm, pm->sel);
+            std::printf("clicktest layers(sel=%d): %d\n", pm->sel, mp ? mp->layers.size() : -1);
+            if (mp)
+                for (const Layer &l : mp->layers)
+                    std::printf("  %s='%s' dep='%s'\n", l.type.toUtf8().constData(),
+                                l.value.toUtf8().constData(), l.dependency.toUtf8().constData());
+        }
         const auto screens = QGuiApplication::screens();
         if (!screens.isEmpty()) {
             const QPixmap pm_img = screens.first()->grabWindow(0);
