@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 project(pkteditor LANGUAGES CXX)
-find_package(Qt6 REQUIRED COMPONENTS Core Widgets Gui)
+find_package(Qt6 REQUIRED COMPONENTS Core Widgets Gui Test)
 set(CMAKE_CXX_COMPILER /usr/sbin/clang++)
 set(CMAKE_CXX_STANDARD 20)
 
@@ -31,6 +31,7 @@ target_include_directories(pktm PRIVATE /usr/include/qt6 /usr/include/qt6/QtCore
 find_library(USB_LIB NAMES usb-1.0)
 set(HID_LIB /usr/lib/libhidapi-libusb.so)
 target_link_libraries(pktest PRIVATE Qt6Core "${USB_LIB}" "${HID_LIB}")
-target_link_libraries(pkteditor PRIVATE Qt6Core Qt6Gui Qt6Widgets "${USB_LIB}" "${HID_LIB}")
+add_compile_definitions(pkteditor QT_WIDGETS_LIB)  # for QTest::mouseClick QWidget overloads (manual link, cmake feature macro normally set by qt_add_*)
+target_link_libraries(pkteditor PRIVATE Qt6Core Qt6Gui Qt6Widgets Qt6Test "${USB_LIB}" "${HID_LIB}")
 target_link_libraries(pktup PRIVATE Qt6Core Qt6Gui Qt6Widgets "${USB_LIB}" "${HID_LIB}")
 target_link_libraries(pktm PRIVATE Qt6Core Qt6Gui "${USB_LIB}" "${HID_LIB}")

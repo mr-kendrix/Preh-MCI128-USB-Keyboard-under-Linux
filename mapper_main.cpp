@@ -140,7 +140,7 @@ int main(int argc, char **argv) {
         else if (a == "--cooldown-test") mode = "cooldown-test";
         else if (path.isEmpty()) path = a;
     }
-    // cooldown unit test: (key,last,now,table) logic independent of event loop
+    // unit gates: cooldown table + action parsing, incl. deliberate NEGATIVE cases
     if (mode == "cooldown-test") {
         struct C { int pk; qint64 t; bool want; };
         const C cs[] = { {2, 0, true},    {2, 100, false},  {2, 600, true},
@@ -151,7 +151,28 @@ int main(int argc, char **argv) {
             const bool got = action_cooldown_check(c.pk, tbl, c.t, 500);
             if (got != c.want) { ++fails; std::printf("FAIL pk=%d t=%lld got=%d want=%d\n", c.pk, (long long)c.t, (int)got, (int)c.want); }
         }
-        std::printf("COOLDOWN-TEST %zu cases fails=%d %s\n", sizeof(cs) / sizeof(cs[0]), fails, fails ? "BAD" : "OK");
+        // action parsing must match the spec incl. refusals (negative cases!).
+        struct A { const char *type; const char *value; int min_size; bool refuse; };  // min_size<0 = only 'refused' matters
+        const A as[] = {
+            { "APPLICATION", "touch /tmp/pwn1", 1, false },               // ONE program name, execvp-safe
+            { "APPLICATION", "/usr/bin/touch::/tmp/argvA::/tmp/argvB", 3, false },
+            { "APPLICATION", "/bin/sh::-c::id", 3, false },               // parser allows; --allow-actions IS the boundary
+            { "WEBSITE", "http://a\nb", -1, true },                        // control char -> refused
+            { "WEBSITE", "http://a'b", -1, true },                         // quote -> refused (spec gate)
+            { "WEBSITE", "ftp://x", -1, true },                            // non-http scheme
+            { "APPLICATION", "C:\\WINDOWS\\explorer.exe", -1, true },      // windows path
+        };
+        for (const A &a : as) {
+            const Layer l{QString::fromLatin1(a.type), QString::fromUtf8(a.value)};
+            QString why;
+            const QVector<QString> av = action_argv(l, why);
+            const bool refused = av.isEmpty();
+            bool bad = false;
+            if (refused != a.refuse) bad = true;
+            else if (!a.refuse && av.size() < a.min_size) bad = true;
+            if (bad) { ++fails; std::printf("FAIL %s '%s' av=%d refused=%d why='%s'\n", a.type, a.value, (int)av.size(), (int)refused, why.toUtf8().constData()); }
+        }
+        std::printf("COOLDOWN+ACTION SELFTEST %zu+%zu cases fails=%d %s\n", sizeof(cs) / sizeof(cs[0]), sizeof(as) / sizeof(as[0]), fails, fails ? "BAD" : "OK");
         return fails ? 1 : 0;
     }
     if (path.isEmpty() || mode.isEmpty() || (mode == "inject" && poskey < 0)) {

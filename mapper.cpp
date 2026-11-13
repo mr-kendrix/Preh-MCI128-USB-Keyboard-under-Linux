@@ -256,7 +256,11 @@ QVector<QString> action_argv(const Layer &l, QString &why)
             why = QStringLiteral("website: non-http scheme"); return {};
         }
         if (!http) u = QStringLiteral("https://") + u;
-        // URL = ONE argv entry; shell never involved, quotes inside are data.
+        // quote/backtick refusal kept as a spec gate even though execvp makes
+        // them data: a URL carrying shell-quoting chars signals a hand-crafted
+        // pmap — refuse rather than smuggle.
+        for (QChar q : {QChar('\''), QChar('"'), QChar('`')})
+            if (u.contains(q)) { why = QStringLiteral("website: quote chars"); return {}; }
         return { QStringLiteral("xdg-open"), u };
     }
     // APPLICATION vendor dialect "prog::arg1::arg2" — split at '::' (no shell,

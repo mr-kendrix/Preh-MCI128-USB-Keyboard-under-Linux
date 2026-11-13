@@ -21,6 +21,8 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QSpinBox>
+#include <QtTest/QTest>
+#include <QtTest/qtestmouse.h>
 #include <QRegularExpression>
 #include <QPainter>
 #include <QImage>
@@ -712,14 +714,14 @@ int main(int argc, char **argv) {
     spinl.setValue(1);
     laylbl.move(140, 648);
     spinl.move(138, 664);
-    addbtn.move(260, 662);
-    setbtn.move(384, 662);
-    delbtn.move(508, 662);
-    savebtn.move(632, 662);
-    undobtn.move(756, 662);
-    depbtn.move(260, 700);      // 2nd row: edit text -> dependency of top layer
+    addbtn.move(260, 662);      setbtn.move(384, 662);    delbtn.move(508, 662);
+    savebtn.move(632, 662);    undobtn.move(756, 662);
+    depbtn.move(260, 700);      // 2nd row: edit text -> dependency of picked layer
     renbtn.move(384, 700);      // rename TYPE of picked layer
     copybtn.move(508, 700);     // duplicate picked layer at end
+    addbtn.setObjectName("add");   setbtn.setObjectName("set");   delbtn.setObjectName("del");
+    depbtn.setObjectName("dep");   renbtn.setObjectName("ren");   copybtn.setObjectName("copy");
+    savebtn.setObjectName("save"); undobtn.setObjectName("undo");
     // LB5: button + QProgressDialog + mapped errors, one mount (upload.h)
     UploadPanel upload(&win, &pm->pm, mwx,
                        up_arm || getenv("PKT_UPLOAD_ARM") != nullptr);
@@ -848,16 +850,45 @@ int main(int argc, char **argv) {
         board.mousePressEvent(&ev);
         std::printf("clicktest sel=%d target=(900,300) cell=%s\n",
                     pm->sel, describe_cell(pm->sel).toUtf8().constData());
-        // BUTTON-WIRING GATE: Qt6 dropped QMeta::Clicked, so the handlers the
-        // buttons connect to are invoked directly (wiring itself stays untestable).
-        edit.setText(QStringLiteral("L1")); f_add(edit.text());
-        edit.setText(QStringLiteral("L2")); f_add(edit.text());
+        // BUTTON-WIRING GATE: real click events via QTest::mouseClick (Qt6 keeps
+        // the hook; only QMeta::Clicked itself was replaced). Buttons found by
+        // objectName -> wiring, not just handlers.
+        auto find_btn = [&](const char *name) -> QPushButton * {
+            for (QObject *w : win.children())
+                if (auto *pb = qobject_cast<QPushButton *>(w))
+                    if (pb->objectName() == QLatin1String(name))
+                        return pb;
+            return nullptr;
+        };
+        auto press_btn = [&](const char *name) -> bool {
+            if (QPushButton *pb = find_btn(name)) { QTest::mouseClick(pb, Qt::LeftButton); return true; }
+            return false;
+        };
+        int gfail = 0;
+        if (!(find_btn("add") && find_btn("set") && find_btn("del")
+              && find_btn("dep") && find_btn("ren") && find_btn("copy")))
+            { std::printf("clicktest FAIL: button by objectName missing\n"); ++gfail; }
+        edit.setText(QStringLiteral("L1")); press_btn("add");
+        edit.setText(QStringLiteral("L2")); press_btn("add");
         spinl.setValue(1);
-        edit.setText(QStringLiteral("AAA")); f_set(edit.text());
-        edit.setText(QStringLiteral("DEP1")); f_dep(edit.text());
-        edit.setText(QStringLiteral("WEBSITE")); f_ren(edit.text());
-        f_copy();
-        spinl.setValue(3); f_del();
+        edit.setText(QStringLiteral("AAA")); press_btn("set");
+        edit.setText(QStringLiteral("DEP1")); press_btn("dep");
+        edit.setText(QStringLiteral("WEBSITE")); press_btn("ren");
+        press_btn("copy");
+        spinl.setValue(3); press_btn("del");
+        // negative case: disabled button must not fire
+        copybtn.setEnabled(false);
+        spinl.setValue(1);
+        {
+            const Map *m0 = find_map_c(pm->pm, pm->sel);
+            const int n_b = m0 ? m0->layers.size() : -1;
+            press_btn("copy");
+            const Map *m1 = find_map_c(pm->pm, pm->sel);
+            const int n_a = m1 ? m1->layers.size() : -1;
+            std::printf("clicktest disabled-copy ignored: %s (n=%d->%d)\n",
+                        n_a == n_b ? "OK" : "FAIL", n_b, n_a);
+            if (n_a != n_b) ++gfail;
+        }
         {
             const Map *mp = find_map_c(pm->pm, pm->sel);
             std::printf("clicktest layers(sel=%d): %d\n", pm->sel, mp ? mp->layers.size() : -1);
@@ -872,7 +903,7 @@ int main(int argc, char **argv) {
             pm_img.save(shot.isEmpty() ? QStringLiteral("/tmp/wshot.png") : shot);
             std::printf("shot saved %s\n", shot.isEmpty() ? "/tmp/wshot.png" : shot.toUtf8().constData());
         }
-        return 0;
+        return gfail;
     }
     win.show();
     return app.exec();
