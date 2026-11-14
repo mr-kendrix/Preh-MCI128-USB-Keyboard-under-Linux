@@ -398,3 +398,9 @@ YDOTOOL_SOCKET=/tmp/.does-not-exist ./b/pktm ...  # error: + rc=2
 - lev>0 requires mask!=0 (else base char typed).
 - Preview: "TYPES (layout de) ..."; daemon links same mapper.cpp -> preview==executor.
 - Gates (cp1252 correct: Ä=C4 ß=E1 — earlier C384 was UTF-8 trap): de `Zylinder@?Äß` = full seq (Z=SHIFT+ev21 Z-Position, y=ev44, @=ALTGR+q-Position, ?=SHIFT+ssharp, Ä=SHIFT+'-Position, ß=ssharp); us: Zylinder OK, Ä/ß REJECTED.
+## Process-Picker (GUI Plan Phase 1)
+- mapper.cpp list_processes(): kdotool ps lines ('<id> <title>', id stripped) + /proc/*/comm names (same trunc15 name space dep_matches compares). kdotool 0.3.0 has NO 'ps' -> exit1 handled, comm list still complete.
+- This Qt6: QDir::entryList() ONLY (no entries()/readDir()/names(), no QDir::Directories constants); QComboBox API: addItems/clear/count/currentIndex/itemText (no setItems/numItems/displayString).
+- GUI: QComboBox procPick + lblPick 'picker...' + 'Use Picked Proc' button (objectName pick) -> set_layer_dep(picked layer, combo current) -> shows in layers line.
+- CLI mirror: pktm <pmap> --processes (list printed).
+- Gates: clicktest picker n=20 first='(sd-pam)', WEBSITE dep='(sd-pam)' after pick click; sabotage pickX -> 'button missing' FAIL + RC=1.

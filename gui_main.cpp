@@ -21,6 +21,7 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QSpinBox>
+#include <QComboBox>
 #include <QtTest/QTest>
 #include <QtTest/qtestmouse.h>
 #include <QRegularExpression>
@@ -740,7 +741,14 @@ int main(int argc, char **argv) {
     // LB5: button + QProgressDialog + mapped errors, one mount (upload.h)
     UploadPanel upload(&win, &pm->pm, mwx,
                        up_arm || getenv("PKT_UPLOAD_ARM") != nullptr);
-    upload.move(900, 640);
+    QLabel lblPick(&win);               // process-picker readout
+    lblPick.move(10, 750);
+    QComboBox procPick(&win);           // PROCESS PICKER (GUI Plan Phase 1)
+    procPick.setObjectName("procpick");
+    procPick.move(8, 728);
+    QPushButton pickbtn(QStringLiteral("Use Picked Proc"), &win);
+    pickbtn.setObjectName("pick");
+    pickbtn.move(756, 738);
     upload.setFixedSize(QSize(260, 90));
 
     // live board: pressed POSKeys get a green ring (calib maps scancode->POSKey)
@@ -822,6 +830,17 @@ int main(int argc, char **argv) {
         QString s = QStringLiteral("grid: %1  POSKeys ohne Cap: %2")
                         .arg(grid_stats()).arg(nocard.join(","));
         if (saved) s += QStringLiteral("  %1").arg(save_note);
+        // process picker: (re)fill combo on save + first call; label = current pick
+        if (saved || procPick.count() == 0) {
+            procPick.clear();
+            procPick.addItems(pktm::list_processes(120));
+        }
+        if (procPick.count() > 0)
+            procPick.setCurrentIndex(qBound(0, procPick.currentIndex(), procPick.count() - 1));
+        const QString cur = procPick.count() ? procPick.itemText(procPick.currentIndex()) : QString();
+        lblPick.setText(cur.isEmpty()
+            ? QStringLiteral("picker: running processes not listed (no probe)")
+            : QStringLiteral("picked: '%1' (n=%2)").arg(cur).arg(procPick.count()));
         stat.setText(s);
     };
     auto f_add = [&](const QString &v){ add_layer(pm->pm, pm->sel, v.isEmpty() ? edit.text() : v); refresh(false); };
@@ -830,6 +849,16 @@ int main(int argc, char **argv) {
     auto f_dep = [&](const QString &v){ set_layer_dep(pm->pm, pm->sel, spinl.value(), v.isEmpty() ? edit.text() : v); refresh(false); };
     auto f_ren = [&](const QString &v){ set_layer_type(pm->pm, pm->sel, spinl.value(), v.isEmpty() ? edit.text().toUpper() : v.toUpper()); refresh(false); };
     auto f_copy = [&]{ copy_layer(pm->pm, pm->sel, spinl.value()); refresh(false); };
+    // Process picker: QComboBox fed by mapper.cpp list_processes() — the daemon's
+    // own probe chain (kdotool ps) + comm names from /proc, i.e. exactly the
+    // names the daemon's dep layer can match. 'Use Picked Proc' assigns the
+    // combi's current entry as dep of the picked layer.
+    auto f_pick = [&]{
+        const QString cur = procPick.currentText();
+        set_layer_dep(pm->pm, pm->sel, spinl.value(), cur.isEmpty() ? edit.text() : cur);
+        refresh(false);
+    };
+    pickbtn.connect(&pickbtn, &QPushButton::clicked, [pm, &edit, &save_note, &refresh, f_pick]{ f_pick(); });
     auto f_prev = [&]{
         const Map *mp = find_map_c(pm->pm, pm->sel);
         const QString t = mp ? pktm::preview_map(*mp, spinl.value())
@@ -891,7 +920,7 @@ int main(int argc, char **argv) {
         int gfail = 0;
         if (!(find_btn("add") && find_btn("set") && find_btn("del")
               && find_btn("dep") && find_btn("ren") && find_btn("copy")
-              && find_btn("preview")))
+              && find_btn("preview") && find_btn("pick")))
             { std::printf("clicktest FAIL: button by objectName missing\n"); ++gfail; }
         edit.setText(QStringLiteral("L1")); press_btn("add");
         edit.setText(QStringLiteral("L2")); press_btn("add");
@@ -918,6 +947,12 @@ int main(int argc, char **argv) {
         press_btn("preview");
         spinl.setValue(2);
         press_btn("preview");
+        // process-picker gate: list from mapper.cpp (same code the dep-match uses)
+        const QStringList procs = pktm::list_processes(20);
+        std::printf("picker n=%d first='%s'\n", (int)procs.size(),
+                    procs.isEmpty() ? "" : procs.first().toUtf8().constData());
+        spinl.setValue(1);
+        press_btn("pick");
         {
             const Map *mp = find_map_c(pm->pm, pm->sel);
             std::printf("clicktest layers(sel=%d): %d\n", pm->sel, mp ? mp->layers.size() : -1);

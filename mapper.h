@@ -95,4 +95,9 @@ void spawn_argv(const QVector<QString> &argv);
 bool action_cooldown_check(int pk, QHash<int, qint64> &tbl, qint64 now_ms,
                    int window_ms = 500);
 
+// Process picker source: running windows + processes via the daemon's own
+// probe chain (kdotool ps -> fallback /proc comm) — the picker lists exactly
+// what dep_matches() can compare against (comm names) plus window titles.
+QStringList list_processes(int limit = 120);
+
 }

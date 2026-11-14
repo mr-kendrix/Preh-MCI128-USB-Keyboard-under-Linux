@@ -13,6 +13,7 @@
 #include <QJsonParseError>
 #include <QByteArray>
 #include <QFile>
+#include <QDir>
 #include <QPair>
 #include <cstring>
 #include <cerrno>
@@ -665,7 +666,8 @@ QString literal_to_type(const Rule &r, const Layer &l) {
 // kdotool 0.3.0's own compat check exits nonzero on unsupported Plasma builds — a
 // nonzero exit must NOT be read as a window). Title = first line of stdout only.
 // Test environment for this chain: kdotool v0.3.0 @ Plasma 6.5.x (Arch, 2026-11-10).
-static bool run_probe(const QString &helper, const QStringList &args, QString &out) {
+// 'full=false': out = first line only (single-value probes); 'full=true': all stdout (enumeration).
+static bool run_probe(const QString &helper, const QStringList &args, QString &out, bool full = false) {
     QProcess p;
     // kdotool's compat check (upstream main.rs) needs KDE_SESSION_VERSION == "6"
     // EXACTLY — plain terminals and systemd services don't export it (only GUI procs
@@ -701,8 +703,51 @@ static bool run_probe(const QString &helper, const QStringList &args, QString &o
         }
     }
     if (p.exitCode() != 0) return false;   // helper said no: unknown/process-undeterminable
-    out = QString::fromUtf8(p.readAllStandardOutput()).split('\n').first().trimmed();
+    const QString all = QString::fromUtf8(p.readAllStandardOutput());
+    out = full ? all : all.split(QLatin1Char('\n')).first().trimmed();
     return true;
+}
+
+// ── Process picker source (GUI): SAME probe chain the daemon matches against
+// (kdotool -> xdotool -> fail closed). Windows: kdotool 'ps' lists KDE windows
+// (xdotool 'search' would only print numeric ids -> names need a probe per id,
+// unaffordable live: X11 enumeration = process fallback only). Processes: /proc
+// scan of comm — the very name space dep_matches() compares against (proc_eq
+// truncates to 15). Sorted+deduped, capped so the combobox stays readable.
+QStringList list_processes(int limit) {
+    QStringList out;
+    auto push = [&](QString s) {
+        s = s.simplified();
+        if (!s.isEmpty() && !out.contains(s)) out << s;
+    };
+    QString full;
+    if (run_probe(QStringLiteral("kdotool"), {QStringLiteral("ps")}, full, true)) {
+        // kdotool ps prints '<window_id> <title>' lines (kdotool-client.c shape):
+        // strip a leading numeric token, keep the title.
+        for (QString line : full.split(QLatin1Char('\n'))) {
+            line = line.trimmed();
+            if (line.isEmpty()) continue;
+            const int sp = line.indexOf(QLatin1Char(' '));
+            if (sp > 0) {
+                bool idonly = true;
+                for (int k = 0; k < sp; ++k) if (!line[k].isDigit()) { idonly = false; break; }
+                if (idonly) line = line.mid(sp + 1);
+            }
+            if (!line.isEmpty() && !out.contains(line)) out << line;   // windows first, probe order
+        }
+    }
+    QDir proc(QStringLiteral("/proc"));
+    const QStringList pids = proc.entryList();   // digit filter below skips ., .. and names
+    for (const QString &e : pids) {
+        bool pidok = !e.isEmpty();
+        for (const QChar &c : e) if (!c.isDigit()) { pidok = false; break; }
+        if (!pidok) continue;
+        QFile c(QStringLiteral("/proc/%1/comm").arg(e));
+        if (c.open(QIODevice::ReadOnly)) push(c.readAll().trimmed());
+    }
+    out.sort();
+    while (out.size() > limit) out.removeLast();
+    return out;
 }
 
 QString active_window() {

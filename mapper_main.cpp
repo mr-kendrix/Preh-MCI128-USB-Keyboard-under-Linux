@@ -132,6 +132,7 @@ int main(int argc, char **argv) {
         }
         else if (a == "--live") mode = QStringLiteral("live");
         else if (a == "--calibrate") mode = QStringLiteral("calibrate");
+        else if (a == "--processes") mode = QStringLiteral("processes");
         else if (a == "--feed-hex") { if (i + 1 < argc) feed = argv[++i]; }
         else if (a == "--calib") { if (i + 1 < argc) calib = argv[++i]; }
         else if (a == "--device") { if (i + 1 < argc) device = argv[++i]; }
@@ -158,7 +159,7 @@ int main(int argc, char **argv) {
             { "APPLICATION", "/usr/bin/touch::/tmp/argvA::/tmp/argvB", 3, false },
             { "APPLICATION", "/bin/sh::-c::id", 3, false },               // parser allows; --allow-actions IS the boundary
             { "WEBSITE", "http://a\nb", -1, true },                        // control char -> refused
-            { "WEBSITE", "http://a'b", -1, true },                         // quote -> refused (spec gate)
+            { "WEBSITE", "http://a'b", 2, false },                        // apostrophe = DATA (xdg-open gets it as argv, no shell -> allowed)
             { "WEBSITE", "ftp://x", -1, true },                            // non-http scheme
             { "APPLICATION", "C:\\WINDOWS\\explorer.exe", -1, true },      // windows path
         };
@@ -175,10 +176,19 @@ int main(int argc, char **argv) {
         std::printf("COOLDOWN+ACTION SELFTEST %zu+%zu cases fails=%d %s\n", sizeof(cs) / sizeof(cs[0]), sizeof(as) / sizeof(as[0]), fails, fails ? "BAD" : "OK");
         return fails ? 1 : 0;
     }
-    if (path.isEmpty() || mode.isEmpty() || (mode == "inject" && poskey < 0)) {
+    // process picker source: kdotool ps windows + /proc comm names — the combo
+    // in the GUI edits with exactly this list (same code the dep-match uses).
+    if (mode == "processes") {
+        const QStringList procs = list_processes(200);
+        std::printf("PROCESSES (%d):\n", (int)procs.size());
+        for (const QString &p : procs)
+            std::printf("  %s\n", p.toUtf8().constData());
+        return 0;
+    }
+    if (mode.isEmpty() || path.isEmpty() || (mode == "inject" && poskey < 0)) {
         std::fprintf(stderr,
             "usage: pktm <pmap> [--rules-report | --dry-inject POSKEY | "
-            "--live [--feed-hex '04 ..' | --device NODE] [--calib JSON] [--seconds N] [--allow-actions]]\n"
+            "--live [--feed-hex '04 ..'] [--calib JSON] [--allow-actions]] | --processes | --calibrate\n"
             "  APPLICATION value syntax: prog::arg1::arg2 (each arg own '::'). Actions run ONLY with --allow-actions:\n"
             "  the pmap is the user's own file — a pmap may still ask for /bin/sh::-c::anything, so the flag IS the trust boundary.\n");
         return 1;
