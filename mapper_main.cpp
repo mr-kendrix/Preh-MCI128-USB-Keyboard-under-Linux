@@ -380,6 +380,26 @@ int main(int argc, char **argv) {
                 std::printf(">> note: calib has no '_board_chk' stamp — restamp after table uploads\n");
             }
         }
+        // Instance lock (pktm vs pktm) BEFORE any IPC sock work: bind_socket()
+        // unlink+rebinds the sock node — only allowed once THIS process owns the
+        // exclusive lock (reviewer round-2: without it a second pktm could steal
+        // the running daemon's socket). fd stays open for the process lifetime;
+        // the kernel drops the advisory lock at exit.
+        {
+            int self_lock = -1;
+            {
+                QString ldir = getenv("XDG_RUNTIME_DIR");
+                if (ldir.isEmpty()) ldir = QString("/run/user/%1").arg(int(::getuid()));
+                const QString self_path = ldir + "/pktm-hidraw.lock";
+                self_lock = ::open(self_path.toUtf8().constData(),
+                                   O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC, 0600);
+                if (self_lock < 0 || ::flock(self_lock, LOCK_EX | LOCK_NB) != 0) {
+                    if (self_lock >= 0) ::close(self_lock);
+                    std::printf(">> refusing: another pktm holds the exclusive pktm lock\n");
+                    return 2;
+                }
+            }
+        }
         // ---- Phase 2 IPC (design runs/phase2_ipc_design.md): one bound NDJSON
         // socket; the GUI is the peer. Emits are best-effort: a broken pipe warns
         // once and NEVER kills the pump loop (keyboard must keep working).
@@ -718,21 +738,11 @@ int main(int argc, char **argv) {
                             "raw running) — wait for it or stop pktd.service\n");
                 return 2;
             }
-            // own lock in the PRIVATE per-user runtime dir, 0600 + O_NOFOLLOW: a
-            // world-writable /tmp lockfile could be weaponised/pre-held by others
-            QString ldir = getenv("XDG_RUNTIME_DIR");
-            if (ldir.isEmpty()) ldir = QString("/run/user/%1").arg(int(::getuid()));
-            const QString self_path = ldir + "/pktm-hidraw.lock";
-            const int self = ::open(self_path.toUtf8().constData(),
-                                    O_CREAT | O_RDWR | O_NOFOLLOW, 0600);
-            if (self < 0 || ::flock(self, LOCK_EX | LOCK_NB) != 0) {
-                if (self >= 0) ::close(self);
-                ::close(peer);   // closing the fd drops its advisory lock
-                std::printf(">> refusing: another pktm holds the exclusive pktm lock\n");
-                return 2;
-            }
-            // fds stay open for the process lifetime; both locks drop on exit;
-            // O_CLOEXEC prevents fd leaks into helpers started via fork/exec
+            // pktm-vs-pktm exclusive lock: taken ABOVE the IPC bind now (single
+            // place, review round-2); this block only holds the pktd parity half.
+            // The LOCK_SH fd intentionally stays open for the process lifetime —
+            // the pair (peer LOCK_SH + own LOCK_EX above) is what keeps pktd and
+            // pktm from each other; the kernel drops both locks at exit.
         }
         std::printf(">> backend=ydotool calib=%d rules=%d (event loop, window per press; Ctrl-C = sweep; max-hold=%ds)\n",
                     int(table.size()), int(rs.rules.size()), max_hold_s);

@@ -21,7 +21,7 @@ static QString g_bound;   // path this process bound (peer side connects it)
 QString sock_path() {
     const char *x = ::getenv("XDG_RUNTIME_DIR");
     const QString base = (x && *x) ? QString::fromUtf8(x) : QStringLiteral("/tmp");
-    return base + QStringLiteral("/derpktxc/daemon.sock");
+    return base + QStringLiteral("/pkt/daemon.sock");   // short namespace dir (review 2), not 'derpktxc'
 }
 
 static bool fill_un(sockaddr_un &un, const QString &p) {
@@ -120,10 +120,11 @@ bool send_line(int fd, const QString &line, QString &err) {
     const QByteArray d = (line + QLatin1Char('\n')).toUtf8();
     int off = 0;
     while (off < d.size()) {
-        // ::write on the CONNECTED accepted peer fd. (The original ENOTSOCK bug
-        // was sending on the BOUND fd — never valid for IO.) Dead peer: EPIPE;
-        // SIGPIPE is SIG_IGN'd in the daemon so the pump loop survives.
-        const ssize_t n = ::write(fd, d.constData() + off, size_t(d.size() - off));
+        // 4-arg ::send with MSG_NOSIGNAL on the CONNECTED accepted peer fd: a dead
+        // peer gives EPIPE WITHOUT raising SIGPIPE — protects daemon AND GUI
+        // regardless of each program's signal setup (the historic ENOTSOCK bug was
+        // sending on the BOUND fd, unrelated to send-vs-write).
+        const ssize_t n = ::send(fd, d.constData() + off, size_t(d.size() - off), MSG_NOSIGNAL);
         if (n < 0 && errno == EINTR) continue;
         if (n <= 0) { err = QStringLiteral("send: %1").arg(errno); return false; }
         off += int(n);

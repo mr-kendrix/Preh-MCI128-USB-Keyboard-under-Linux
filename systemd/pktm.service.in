@@ -1,0 +1,21 @@
+# pktm session daemon — TEMPLATE ONLY, NOT installed (boot switch = human decision
+# after days of manual trial, one of pktd/pktm only; keep old system unit untouched).
+# Install on decision: cp -> ~/.config/systemd/user/pktm.service, then systemctl
+# --user start/test manually; do NOT `systemctl --user enable` before the trial ran.
+
+[Unit]
+Description=pktm POS-key daemon (Preh MCI128, session-bound)
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+# PRECONDITION, checked by the daemon at start (refuses rc=2 while pktd is live —
+# hidraw single consumer). Restart is deliberately ABSENT: a precondition failure
+# (rc=2) would otherwise loop; enabling Restart=on-failure needs a validated
+# permanent-fail exit path first.
+ExecStart=%h/hermes-workspace/pkt-editor-cpp/b2/pktm %h/.../Mr.Kendrix.pmap --live --ipc --calib %h/MK.calib.json
+# XDG_RUNTIME_DIR is inherited by user services -> sock dir = $XDG_RUNTIME_DIR/pkt
+TimeoutStopSec=10
+StopGracePeriod=10
+
+# [Install] deliberately omitted until the boot decision is made.

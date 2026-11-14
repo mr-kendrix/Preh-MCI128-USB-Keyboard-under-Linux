@@ -408,6 +408,17 @@ static QString ipc_reload_note() {
     return note;
 }
 
+// Window startup: if a daemon is already listening, take the peer connection up
+// front — the hidraw watch stays off from the first heartbeat (reviewer round-2:
+// the GUI watch conflicts with a live daemon on the same node).
+static void ipc_adopt_peer() {
+    if (g_ipc_peer < 0 && QFile::exists(pktipc::sock_path())) {
+        QString derr;
+        const int fd = pktipc::connect_peer(derr);
+        if (fd >= 0) { g_ipc_peer = fd; std::printf("ipc peer connected (own hidraw watch off)\n"); }
+    }
+}
+
 // Undo stack: save_pmap pushes (path, pre-save raw, post-save bytes) AFTER a
 // successful write; undo restores ONLY if the file still equals post — a file
 // changed by someone else in between is reported, never clobbered.
@@ -734,6 +745,13 @@ int main(int argc, char **argv) {
     }
     if (mode == "smoke") return gate_smoke(m);
     if (mode == "watch") {
+        if (QFile::exists(pktipc::sock_path())) {
+            // a live daemon already owns the hidraw consumer — the GUI watch would
+            // be a second reader (reviewer round-2); status flows over the socket.
+            std::printf("watch refused: daemon socket live at %s — use the window's daemon status line\n",
+                        pktipc::sock_path().toUtf8().constData());
+            return 3;
+        }
         const QHash<int, int> cal = load_calib(
             calib.isEmpty() ? QStringLiteral("/home/nonrmy/MK.calib.json") : calib);
         std::printf("watch 8s — press keys on the board (calib=%d entries)\n",
@@ -861,6 +879,7 @@ int main(int argc, char **argv) {
     upload.setFixedSize(QSize(260, 90));
 
     // live board: pressed POSKeys get a green ring (calib maps scancode->POSKey)
+    ipc_adopt_peer();   // daemon already listening? peer up front, watch stays off
     const QHash<int, int> cal = load_calib(
         calib.isEmpty() ? QStringLiteral("/home/nonrmy/MK.calib.json") : calib);
     QTimer poll;
@@ -869,6 +888,9 @@ int main(int argc, char **argv) {
     // with the start()-cast — pressed set never updated live.
     const QMetaObject::Connection pc = poll.connect(
         &poll, &QTimer::timeout, [&]() {
+        if (g_ipc_peer >= 0) { ipc_drain(); return; }  // daemon live: the GUI must NOT
+        // also read the hidraw node (watch-mode conflict, review round-2) — the
+        // daemon's status lines come in over the socket instead.
         bool touched = false;
         unsigned char buf[5];
         int n;

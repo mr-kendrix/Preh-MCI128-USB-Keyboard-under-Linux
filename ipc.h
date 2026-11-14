@@ -1,6 +1,6 @@
 #pragma once
 // Phase 2 IPC (2026-11-14, design runs/phase2_ipc_design.md): one unix STREAM
-// socket at $XDG_RUNTIME_DIR/derpktxc/daemon.sock; daemon binds, GUI connects
+// socket at $XDG_RUNTIME_DIR/pkt/daemon.sock; daemon binds, GUI connects
 // the same path; NDJSON both directions ({\"t\":type,...}, no framing bytes).
 // Additive: everything works byte-identical without the socket.
 #include <QString>
@@ -12,7 +12,7 @@ namespace pktipc {
 
 // --- endpoints ------------------------------------------------------------
 QString sock_path();                 // design path (XDG_RUNTIME_DIR or /tmp fallback)
-bool  ensure_dir();                  // mkdir $XDG_RUNTIME_DIR/derpktxc mode 0700
+bool  ensure_dir();                  // mkdir $XDG_RUNTIME_DIR/pkt mode 0700
 int   bind_socket(QString &err);     // unlink stale, bind; fd bound to path
 int   connect_peer(QString &err);    // GUI side: connect to the bound path
 int   poll_accept(int bound_fd, QString &err); // daemon side: poll(POLLIN) on the LISTENing
