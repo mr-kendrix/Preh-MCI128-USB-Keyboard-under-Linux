@@ -391,3 +391,10 @@ YDOTOOL_SOCKET=/tmp/.does-not-exist ./b/pktm ...  # error: + rc=2
 - ACTION layers: `> panel`/live-window prefix `\u2691` on non-TEXT layers + header note 'runs only in pktm --live --allow-actions'.
 - UNTESTED: physical QPushButton .clicked() path (QMeta removed in Qt6) — handler logic covered, plumbing not.
 - **Qt6 button wiring CORRECTED (review round):** QMeta::Clicked was REPLACED, not dropped — QTest::mouseClick(QWidget*, Qt::LeftButton) works in 6.12 (link Qt6Test, header <QtTest/qtestmouse.h>, target needs add_compile_definitions(pkteditor QT_WIDGETS_LIB) since manual link skips the cmake feature macro). Gate now: buttons carry objectName, clicktest finds them (find_btn) and fires REAL clicks (press_btn) incl. DISABLED-button negative case; sabotage (renamed objectName) -> "clicktest FAIL" + RC=1 (verified). Old claim "untestable" voided here.
+
+## Layout-Engine (xkb)
+- mapper.cpp PKT_HAVE_XKB (CMake find XKB_LIB; link pktm+pkteditor): xkb_type_char via keymap_new_from_names(PKT_XKB_LAYOUT, default us); CHARMAP = fallback only.
+- Mod-keys by STATE SIMULATION (names differ per lib: "Shift","Mod5" — never name-map!): build_modev presses LSH/RSH/LCTL/RCTL/LALT/RALT/LGUI/RGUI, records mod-index -> ev (RALT=ev100).
+- lev>0 requires mask!=0 (else base char typed).
+- Preview: "TYPES (layout de) ..."; daemon links same mapper.cpp -> preview==executor.
+- Gates (cp1252 correct: Ä=C4 ß=E1 — earlier C384 was UTF-8 trap): de `Zylinder@?Äß` = full seq (Z=SHIFT+ev21 Z-Position, y=ev44, @=ALTGR+q-Position, ?=SHIFT+ssharp, Ä=SHIFT+'-Position, ß=ssharp); us: Zylinder OK, Ä/ß REJECTED.

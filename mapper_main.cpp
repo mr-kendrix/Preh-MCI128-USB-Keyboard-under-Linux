@@ -163,7 +163,7 @@ int main(int argc, char **argv) {
             { "APPLICATION", "C:\\WINDOWS\\explorer.exe", -1, true },      // windows path
         };
         for (const A &a : as) {
-            const Layer l{QString::fromLatin1(a.type), QString::fromUtf8(a.value)};
+            const pktm::Layer l{QString::fromLatin1(a.type), QString::fromUtf8(a.value)};
             QString why;
             const QVector<QString> av = action_argv(l, why);
             const bool refused = av.isEmpty();
@@ -197,7 +197,7 @@ int main(int argc, char **argv) {
         for (const Rule &r : rs.rules) {
             int sel = match_layer(r, unknown_window(), unknown_window());
             if (sel < 0 && !r.layers.isEmpty()) sel = 0;
-            Layer l;  // empty when the MAP carries no layer (poskey still a rule)
+            pktm::Layer l;  // empty when the MAP carries no layer (poskey still a rule)
             if (sel >= 0) l = r.layers[sel];
             const QString dep = l.dep.isEmpty() ? QStringLiteral("*") : l.dep;
             QString flags;
@@ -290,7 +290,7 @@ int main(int argc, char **argv) {
         {
             int nact = 0;
             for (const Rule &r : rs.rules)
-                for (const Layer &l : r.layers)
+                for (const pktm::Layer &l : r.layers)
                     if (pktm::layer_is_action(l)) {
                         QString why;
                         const QVector<QString> av = pktm::action_argv(l, why);
@@ -433,7 +433,7 @@ int main(int argc, char **argv) {
             if (!hit) { std::printf("POSKey %d -> no rule -> nothing injected\n", pk); return; }
             // probes only when actually needed (rule has a dependency)
             bool need_dep = false;
-            for (const Layer &l : hit->layers) if (!l.dep.isEmpty()) { need_dep = true; break; }
+            for (const pktm::Layer &l : hit->layers) if (!l.dep.isEmpty()) { need_dep = true; break; }
             QString win = unknown_window(), proc;
             if (need_dep) { win = active_window(); proc = active_process(); }
             const int sel = match_layer(*hit, proc, win);
@@ -444,7 +444,7 @@ int main(int argc, char **argv) {
             }
             QVector<QPair<int, int>> seq;
             QString why;
-            const Layer &L = hit->layers[sel];
+            const pktm::Layer &L = hit->layers[sel];
             if (layer_is_action(L)) {           // vendor ACTION layer: exec, not typing
                 const QVector<QString> av = action_argv(L, why);
                 if (av.isEmpty())
@@ -711,7 +711,7 @@ int main(int argc, char **argv) {
     int idx = hit ? match_layer(*hit, proc, win) : -1;
     QString typed;
     if (hit && idx >= 0 && layer_is_action(hit->layers[idx])) {
-        const Layer &L = hit->layers[idx];
+        const pktm::Layer &L = hit->layers[idx];
         QString why;
         const QVector<QString> av = action_argv(L, why);
         typed = av.isEmpty() ? why + QStringLiteral(" -> REFUSED")

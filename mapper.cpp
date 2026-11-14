@@ -75,6 +75,105 @@ static int char_evdev(QChar c) {
     return -1;
 }
 
+// ---- XKB layout support: type chars via the ACTIVE layout (PKT_XKB_LAYOUT=de)
+// — fixed CHARMAP is only the US fallback when xkb is unavailable.
+#ifdef PKT_HAVE_XKB
+#include <xkbcommon/xkbcommon.h>
+#include <cstdio>
+static struct xkb_context *g_xctx = nullptr;
+static struct xkb_keymap *g_xkm = nullptr;
+static QString g_xlay;
+static QVector<int> g_modev;   // mod-index -> evdev of a real key that presses it
+static QString xkb_layout_used() {
+    const char *e = getenv("PKT_XKB_LAYOUT");
+    return (e && *e) ? QString::fromUtf8(e) : QStringLiteral("us");
+}
+static void build_modev() {
+    const xkb_mod_index_t nm = xkb_keymap_num_mods(g_xkm);
+    g_modev.assign(nm, -1);
+    static const int cands[] = {42, 56, 29, 93, 57, 100, 33, 41}; // LSH RSH LCTL RCTL LALT RALT LGUI RGUI
+    for (int ev : cands) {
+        struct xkb_state *st = xkb_state_new(g_xkm);
+        if (!st) continue;
+        xkb_state_update_key(st, (xkb_keycode_t)(ev + 8), XKB_KEY_DOWN);
+        const xkb_mod_mask_t m = xkb_state_serialize_mods(st, XKB_STATE_MODS_EFFECTIVE);
+        for (xkb_mod_index_t i = 0; i < nm; ++i)
+            if (((m >> i) & 1u) && g_modev[i] < 0) g_modev[i] = ev;
+        xkb_state_unref(st);
+    }
+}
+static bool xkb_ready() {
+    const QString lay = xkb_layout_used();
+    if (g_xkm && lay == g_xlay) return true;
+    if (g_xctx == nullptr) g_xctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+    if (!g_xctx) return false;
+    const QByteArray lo = lay.toUtf8();
+    struct xkb_rule_names rn {};
+    rn.layout = const_cast<char *>(lo.data());
+    struct xkb_keymap *km = xkb_keymap_new_from_names(g_xctx, &rn, XKB_KEYMAP_COMPILE_NO_FLAGS);
+    if (km) { g_xkm = km; g_xlay = lay; build_modev(); }
+    else fprintf(stderr, "xkb: keymap for layout '%s' FAILED (falling back to US CHARMAP)\n", lay.toUtf8().constData());
+    return g_xkm;
+}
+// c -> evdev key + modifier evdevs that produce it in the layout; -1 = untypeable.
+static int xkb_type_char(QChar c, QVector<int> &mods) {
+    mods.clear();
+    if (!xkb_ready()) return -1;
+    const xkb_keysym_t want = c.unicode();
+    for (xkb_keycode_t kc = 8; kc < 512; ++kc) {
+        const xkb_level_index_t nl = xkb_keymap_num_levels_for_key(g_xkm, kc, 0);
+        for (xkb_level_index_t lev = 0; lev < nl; ++lev) {
+            const xkb_keysym_t *syms = nullptr;
+            const int ns = xkb_keymap_key_get_syms_by_level(g_xkm, kc, 0, lev, &syms);
+            bool hit = false;
+            for (int s = 0; s < ns && !hit; ++s) hit = (syms[s] == want);
+            if (!hit) continue;
+            xkb_mod_mask_t masks[8];
+            const size_t got = xkb_keymap_key_get_mods_for_level(g_xkm, kc, 0, lev, masks, 8);
+            if (lev == 0) { mods.clear(); return (int)(kc - 8); }        // plain key
+            for (size_t mi = 0; mi < got; ++mi) {
+                const xkb_mod_mask_t mask = masks[mi];
+                if (mask == 0) continue;   // level reachable without mods
+                QVector<int> m2;
+                bool ok = true;
+                for (xkb_mod_index_t i = 0; i < xkb_keymap_num_mods(g_xkm) && ok; ++i)
+                    if ((mask >> i) & 1u) {
+                        const int mev = (i < g_modev.size()) ? g_modev[i] : -1;
+                        if (mev < 0) ok = false; else m2 << mev;
+                    }
+                if (ok) { mods = m2; return (int)(kc - 8); }
+            }
+        }
+    }
+    return -1;
+}
+static QString xkb_layout_label() { return xkb_layout_used(); }
+#endif
+
+// layout-aware: xkb first, fixed US CHARMAP as fallback. mods_out = modifier evdevs.
+static int type_char(QChar c, QVector<int> &mods) {
+#ifdef PKT_HAVE_XKB
+    const int k = xkb_type_char(c, mods);
+    if (k >= 0) return k;
+    mods.clear();
+#endif
+    return char_evdev(c);
+}
+static QString layout_used_label() {
+#ifdef PKT_HAVE_XKB
+    return xkb_layout_used();
+#else
+    return QStringLiteral("us (fixed table)");
+#endif
+}
+
+// one char -> down/up events incl. required modifier keys (mods = modifier evdevs)
+static void emit_char(QVector<QPair<int, int>> &out, int code, const QVector<int> &mods) {
+    for (int m : mods) out << QPair<int, int>{m, 1};
+    out << QPair<int, int>{code, 1} << QPair<int, int>{code, 0};
+    for (int i = mods.size() - 1; i >= 0; --i) out << QPair<int, int>{mods[i], 0};
+}
+
 QVector<QPair<int, int>> evdev_sequence(const QString &text) {
     QVector<QPair<int, int>> out;
     const QString t = text.trimmed();
@@ -82,15 +181,11 @@ QVector<QPair<int, int>> evdev_sequence(const QString &text) {
     const int one = word_evdev(t.toLower());
     if (one >= 0) { out << QPair<int, int>{one, 1} << QPair<int, int>{one, 0}; return out; }
     for (const QChar &c : t) {
-        const bool upper = c.isUpper();
-        const int code = char_evdev(upper ? c.toLower() : c);
-        if (code < 0) return {};   // one unmappable char -> refuse, half-typed text is worse
-        if (upper) {               // vendor shift chain: shift down, key, key up, shift up
-            out << QPair<int, int>{42, 1} << QPair<int, int>{code, 1}
-                << QPair<int, int>{code, 0} << QPair<int, int>{42, 0};
-        } else {
-            out << QPair<int, int>{code, 1} << QPair<int, int>{code, 0};
-        }
+        QVector<int> mods;
+        int code = type_char(c, mods);
+        if (code < 0 && c.isUpper()) { code = type_char(c.toLower(), mods); if (code >= 0) mods.prepend(42); }
+        if (code < 0) { fprintf(stderr, "xkb-miss: char U+%04X\n", (unsigned)c.unicode()); return {}; }
+        emit_char(out, code, mods);
     }
     return out;
 }
@@ -160,8 +255,13 @@ bool value_script(const Rule &r, const Layer &l, QVector<QPair<int, int>> &seq, 
                     if (m < 0) ok = false; else mods << m;
                 }
                 int key = ok ? macro_evdev(parts.last()) : -1;
-                if (ok && key < 0 && parts.last().size() == 1)
-                    key = char_evdev(parts.last().toLower()[0]);
+                if (ok && key < 0 && parts.last().size() == 1) {
+                    const QChar lc = parts.last()[0];
+                    QVector<int> ex;
+                    key = type_char(lc, ex);
+                    if (key < 0 && lc.isUpper()) { key = type_char(lc.toLower(), ex); if (key >= 0) ex.prepend(42); }
+                    for (int em : ex) mods << em;   // layout mods (e.g. Ä=Shift+key) join combo mods
+                }
                 if (!ok || key < 0) { seq.clear(); why = QStringLiteral("unsupported combo '") + tok + "'"; return false; }
                 for (const int m : mods) seq << QPair<int, int>{m, 1};
                 seq << QPair<int, int>{key, 1} << QPair<int, int>{key, 0};
@@ -172,12 +272,11 @@ bool value_script(const Rule &r, const Layer &l, QVector<QPair<int, int>> &seq, 
             if (ev < 0) { seq.clear(); why = QStringLiteral("unsupported macro '") + tok + "'"; return false; }
             seq << QPair<int, int>{ev, 1} << QPair<int, int>{ev, 0};
         } else {
-            const bool upper = c.isUpper();
-            const int code = char_evdev(upper ? c.toLower() : c);
-            if (code < 0) { seq.clear(); why = QStringLiteral("unmappable char"); return false; }
-            if (upper) seq << QPair<int, int>{42, 1} << QPair<int, int>{code, 1}
-                           << QPair<int, int>{code, 0} << QPair<int, int>{42, 0};
-            else seq << QPair<int, int>{code, 1} << QPair<int, int>{code, 0};
+            QVector<int> mods;
+            int code = type_char(c, mods);
+            if (code < 0 && c.isUpper()) { code = type_char(c.toLower(), mods); if (code >= 0) mods.prepend(42); }
+            if (code < 0) { fprintf(stderr, "xkb-miss-lit: U+%04X\n", (unsigned)c.unicode()); seq.clear(); why = QStringLiteral("unmappable char"); return false; }
+            emit_char(seq, code, mods);
             ++i;
         }
     }
@@ -235,6 +334,7 @@ QHash<int, int> load_calib_json(const QString &path) {
 // ---- LIVE PREVIEW (GUI + --preview): reuses value_script/action_argv from
 // THIS file — preview and executor can never drift apart (review rule).
 static QString key_name(int ev) {
+    if (ev == 100) return QStringLiteral("ALTGR");  // RIGHT ALT ev100
     for (const auto &e : MACROS)
         if (e.ev == ev) return QString::fromUtf8(e.tok);
     for (const auto &e : CHARMAP)
@@ -269,7 +369,7 @@ QString preview_map(const Map &mp, int idx1) {
             QStringList parts;
             for (const auto &p : seq)
                 parts << QStringLiteral("%1 %2").arg(key_name(p.first)).arg(p.second ? "down" : "up");
-            out = QStringLiteral("TYPES %1").arg(parts.join(", "));
+            out = QStringLiteral("TYPES (layout %1) %2").arg(layout_used_label()).arg(parts.join(", "));
         }
     }
     if (!l.dep.isEmpty()) out += QStringLiteral("  (only while DEP '%1' matches)").arg(l.dep);
