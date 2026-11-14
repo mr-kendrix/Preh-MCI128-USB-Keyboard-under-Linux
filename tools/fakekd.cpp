@@ -1,0 +1,39 @@
+// fakekd: stand-in daemon for the GUI reload gate. Binds+listens the sock path
+// via the tested ipc library, answers reload acks and quit. Never for a board.
+#include "ipc.h"
+#include <cstdio>
+#include <unistd.h>
+
+int main() {
+    QString err;
+    const int fd = pktipc::bind_socket(err);
+    if (fd < 0) { std::printf("fakekd bind FAIL: %s\n", err.toUtf8().constData()); return 1; }
+    std::printf("fakekd bound\n");
+    pktipc::LineBuf in;
+    for (int round = 0; round < 200; ++round) {          // ~10 s poll loop
+        QString e2;
+        const int p = pktipc::poll_accept(fd, e2);
+        if (p >= 0) {
+            std::printf("fakekd peer accepted\n");
+            for (int k = 0; k < 32; ++k) {
+                QString line;
+                if (!pktipc::recv_line(p, in, line, e2) || line.isEmpty()) { ::usleep(20000); continue; }
+                pktipc::Msg m;
+                QString why;
+                if (!pktipc::parse_line(line, m, why)) { pktipc::send_line(p, pktipc::mk_error("ipc", why), e2); continue; }
+                if (m.t == QLatin1String("reload")) {
+                    pktipc::send_line(p, pktipc::mk_reload(QStringLiteral("/fakekd/p.pmap"), 3), e2);
+                    std::printf("fakekd reloaded -> ack\n");
+                } else if (m.t == QLatin1String("quit")) {
+                    pktipc::drop_bound(fd);
+                    std::printf("fakekd quit\n");
+                    return 0;
+                }
+            }
+            ::close(p);
+        }
+        ::usleep(50000);
+    }
+    pktipc::drop_bound(fd);
+    return 0;
+}

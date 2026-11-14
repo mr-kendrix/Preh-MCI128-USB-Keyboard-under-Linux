@@ -41,6 +41,7 @@
 #include <algorithm>
 #include <fcntl.h>
 #include <unistd.h>
+#include "ipc.h"   // Phase 2: notify a running daemon after pmap file changes
 #include <filesystem>
 #include <system_error>
 #include <QHash>
@@ -313,6 +314,37 @@ static QString write_atomic(const QString &path, const QByteArray &bytes)
     return QString();
 }
 
+// Phase 2 IPC: the pmap file on disk is the ONLY source of truth — after any
+// file change (save or undo) the GUI tells a running daemon to re-read it.
+// No daemon socket -> harmless note, no 1 s retry loop.
+static QString ipc_reload_note() {
+    if (!QFile::exists(pktipc::sock_path()))
+        return QStringLiteral(" | daemon: no socket, file-only");
+    QString derr;
+    const int fd = pktipc::connect_peer(derr);   // retries are safe: socket exists (checked above)
+    if (fd < 0) return QStringLiteral(" | daemon: connect failed: ") + derr;
+    QString e2;
+    if (!pktipc::send_line(fd, pktipc::mk_reload_req(), e2)) {
+        ::close(fd);
+        return QStringLiteral(" | daemon reload send failed: ") + e2;
+    }
+    QString note = QStringLiteral(" | daemon reload unconfirmed");
+    pktipc::LineBuf lb;
+    for (int k = 0; k < 8; ++k) {   // drain status chatter, look for reload ack
+        QString line;
+        if (!pktipc::recv_line(fd, lb, line, e2) || line.isEmpty()) break;
+        pktipc::Msg m;
+        QString why;
+        if (!pktipc::parse_line(line, m, why)) continue;
+        if (m.t == QLatin1String("reload")) {
+            note = QStringLiteral(" | daemon reloaded (%1 rules)").arg(m.o.value(QStringLiteral("rules")).toInt());
+            break;
+        }
+    }
+    ::close(fd);
+    return note;
+}
+
 // Undo stack: save_pmap pushes (path, pre-save raw, post-save bytes) AFTER a
 // successful write; undo restores ONLY if the file still equals post — a file
 // changed by someone else in between is reported, never clobbered.
@@ -388,8 +420,10 @@ static QString save_pmap(Model &m, const QString &path) {
     g_undo.append({path, raw, reread});   // post = reread bytes = what is on disk
     if (g_undo.size() > 50)
         g_undo.removeFirst();
+    // file is on disk now -> the running daemon must re-read it (source of truth)
     return QStringLiteral("saved %1 maps / %2 layers / DOM-lossless / atomic / backup %3 / reread STABLE=%4")
-           .arg(m.pm.maps.size()).arg(layers_here).arg(bakk).arg(stable ? "yes" : "NO");
+           .arg(m.pm.maps.size()).arg(layers_here).arg(bakk).arg(stable ? "yes" : "NO")
+           + ipc_reload_note();
 }
 
 // ------------------------------------------------------------------- gates ----
@@ -601,6 +635,8 @@ int main(int argc, char **argv) {
         g_undo.removeLast();
         std::printf("undo restored %s (%lld B) %s\n", last.path.toUtf8().constData(),
                     (long long)last.pre.size(), e.isEmpty() ? "OK" : e.toUtf8().constData());
+        if (e.isEmpty())
+            std::printf("undo ipc: %s\n", ipc_reload_note().toUtf8().constData());  // daemon must see the restore too
         return e.isEmpty() ? 0 : 1;
     }
     if (mode == "panel") {          // per-key editor view: layers with vendor TYPE
@@ -945,6 +981,7 @@ int main(int argc, char **argv) {
             else {
                 const QString e = write_atomic(last.path, last.pre);
                 save_note = e.isEmpty() ? QStringLiteral("undo restored %1").arg(last.path) : e;
+                if (e.isEmpty()) save_note += ipc_reload_note();   // daemon sees the restore too
             }
             g_undo.removeLast();
         }
