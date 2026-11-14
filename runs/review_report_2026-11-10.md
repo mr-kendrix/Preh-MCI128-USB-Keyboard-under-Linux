@@ -404,3 +404,18 @@ YDOTOOL_SOCKET=/tmp/.does-not-exist ./b/pktm ...  # error: + rc=2
 - GUI: QComboBox procPick + lblPick 'picker...' + 'Use Picked Proc' button (objectName pick) -> set_layer_dep(picked layer, combo current) -> shows in layers line.
 - CLI mirror: pktm <pmap> --processes (list printed).
 - Gates: clicktest picker n=20 first='(sd-pam)', WEBSITE dep='(sd-pam)' after pick click; sabotage pickX -> 'button missing' FAIL + RC=1.
+
+## cp1252 Decode (windows-1252 block)
+- pmap.cpp unhex_local: bytes 0x80-0x9F decoded as cp1252 (was raw latin-1): 80->U+20AC (€), 91/92 Curly-Totes etc. Before: 0x80 became invisible control char -> xkb refused.
+
+## Auto-Detect-Layout
+- mapper.cpp xkb_layout_used(): PKT_XKB_LAYOUT -> ~/.config/kxkbrc (LayoutList=) -> localectl ('KEYBOARD=xkb:ll:...' ODER Arch 'X11 Layout: de'; /usr/sbin/localectl + PATH-Fallback) -> else LOUD WARNING + us.
+- Gate: env off -> full de seq (Z=42+21 Z-Position); PKT_XKB_LAYOUT=us -> xkb-miss 'Ä' REFUSED.
+- WARNING: injecting uses the layout ACTIVE at send-time. Layout switch while pktm runs -> texts change. One layout per session (kxkbrc at login -> daemon restart sees it).
+
+## Dead-Keys
+- xkb_type_char matches dead_circumflex/acute/grave/tilde/diaeresis/cedilla by keysym NAME; evdev_sequence emits trailing SPACE so the dead char materializes ('^ ' renders as ^ in editors).
+- Fixture fixtures/p2_layout.pmap (full cp1252 string 'Zylinder@?Ä ß Ö ü € | < > { } [ ] \\ ~ ^ ´ `'): PKT_XKB_LAYOUT=de -> FULL seq, no xkb-miss; us -> Ä/ß/€/... REFUSED. NOTE '{ }' in a TEXT Value -> macro-heuristic REFUSED (macro-brace gap unchanged, safe).
+
+## Aktive-Fenster-GUI-Button
+- Button 'Aktive Fenster (3s)' (objectName win3): click = 3s countdown — bring the target window to the FRONT, then the daemons ACTIVE-WINDOW-PROBE (kdotool getactivewindow/name/pid) runs; its process becomes the pickers current entry; stat shows fenster='...' proc='...'.

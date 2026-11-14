@@ -46,6 +46,9 @@
 #include <QHash>
 #include <QSet>
 #include <QTimer>
+#include <QThread>
+#include <thread>
+#include <chrono>
 #include <vector>
 #include "pmap.h"
 #include "pmap_dom.h"
@@ -749,6 +752,10 @@ int main(int argc, char **argv) {
     QPushButton pickbtn(QStringLiteral("Use Picked Proc"), &win);
     pickbtn.setObjectName("pick");
     pickbtn.move(756, 738);
+    QPushButton winbtn(QStringLiteral("Aktive Fenster (3s)"), &win);
+    winbtn.setObjectName("win3");
+    winbtn.move(508, 738);
+    QString g_winTitle, g_winProc;   // last --active-window probe (shown in stat)
     upload.setFixedSize(QSize(260, 90));
 
     // live board: pressed POSKeys get a green ring (calib maps scancode->POSKey)
@@ -830,6 +837,8 @@ int main(int argc, char **argv) {
         QString s = QStringLiteral("grid: %1  POSKeys ohne Cap: %2")
                         .arg(grid_stats()).arg(nocard.join(","));
         if (saved) s += QStringLiteral("  %1").arg(save_note);
+        if (!g_winTitle.isEmpty())
+            s += QStringLiteral("  fenster='%1' proc='%2'").arg(g_winTitle).arg(g_winProc);
         // process picker: (re)fill combo on save + first call; label = current pick
         if (saved || procPick.count() == 0) {
             procPick.clear();
@@ -854,11 +863,30 @@ int main(int argc, char **argv) {
     // names the daemon's dep layer can match. 'Use Picked Proc' assigns the
     // combi's current entry as dep of the picked layer.
     auto f_pick = [&]{
-        const QString cur = procPick.currentText();
+        const QString cur = procPick.count() ? procPick.itemText(procPick.currentIndex()) : QString();
         set_layer_dep(pm->pm, pm->sel, spinl.value(), cur.isEmpty() ? edit.text() : cur);
         refresh(false);
     };
     pickbtn.connect(&pickbtn, &QPushButton::clicked, [pm, &edit, &save_note, &refresh, f_pick]{ f_pick(); });
+    // 'Aktive Fenster (3s)': click starts a 3 s countdown — bring the window you
+    // want to type into to the FRONT within 3 s; then the daemon's active-window
+    // probe runs and its process becomes the picker's current item.
+    auto f_win3 = [&]{
+        std::this_thread::sleep_for(std::chrono::seconds(3));   // blocking countdown
+        const QString wname = pktm::active_window();
+        const QString wproc = pktm::active_process();
+        g_winTitle = (wname == pktm::unknown_window()) ? QString() : wname;
+        g_winProc = wproc;
+        if (!wproc.isEmpty()) {
+            int idx = -1;
+            for (int i = 0; i < procPick.count(); ++i)
+                if (procPick.itemText(i) == wproc) { idx = i; break; }
+            if (idx < 0) { procPick.insertItem(0, wproc); idx = 0; }
+            procPick.setCurrentIndex(idx);
+        }
+        refresh(false);
+    };
+    winbtn.connect(&winbtn, &QPushButton::clicked, [&]{ f_win3(); });
     auto f_prev = [&]{
         const Map *mp = find_map_c(pm->pm, pm->sel);
         const QString t = mp ? pktm::preview_map(*mp, spinl.value())

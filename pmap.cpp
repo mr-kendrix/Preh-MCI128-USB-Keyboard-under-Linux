@@ -3,9 +3,20 @@
 #include <QRegularExpression>
 
 static QString unhex_local(const QString &h) {
+    // cp1252 (vendor encoding): bytes 0x80-0x9F are NOT latin-1, they are the
+    // windows-1252 block (€ = 0x80 -> U+20AC). Without this the euro sign and
+    // quotes decode to invisible control chars and xkb refuses them.
+    static const ushort cp1252[32] = {
+        0x20AC,0x81,0x201A,0x0192,0x201E,0x2026,0x2020,0x2021,
+        0x02C6,0x2030,0x0160,0x2039,0x0152,0x8D,0x017D,0x8F,
+        0x90,0x2018,0x2019,0x201C,0x201D,0x2022,0x2013,0x2014,
+        0x02DC,0x2122,0x0161,0x203A,0x0153,0x9E,0x017E,0x0178,
+    };
     QString out;
-    for (int i = 0; i + 1 < h.size(); i += 2)
-        out += QChar((quint8)h.mid(i, 2).toUInt(nullptr, 16));
+    for (int i = 0; i + 1 < h.size(); i += 2) {
+        const uint b = h.mid(i, 2).toUInt(nullptr, 16);
+        out += (b >= 0x80 && b <= 0x9F) ? QChar(cp1252[b - 0x80]) : QChar(b);
+    }
     return out;
 }
 

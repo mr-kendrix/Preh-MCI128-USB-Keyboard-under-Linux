@@ -87,8 +87,57 @@ static QString g_xlay;
 static QVector<int> g_modev;   // mod-index -> evdev of a real key that presses it
 static QString xkb_layout_used() {
     const char *e = getenv("PKT_XKB_LAYOUT");
-    return (e && *e) ? QString::fromUtf8(e) : QStringLiteral("us");
+    if (e && *e) return QString::fromUtf8(e);
+    // Plasma stores the keyboard layout in ~/.config/kxkbrc (LayoutList=de,,mac).
+    QFile rc(QStringLiteral("%1/.config/kxkbrc").arg(QDir::homePath()));
+    if (rc.open(QIODevice::ReadOnly)) {
+        const QStringList lines = QString::fromUtf8(rc.readAll()).split(QLatin1Char('\n'));
+        for (QString line : lines) {
+            line = line.trimmed();
+            if (!line.startsWith(QStringLiteral("LayoutList="))) continue;
+            for (const QString &ent : line.mid(11).split(QLatin1Char(',')))
+                if (!ent.trimmed().isEmpty()) return ent.trimmed();
+        }
+    }
+    // distro fallback: localectl prints 'KEYBOARD=xkb:de:deadkeys:qwertz:DE'
+    {
+        QProcess p;
+        // Arch puts it in /usr/sbin (not on a plain user PATH) — try both.
+        p.start(QStringLiteral("/usr/sbin/localectl"), {});
+        if (p.error() == QProcess::FailedToStart) p.start(QStringLiteral("localectl"), {});
+        if (p.error() != QProcess::FailedToStart) {
+            p.waitForFinished(2000);
+            const QString out = QString::fromUtf8(p.readAllStandardOutput());
+            int k = out.indexOf(QStringLiteral("KEYBOARD="));
+            if (k >= 0) {
+                const QString spec = out.mid(k + 9).trimmed().split(QLatin1Char('\n')).first();
+                const QStringList parts = spec.split(QLatin1Char(':'));
+                if (parts.size() >= 2 && parts[0] == QLatin1String("xkb") && !parts[1].isEmpty())
+                    return parts[1];
+            }
+            // Arch's localectl: '    X11 Layout: de'
+            k = out.indexOf(QStringLiteral("X11 Layout:"));
+            if (k >= 0) {
+                const QString v = out.mid(k + 11).trimmed().split(QLatin1Char('\n')).first().trimmed();
+                if (!v.isEmpty() && v != QLatin1String("N/A")) return v;
+            }
+        }
+    }
+    // no source left: loud warning, NOT a silent US guess (original bug)
+    static bool warned = false;
+    if (!warned) {
+        warned = true;
+        fprintf(stderr,
+            "LAYOUT WARNING: no layout from PKT_XKB_LAYOUT, ~/.config/kxkbrc or localectl —\n"
+            "                assuming 'us'; text rules with non-US keys may be WRONG.\n"
+            "                Fix: set PKT_XKB_LAYOUT (e.g. =de) in the service environment.\n");
+    }
+    return QStringLiteral("us");
 }
+// NOTE layout switching: injected evKEYS are interpreted by whatever layout is
+// ACTIVE at the time of the press. If the layout changes while pktm runs, the
+// SAME code sequence types a different char. Keep one layout per session or
+// restart the daemon after a kxkbrc change.
 static void build_modev() {
     const xkb_mod_index_t nm = xkb_keymap_num_mods(g_xkm);
     g_modev.assign(nm, -1);
@@ -117,21 +166,48 @@ static bool xkb_ready() {
     return g_xkm;
 }
 // c -> evdev key + modifier evdevs that produce it in the layout; -1 = untypeable.
-static int xkb_type_char(QChar c, QVector<int> &mods) {
+// DEAD-key chars (^ ´ ` ~ " ¸) match by keysym NAME ('dead_acute'...): the layout
+// has no direct codepoint for them. The CALLER must emit a trailing space so the
+// dead key materializes (dead_circumflex + space -> '^') — dead_out says so.
+static const char *dead_name_of(QChar c) {
+    switch (c.unicode()) {
+        case '^':  return "dead_circumflex";
+        case 0xB4: return "dead_acute";      // ´
+        case '`':  return "dead_grave";
+        case '~':  return "dead_tilde";
+        case '"':  return "dead_diaeresis";
+        case 0xB8: return "dead_cedilla";
+        default:   return nullptr;
+    }
+}
+static int xkb_type_char(QChar c, QVector<int> &mods, bool &dead_out) {
     mods.clear();
+    dead_out = false;
     if (!xkb_ready()) return -1;
     const xkb_keysym_t want = c.unicode();
+    const char *dn = dead_name_of(c);
+    bool name_hit = false;
     for (xkb_keycode_t kc = 8; kc < 512; ++kc) {
         const xkb_level_index_t nl = xkb_keymap_num_levels_for_key(g_xkm, kc, 0);
         for (xkb_level_index_t lev = 0; lev < nl; ++lev) {
             const xkb_keysym_t *syms = nullptr;
             const int ns = xkb_keymap_key_get_syms_by_level(g_xkm, kc, 0, lev, &syms);
             bool hit = false;
-            for (int s = 0; s < ns && !hit; ++s) hit = (syms[s] == want);
+            for (int s = 0; s < ns && !hit; ++s) {
+                hit = (syms[s] == want);
+                name_hit = false;
+                if (!hit && dn) {
+                    char nm[24];
+                    if (xkb_keysym_get_name(syms[s], nm, sizeof nm) > 0) {
+                        hit = (strcmp(nm, dn) == 0);
+                        name_hit = hit;
+                    }
+                }
+            }
             if (!hit) continue;
             xkb_mod_mask_t masks[8];
             const size_t got = xkb_keymap_key_get_mods_for_level(g_xkm, kc, 0, lev, masks, 8);
-            if (lev == 0) { mods.clear(); return (int)(kc - 8); }        // plain key
+            if (lev == 0) { mods.clear(); dead_out = name_hit; return (int)(kc - 8); }        // plain key
             for (size_t mi = 0; mi < got; ++mi) {
                 const xkb_mod_mask_t mask = masks[mi];
                 if (mask == 0) continue;   // level reachable without mods
@@ -142,7 +218,7 @@ static int xkb_type_char(QChar c, QVector<int> &mods) {
                         const int mev = (i < g_modev.size()) ? g_modev[i] : -1;
                         if (mev < 0) ok = false; else m2 << mev;
                     }
-                if (ok) { mods = m2; return (int)(kc - 8); }
+                if (ok) { mods = m2; dead_out = name_hit; return (int)(kc - 8); }
             }
         }
     }
@@ -152,12 +228,17 @@ static QString xkb_layout_label() { return xkb_layout_used(); }
 #endif
 
 // layout-aware: xkb first, fixed US CHARMAP as fallback. mods_out = modifier evdevs.
-static int type_char(QChar c, QVector<int> &mods) {
+// dead_out: char is a dead-key in this layout -> caller MUST emit a trailing SPACE
+// so the character materializes (dead key alone renders nothing).
+static int type_char(QChar c, QVector<int> &mods, bool *dead_out = nullptr) {
+    bool d = false;
 #ifdef PKT_HAVE_XKB
-    const int k = xkb_type_char(c, mods);
+    const int k = xkb_type_char(c, mods, d);
+    if (dead_out) *dead_out = d;
     if (k >= 0) return k;
     mods.clear();
 #endif
+    if (dead_out) *dead_out = false;
     return char_evdev(c);
 }
 static QString layout_used_label() {
@@ -183,10 +264,13 @@ QVector<QPair<int, int>> evdev_sequence(const QString &text) {
     if (one >= 0) { out << QPair<int, int>{one, 1} << QPair<int, int>{one, 0}; return out; }
     for (const QChar &c : t) {
         QVector<int> mods;
-        int code = type_char(c, mods);
-        if (code < 0 && c.isUpper()) { code = type_char(c.toLower(), mods); if (code >= 0) mods.prepend(42); }
+        bool dead = false;
+        int code = type_char(c, mods, &dead);
+        if (code < 0 && c.isUpper()) { code = type_char(c.toLower(), mods, &dead); if (code >= 0) mods.prepend(42); }
         if (code < 0) { fprintf(stderr, "xkb-miss: char U+%04X\n", (unsigned)c.unicode()); return {}; }
         emit_char(out, code, mods);
+        // dead key alone renders nothing: a following SPACE materializes it ('^ ')
+        if (dead) out << QPair<int, int>{57, 1} << QPair<int, int>{57, 0};
     }
     return out;
 }
@@ -722,8 +806,9 @@ QStringList list_processes(int limit) {
     };
     QString full;
     if (run_probe(QStringLiteral("kdotool"), {QStringLiteral("ps")}, full, true)) {
-        // kdotool ps prints '<window_id> <title>' lines (kdotool-client.c shape):
-        // strip a leading numeric token, keep the title.
+        // kdotool (Rust, our active-window probe toolchain) IF it gains 'ps':
+        // lines '<id> <title>' -> strip id. kdotool 0.3.0 has no 'ps' subcommand
+        // -> run_probe returns false and we fall through to the comm list.
         for (QString line : full.split(QLatin1Char('\n'))) {
             line = line.trimmed();
             if (line.isEmpty()) continue;
