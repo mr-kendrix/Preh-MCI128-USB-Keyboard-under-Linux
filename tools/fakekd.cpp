@@ -23,7 +23,10 @@ int main() {
                 if (!pktipc::parse_line(line, m, why)) { pktipc::send_line(p, pktipc::mk_error("ipc", why), e2); continue; }
                 if (m.t == QLatin1String("reload")) {
                     pktipc::send_line(p, pktipc::mk_reload(QStringLiteral("/fakekd/p.pmap"), 3), e2);
-                    std::printf("fakekd reloaded -> ack\n");
+                    // burst after ack: the GUI must drain these via refresh() heartbeats
+                    pktipc::send_line(p, pktipc::mk_press(2, true, pktipc::now_ms()), e2);
+                    pktipc::send_line(p, pktipc::mk_inject(2, QStringLiteral("TEXT"), QStringLiteral("hi"), pktipc::now_ms()), e2);
+                    std::printf("fakekd reloaded -> ack + status lines\n");
                 } else if (m.t == QLatin1String("quit")) {
                     pktipc::drop_bound(fd);
                     std::printf("fakekd quit\n");

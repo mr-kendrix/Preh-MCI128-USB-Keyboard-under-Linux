@@ -41,6 +41,7 @@
 #include <algorithm>
 #include <fcntl.h>
 #include <unistd.h>
+#include <poll.h>   // POLLIN drain for the IPC peer
 #include "ipc.h"   // Phase 2: notify a running daemon after pmap file changes
 #include <filesystem>
 #include <system_error>
@@ -317,6 +318,61 @@ static QString write_atomic(const QString &path, const QByteArray &bytes)
 // Phase 2 IPC: the pmap file on disk is the ONLY source of truth — after any
 // file change (save or undo) the GUI tells a running daemon to re-read it.
 // No daemon socket -> harmless note, no 1 s retry loop.
+// Long-lived peer: after the first notify the GUI keeps the connection and
+// drains daemon status lines (press/inject/window) into g_ipc_status each
+// refresh() heartbeat — the window shows what the daemon actually does.
+static int g_ipc_peer = -1;
+static pktipc::LineBuf g_ipc_lb;
+static QString g_ipc_status;
+
+static void ipc_status_note(const pktipc::Msg &m) {
+    QString s;
+    if (m.t == QLatin1String("press"))
+        s = QStringLiteral("press pk=%1 %2")
+               .arg(m.o.value(QStringLiteral("poskey")).toInt())
+               .arg(m.o.value(QStringLiteral("down")).toBool() ? "down" : "up");
+    else if (m.t == QLatin1String("inject"))
+        s = QStringLiteral("inject pk=%1 %2")
+               .arg(m.o.value(QStringLiteral("poskey")).toInt())
+               .arg(m.o.value(QStringLiteral("kind")).toString());
+    else if (m.t == QLatin1String("reload"))
+        s = QStringLiteral("reload rules=%1").arg(m.o.value(QStringLiteral("rules")).toInt());
+    else if (m.t == QLatin1String("window"))
+        s = QStringLiteral("window '%1'").arg(m.o.value(QStringLiteral("title")).toString());
+    else return;
+    g_ipc_status = s;
+    static QString printed;
+    if (s != printed) {
+        printed = s;
+        std::printf("ipc daemon status: %s\n", s.toUtf8().constData());
+    }
+}
+
+// One recv_line per POLLIN hit; POLLIN on a CONNECTED fd means data arrived
+// (or EOF -> recv_line fails -> peer dropped, close and stop). Prints each
+// status CHANGE to stdout so headless gates observe it (label shows it live).
+static void ipc_drain() {
+    if (g_ipc_peer < 0) return;
+    for (int k = 0; k < 16; ++k) {
+        if (!g_ipc_lb.acc.contains('\n')) {   // poll only when buffer is drained (POLLIN is blind to own buffer)
+            struct pollfd pf{ g_ipc_peer, POLLIN, 0 };
+            const int pr = ::poll(&pf, 1, 0);
+            if (pr < 0) { ::close(g_ipc_peer); g_ipc_peer = -1; return; }
+            if (pr == 0) return;
+        }
+        QString e2, line;
+        if (!pktipc::recv_line(g_ipc_peer, g_ipc_lb, line, e2)) {   // EOF/dead
+            ::close(g_ipc_peer); g_ipc_peer = -1; return;
+        }
+        if (line.isEmpty()) continue;
+        pktipc::Msg m;
+        QString why;
+        if (!pktipc::parse_line(line, m, why)) continue;
+        if (m.t == QLatin1String("quit")) { ::close(g_ipc_peer); g_ipc_peer = -1; return; }
+        ipc_status_note(m);
+    }
+}
+
 static QString ipc_reload_note() {
     if (!QFile::exists(pktipc::sock_path()))
         return QStringLiteral(" | daemon: no socket, file-only");
@@ -329,19 +385,26 @@ static QString ipc_reload_note() {
         return QStringLiteral(" | daemon reload send failed: ") + e2;
     }
     QString note = QStringLiteral(" | daemon reload unconfirmed");
-    pktipc::LineBuf lb;
-    for (int k = 0; k < 8; ++k) {   // drain status chatter, look for reload ack
+    bool got_reload = false;
+    for (int k = 0; k < 8; ++k) {   // wait <=50 ms per round; drain whole burst
+        if (!g_ipc_lb.acc.contains('\n')) {   // POLLIN blind to own buffer — guard only when drained
+            struct pollfd pf{ fd, POLLIN, 0 };
+            if (::poll(&pf, 1, 50) <= 0) { if (got_reload) break; else continue; }
+        }
         QString line;
-        if (!pktipc::recv_line(fd, lb, line, e2) || line.isEmpty()) break;
+        if (!pktipc::recv_line(fd, g_ipc_lb, line, e2)) break;
+        if (line.isEmpty()) continue;
         pktipc::Msg m;
         QString why;
         if (!pktipc::parse_line(line, m, why)) continue;
+        ipc_status_note(m);
         if (m.t == QLatin1String("reload")) {
-            note = QStringLiteral(" | daemon reloaded (%1 rules)").arg(m.o.value(QStringLiteral("rules")).toInt());
-            break;
+            note = QStringLiteral(" | daemon reloaded (%1 rules)")
+                       .arg(m.o.value(QStringLiteral("rules")).toInt());
+            got_reload = true;
         }
     }
-    ::close(fd);
+    g_ipc_peer = fd;   // adopt: status lines keep flowing to refresh() drains
     return note;
 }
 
@@ -840,6 +903,7 @@ int main(int argc, char **argv) {
 
     QString save_note;
     auto refresh = [&](bool saved) {
+        ipc_drain();   // daemon status lines -> g_ipc_status (nonblocking poll)
         const int pk = pm->sel;
         head.setText(QStringLiteral("%1  maps=%2  sel=%3  dbg=%4,%5  pressed=%6")
                          .arg(pm->pm.name.isEmpty() ? QStringLiteral("no pmap loaded")
@@ -878,6 +942,8 @@ int main(int argc, char **argv) {
         if (saved) s += QStringLiteral("  %1").arg(save_note);
         if (!g_winTitle.isEmpty())
             s += QStringLiteral("  fenster='%1' proc='%2'").arg(g_winTitle).arg(g_winProc);
+        if (!g_ipc_status.isEmpty())
+            s += QStringLiteral("  daemon: %1").arg(g_ipc_status);   // live status over IPC peer
         // process picker: (re)fill combo on save + first call; label = current pick
         if (saved || procPick.count() == 0) {
             procPick.clear();
