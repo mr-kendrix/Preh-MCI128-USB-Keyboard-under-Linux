@@ -427,3 +427,19 @@ YDOTOOL_SOCKET=/tmp/.does-not-exist ./b/pktm ...  # error: + rc=2
 - tools/xkb_variant_probe.c: 'de' -> NO direct U+005E; 'de:nodeadkeys' -> kc48 ev40 DIRECT.
 - Gates pktm --dry-inject p3_dead (^): de -> '100 40 + 57-SPACE' (dead), de:nodeadkeys -> '100 40' (no space), de,us -> WARN 'using de; only one active'.
 - GUI Aktive-Fenster: NO sleep (froze window/KDE not-responding). QTimer winT 1 s countdown, lblWin counts down, win_probe() at 0. Test hooks PKT_WIN_DELAY_MS/COUNT/FAKE. clicktest: press win3 -> countdown started + fake probe 'Krea Prompter::pkteditor' -> proc line; sabotage winX -> FAIL lines.
+
+
+## Aktive-Fenster timer + End-to-End
+- (see RMLVO section) GUI countdown via winT QTimer, sleep gone.
+- End-to-end RUN: fixture p4_e2e (TEXT cp1252 'Zylinder@?A-umlaut sz'), PKT_XKB_LAYOUT=de,
+  pktm --live --feed-hex '04 02 1E 00 00 04 02 FE 1E 00' --calib {"0x1e":1} ->
+  'POSKey 1 injected (ydotool key 42:1 21:1 ... 12:1 12:0)' + '2 presses, 1 injected'.
+  Kate was the active window (kdotool getactivewindow getwindowname = 'Willkommen - Kate');
+  ydotool accepted the full ev sequence. Wayland refuses programmatic screenshots
+  (grab/spectacle portal prompt) -> visual confirmation on the screen is USER's.
+  NOTE: ^ in TEXT (deadkeys de) types dead-key+space; on layouts w/o nodeadkeys variant
+  a '^' rule yields '^' plus a following space — that is the layout's own dead behavior.
+
+## Phase 2 IPC design (message types first)
+runs/phase2_ipc_design.md: Unix socket $XDG_RUNTIME_DIR/derpktxc/daemon.sock, NDJSON {"t":...}.
+daemon->GUI: press/inject/window/health/reload/error; GUI->daemon: set-value/set-dep/probe-window/reload/quit.
