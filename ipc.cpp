@@ -72,23 +72,30 @@ int bind_socket(QString &err) {
     return fd;
 }
 
-int connect_peer(QString &err) {
+static int try_connect_once(QString &err) {
     const QString p = sock_path();
     sockaddr_un un {};
     if (!fill_un(un, p)) { err = QStringLiteral("path too long"); return -1; }
-    // retry on ECONNREFUSED: connect beats the daemon's own listen() window; a
-    // not-yet-listening receiver refuses — wait up to ~1 s.
+    const int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) { err = QStringLiteral("sock: %1").arg(errno); return -1; }
+    const socklen_t len = offsetof(sockaddr_un, sun_path) + qstrlen(p.toUtf8().constData()) + 1;
+    if (::connect(fd, reinterpret_cast<const sockaddr *>(&un), len) == 0)
+        return fd;
+    const int e = errno;
+    ::close(fd);
+    err = QStringLiteral("connect: %1").arg(e);
+    return -1;
+}
+
+int try_connect(QString &err) { return try_connect_once(err); }
+
+int connect_peer(QString &err) {
+    // retry on ECONNREFUSED/ENOENT/ENOTDIR: daemon may not have (re)bound yet
     for (int attempt = 0; attempt < 40; ++attempt) {
-        const int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
-        if (fd < 0) { err = QStringLiteral("sock: %1").arg(errno); return -1; }
-        const socklen_t len = socklen_t(offsetof(sockaddr_un, sun_path) + qstrlen(p.toUtf8().constData()) + 1);
-        if (::connect(fd, reinterpret_cast<const sockaddr *>(&un), len) == 0)
-            return fd;
+        const int fd = try_connect_once(err);
+        if (fd >= 0) return fd;
         const int e = errno;
-        ::close(fd);
-        // retry also ENOENT/ENOTDIR: the daemon may not have (re)bound the path yet
-        // (board-check probe runs before the ipc block) — transient until bound.
-        if (e != ECONNREFUSED && e != ENOENT && e != ENOTDIR) { err = QStringLiteral("connect: %1").arg(e); return -1; }
+        if (e != ECONNREFUSED && e != ENOENT && e != ENOTDIR) return -1;
         ::usleep(25000);
     }
     err = QStringLiteral("connect: refused (no listening receiver)");

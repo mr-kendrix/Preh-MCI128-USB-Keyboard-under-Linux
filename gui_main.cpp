@@ -373,26 +373,32 @@ static void ipc_drain() {
     }
 }
 
+static void ipc_adopt_peer();   // fwd: defined below, used by ipc_reload_note
 static QString ipc_reload_note() {
-    if (!QFile::exists(pktipc::sock_path()))
-        return QStringLiteral(" | daemon: no socket, file-only");
-    QString derr;
-    const int fd = pktipc::connect_peer(derr);   // retries are safe: socket exists (checked above)
-    if (fd < 0) return QStringLiteral(" | daemon: connect failed: ") + derr;
+    ipc_adopt_peer();   // ONE pair per GUI process: reuse the adopted socket,
+    // never connect a second pair (a 2nd SYS_CONNECT under the KDE app.slice
+    // seccomp filter gets SYS_KILL -> glibc sock_set_errno sees -512 -> assert
+    // -> SIGABRT crash, seen 2026-11-15). adopt is a no-op once connected.
+    const int fd = g_ipc_peer;
+    if (fd < 0) return QStringLiteral(" | daemon: not connected");
     QString e2;
     if (!pktipc::send_line(fd, pktipc::mk_reload_req(), e2)) {
         ::close(fd);
+        g_ipc_peer = -1;   // dead pair: next save may reconnect (single attempt)
         return QStringLiteral(" | daemon reload send failed: ") + e2;
     }
     QString note = QStringLiteral(" | daemon reload unconfirmed");
-    bool got_reload = false;
     for (int k = 0; k < 8; ++k) {   // wait <=50 ms per round; drain whole burst
-        if (!g_ipc_lb.acc.contains('\n')) {   // POLLIN blind to own buffer — guard only when drained
+        if (!g_ipc_lb.acc.contains('\n')) {
             struct pollfd pf{ fd, POLLIN, 0 };
-            if (::poll(&pf, 1, 50) <= 0) { if (got_reload) break; else continue; }
+            if (::poll(&pf, 1, 50) <= 0) break;   // no ack burst (yet)
         }
         QString line;
-        if (!pktipc::recv_line(fd, g_ipc_lb, line, e2)) break;
+        if (!pktipc::recv_line(fd, g_ipc_lb, line, e2)) {   // peer died
+            ::close(fd);
+            g_ipc_peer = -1;
+            return QStringLiteral(" | daemon: peer lost");
+        }
         if (line.isEmpty()) continue;
         pktipc::Msg m;
         QString why;
@@ -401,10 +407,9 @@ static QString ipc_reload_note() {
         if (m.t == QLatin1String("reload")) {
             note = QStringLiteral(" | daemon reloaded (%1 rules)")
                        .arg(m.o.value(QStringLiteral("rules")).toInt());
-            got_reload = true;
+            break;
         }
     }
-    g_ipc_peer = fd;   // adopt: status lines keep flowing to refresh() drains
     return note;
 }
 
@@ -414,7 +419,7 @@ static QString ipc_reload_note() {
 static void ipc_adopt_peer() {
     if (g_ipc_peer < 0 && QFile::exists(pktipc::sock_path())) {
         QString derr;
-        const int fd = pktipc::connect_peer(derr);
+        const int fd = pktipc::try_connect(derr);   // single attempt: no 1 s stall when daemon died
         if (fd >= 0) { g_ipc_peer = fd; std::printf("ipc peer connected (own hidraw watch off)\n"); }
     }
 }
