@@ -419,3 +419,11 @@ YDOTOOL_SOCKET=/tmp/.does-not-exist ./b/pktm ...  # error: + rc=2
 
 ## Aktive-Fenster-GUI-Button
 - Button 'Aktive Fenster (3s)' (objectName win3): click = 3s countdown — bring the target window to the FRONT, then the daemons ACTIVE-WINDOW-PROBE (kdotool getactivewindow/name/pid) runs; its process becomes the pickers current entry; stat shows fenster='...' proc='...'.
+
+## RMLVO-Variant (kxkbrc VariantList/Options)
+- mapper.cpp resolve_rmlvo(lay,var,opts): PKT_XKB_LAYOUT ('de:nodeadkeys[:opts]', 'de,us'+WARN) -> kxkbrc LayoutList+VariantList POSITION-matched + Options -> localectl KEYBOARD=xkb:ll:vv ODER 'X11 Layout:'/'X11 Variant:' -> loud warn + us. Multi-list: WARN which entry used (only one active).
+- xkb_ready: rn.layout+rn.variant+rn.options; cache checks all three; old keymap unref'd on variant change.
+- xkb_type_char TWO-PASS: direct codepoint first, dead-name second — otherwise de:nodeadkeys picks dead_circumflex on a lower keycode and types an extra space.
+- tools/xkb_variant_probe.c: 'de' -> NO direct U+005E; 'de:nodeadkeys' -> kc48 ev40 DIRECT.
+- Gates pktm --dry-inject p3_dead (^): de -> '100 40 + 57-SPACE' (dead), de:nodeadkeys -> '100 40' (no space), de,us -> WARN 'using de; only one active'.
+- GUI Aktive-Fenster: NO sleep (froze window/KDE not-responding). QTimer winT 1 s countdown, lblWin counts down, win_probe() at 0. Test hooks PKT_WIN_DELAY_MS/COUNT/FAKE. clicktest: press win3 -> countdown started + fake probe 'Krea Prompter::pkteditor' -> proc line; sabotage winX -> FAIL lines.

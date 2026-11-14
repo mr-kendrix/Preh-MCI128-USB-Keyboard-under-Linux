@@ -83,26 +83,60 @@ static int char_evdev(QChar c) {
 #include <cstdio>
 static struct xkb_context *g_xctx = nullptr;
 static struct xkb_keymap *g_xkm = nullptr;
-static QString g_xlay;
+static QString g_xlay;                   // keymap compiled for (RMLVO cache)
+static QString g_xvar, g_xopts;          // variant+options of that keymap
 static QVector<int> g_modev;   // mod-index -> evdev of a real key that presses it
-static QString xkb_layout_used() {
+static void resolve_rmlvo(QString &lay, QString &var, QString &opts) {
     const char *e = getenv("PKT_XKB_LAYOUT");
-    if (e && *e) return QString::fromUtf8(e);
-    // Plasma stores the keyboard layout in ~/.config/kxkbrc (LayoutList=de,,mac).
+    if (e && *e) {
+        // 'de' / 'de:nodeadkeys[:opts]' / 'de,us' (multi-list -> first + warn)
+        const QStringList ents = QString::fromUtf8(e).split(QLatin1Char(','));
+        QString first;
+        for (const QString &ent : ents)
+            if (!ent.trimmed().isEmpty()) { first = ent.trimmed(); break; }
+        if (!first.isEmpty()) {
+            const QStringList parts = first.split(QLatin1Char(':'));
+            lay = parts[0];
+            if (parts.size() > 1) var = parts[1];
+            if (parts.size() > 2) opts = parts[2];
+            if (ents.size() > 1)
+                fprintf(stderr, "LAYOUT: PKT_XKB_LAYOUT lists %d entries — using '%s'; only one layout can be active at a time.\n",
+                        (int)ents.size(), lay.toUtf8().constData());
+            return;
+        }
+    }
+    // Plasma stores the keyboard layout in ~/.config/kxkbrc:
+    // LayoutList=de,,mac + matching VariantList= BY POSITION + Options.
     QFile rc(QStringLiteral("%1/.config/kxkbrc").arg(QDir::homePath()));
     if (rc.open(QIODevice::ReadOnly)) {
         const QStringList lines = QString::fromUtf8(rc.readAll()).split(QLatin1Char('\n'));
+        QStringList lays, vars;
+        QString opts_line;
         for (QString line : lines) {
             line = line.trimmed();
-            if (!line.startsWith(QStringLiteral("LayoutList="))) continue;
-            for (const QString &ent : line.mid(11).split(QLatin1Char(',')))
-                if (!ent.trimmed().isEmpty()) return ent.trimmed();
+            if (line.startsWith(QStringLiteral("LayoutList="))) lays = line.mid(11).split(QLatin1Char(','));
+            else if (line.startsWith(QStringLiteral("VariantList="))) vars = line.mid(11).split(QLatin1Char(','));
+            else if (line.startsWith(QStringLiteral("Options="))) opts_line = line.mid(8).trimmed();
+        }
+        int idx = 0;
+        while (idx < lays.size() && lays[idx].trimmed().isEmpty()) ++idx;
+        if (idx < lays.size()) {
+            lay = lays[idx].trimmed();
+            if (idx < vars.size()) var = vars[idx].trimmed();   // position-matched
+            opts = opts_line;
+            int nonempty = 0;
+            for (const QString &l : lays) if (!l.trimmed().isEmpty()) ++nonempty;
+            if (nonempty > 1)
+                fprintf(stderr, "LAYOUT: kxkbrc lists %d layouts — using #%d '%s' (variant '%s'); only one can be active.\n",
+                        nonempty, idx + 1, lay.toUtf8().constData(), var.toUtf8().constData());
+            return;
         }
     }
     // distro fallback: localectl prints 'KEYBOARD=xkb:de:deadkeys:qwertz:DE'
+    // or Arch-style 'X11 Layout: de' / 'X11 Variant: ...'.
+    // Arch puts it in /usr/sbin (not on a plain user PATH) — try both.
     {
         QProcess p;
-        // Arch puts it in /usr/sbin (not on a plain user PATH) — try both.
         p.start(QStringLiteral("/usr/sbin/localectl"), {});
         if (p.error() == QProcess::FailedToStart) p.start(QStringLiteral("localectl"), {});
         if (p.error() != QProcess::FailedToStart) {
@@ -112,14 +146,24 @@ static QString xkb_layout_used() {
             if (k >= 0) {
                 const QString spec = out.mid(k + 9).trimmed().split(QLatin1Char('\n')).first();
                 const QStringList parts = spec.split(QLatin1Char(':'));
-                if (parts.size() >= 2 && parts[0] == QLatin1String("xkb") && !parts[1].isEmpty())
-                    return parts[1];
+                if (parts.size() >= 2 && parts[0] == QLatin1String("xkb") && !parts[1].isEmpty()) {
+                    lay = parts[1];
+                    if (parts.size() > 2 && !parts[2].isEmpty() && parts[2] != QLatin1String("N/A")) var = parts[2];
+                    return;
+                }
             }
-            // Arch's localectl: '    X11 Layout: de'
             k = out.indexOf(QStringLiteral("X11 Layout:"));
             if (k >= 0) {
                 const QString v = out.mid(k + 11).trimmed().split(QLatin1Char('\n')).first().trimmed();
-                if (!v.isEmpty() && v != QLatin1String("N/A")) return v;
+                if (!v.isEmpty() && v != QLatin1String("N/A")) {
+                    lay = v;
+                    k = out.indexOf(QStringLiteral("X11 Variant:"));
+                    if (k >= 0) {
+                        const QString vv = out.mid(k + 12).trimmed().split(QLatin1Char('\n')).first().trimmed();
+                        if (!vv.isEmpty() && vv != QLatin1String("N/A")) var = vv;
+                    }
+                    return;
+                }
             }
         }
     }
@@ -132,7 +176,18 @@ static QString xkb_layout_used() {
             "                assuming 'us'; text rules with non-US keys may be WRONG.\n"
             "                Fix: set PKT_XKB_LAYOUT (e.g. =de) in the service environment.\n");
     }
-    return QStringLiteral("us");
+    lay = QStringLiteral("us");
+}
+static QString xkb_layout_used() {
+    QString l, v, o;
+    resolve_rmlvo(l, v, o);
+    return l;
+}
+// preview label: 'de' or 'de/nodeadkeys' — variant visible
+static QString layout_used_label() {
+    QString l, v, o;
+    resolve_rmlvo(l, v, o);
+    return v.isEmpty() ? l : l + QLatin1Char('/') + v;
 }
 // NOTE layout switching: injected evKEYS are interpreted by whatever layout is
 // ACTIVE at the time of the press. If the layout changes while pktm runs, the
@@ -153,16 +208,24 @@ static void build_modev() {
     }
 }
 static bool xkb_ready() {
-    const QString lay = xkb_layout_used();
-    if (g_xkm && lay == g_xlay) return true;
+    QString lay, var, opts;
+    resolve_rmlvo(lay, var, opts);
+    if (g_xkm && lay == g_xlay && var == g_xvar && opts == g_xopts) return true;
     if (g_xctx == nullptr) g_xctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
     if (!g_xctx) return false;
-    const QByteArray lo = lay.toUtf8();
+    const QByteArray lo = lay.toUtf8(), va = var.toUtf8(), op = opts.toUtf8();
     struct xkb_rule_names rn {};
     rn.layout = const_cast<char *>(lo.data());
+    if (!var.isEmpty())  rn.variant = const_cast<char *>(va.data());
+    if (!opts.isEmpty()) rn.options = const_cast<char *>(op.data());
     struct xkb_keymap *km = xkb_keymap_new_from_names(g_xctx, &rn, XKB_KEYMAP_COMPILE_NO_FLAGS);
-    if (km) { g_xkm = km; g_xlay = lay; build_modev(); }
-    else fprintf(stderr, "xkb: keymap for layout '%s' FAILED (falling back to US CHARMAP)\n", lay.toUtf8().constData());
+    if (km) {
+        if (g_xkm) xkb_keymap_unref(g_xkm);   // variant change: replace old keymap
+        g_xkm = km; g_xlay = lay; g_xvar = var; g_xopts = opts;
+        build_modev();
+    }
+    else fprintf(stderr, "xkb: keymap for layout '%s' variant '%s' FAILED (falling back to US CHARMAP)\n",
+                 lay.toUtf8().constData(), var.toUtf8().constData());
     return g_xkm;
 }
 // c -> evdev key + modifier evdevs that produce it in the layout; -1 = untypeable.
@@ -186,39 +249,42 @@ static int xkb_type_char(QChar c, QVector<int> &mods, bool &dead_out) {
     if (!xkb_ready()) return -1;
     const xkb_keysym_t want = c.unicode();
     const char *dn = dead_name_of(c);
-    bool name_hit = false;
-    for (xkb_keycode_t kc = 8; kc < 512; ++kc) {
-        const xkb_level_index_t nl = xkb_keymap_num_levels_for_key(g_xkm, kc, 0);
-        for (xkb_level_index_t lev = 0; lev < nl; ++lev) {
-            const xkb_keysym_t *syms = nullptr;
-            const int ns = xkb_keymap_key_get_syms_by_level(g_xkm, kc, 0, lev, &syms);
-            bool hit = false;
-            for (int s = 0; s < ns && !hit; ++s) {
-                hit = (syms[s] == want);
-                name_hit = false;
-                if (!hit && dn) {
-                    char nm[24];
-                    if (xkb_keysym_get_name(syms[s], nm, sizeof nm) > 0) {
-                        hit = (strcmp(nm, dn) == 0);
-                        name_hit = hit;
+    // PASS 1 (direct codepoint) wins over PASS 2 (dead-key name): on de:nodeadkeys
+    // the same '^' exists as a plain key AND as dead_circumflex on another key;
+    // picking the dead one would append a space where the layout types '^'.
+    for (int pass = 0; pass < 2; ++pass) {
+        const bool use_name = (pass == 1);
+        if (use_name && !dn) break;
+        for (xkb_keycode_t kc = 8; kc < 512; ++kc) {
+            const xkb_level_index_t nl = xkb_keymap_num_levels_for_key(g_xkm, kc, 0);
+            for (xkb_level_index_t lev = 0; lev < nl; ++lev) {
+                const xkb_keysym_t *syms = nullptr;
+                const int ns = xkb_keymap_key_get_syms_by_level(g_xkm, kc, 0, lev, &syms);
+                bool hit = false;
+                for (int s = 0; s < ns && !hit; ++s) {
+                    if (!use_name) { hit = (syms[s] == want); }
+                    else {
+                        char nm[24];
+                        if (xkb_keysym_get_name(syms[s], nm, sizeof nm) > 0)
+                            hit = (strcmp(nm, dn) == 0);
                     }
                 }
-            }
-            if (!hit) continue;
-            xkb_mod_mask_t masks[8];
-            const size_t got = xkb_keymap_key_get_mods_for_level(g_xkm, kc, 0, lev, masks, 8);
-            if (lev == 0) { mods.clear(); dead_out = name_hit; return (int)(kc - 8); }        // plain key
-            for (size_t mi = 0; mi < got; ++mi) {
-                const xkb_mod_mask_t mask = masks[mi];
-                if (mask == 0) continue;   // level reachable without mods
-                QVector<int> m2;
-                bool ok = true;
-                for (xkb_mod_index_t i = 0; i < xkb_keymap_num_mods(g_xkm) && ok; ++i)
-                    if ((mask >> i) & 1u) {
-                        const int mev = (i < g_modev.size()) ? g_modev[i] : -1;
-                        if (mev < 0) ok = false; else m2 << mev;
-                    }
-                if (ok) { mods = m2; dead_out = name_hit; return (int)(kc - 8); }
+                if (!hit) continue;
+                xkb_mod_mask_t masks[8];
+                const size_t got = xkb_keymap_key_get_mods_for_level(g_xkm, kc, 0, lev, masks, 8);
+                if (lev == 0) { mods.clear(); dead_out = use_name; return (int)(kc - 8); }
+                for (size_t mi = 0; mi < got; ++mi) {
+                    const xkb_mod_mask_t mask = masks[mi];
+                    if (mask == 0) continue;   // level reachable without mods
+                    QVector<int> m2;
+                    bool ok = true;
+                    for (xkb_mod_index_t i = 0; i < xkb_keymap_num_mods(g_xkm) && ok; ++i)
+                        if ((mask >> i) & 1u) {
+                            const int mev = (i < g_modev.size()) ? g_modev[i] : -1;
+                            if (mev < 0) ok = false; else m2 << mev;
+                        }
+                    if (ok) { mods = m2; dead_out = use_name; return (int)(kc - 8); }
+                }
             }
         }
     }
@@ -241,13 +307,9 @@ static int type_char(QChar c, QVector<int> &mods, bool *dead_out = nullptr) {
     if (dead_out) *dead_out = false;
     return char_evdev(c);
 }
-static QString layout_used_label() {
-#ifdef PKT_HAVE_XKB
-    return xkb_layout_used();
-#else
-    return QStringLiteral("us (fixed table)");
+#ifndef PKT_HAVE_XKB
+static QString layout_used_label() { return QStringLiteral("us (fixed table)"); }
 #endif
-}
 
 // one char -> down/up events incl. required modifier keys (mods = modifier evdevs)
 static void emit_char(QVector<QPair<int, int>> &out, int code, const QVector<int> &mods) {

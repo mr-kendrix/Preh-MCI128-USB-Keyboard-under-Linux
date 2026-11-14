@@ -755,6 +755,9 @@ int main(int argc, char **argv) {
     QPushButton winbtn(QStringLiteral("Aktive Fenster (3s)"), &win);
     winbtn.setObjectName("win3");
     winbtn.move(508, 738);
+    QLabel lblWin(QStringLiteral("fenster: —"), &win);   // countdown/probe readout
+    lblWin.move(10, 766);
+    int win_secs = 0;                                    // >0 = countdown running
     QString g_winTitle, g_winProc;   // last --active-window probe (shown in stat)
     upload.setFixedSize(QSize(260, 90));
 
@@ -868,15 +871,26 @@ int main(int argc, char **argv) {
         refresh(false);
     };
     pickbtn.connect(&pickbtn, &QPushButton::clicked, [pm, &edit, &save_note, &refresh, f_pick]{ f_pick(); });
-    // 'Aktive Fenster (3s)': click starts a 3 s countdown — bring the window you
+    // 'Aktive Fenster (3s)': click starts a countdown — bring the window you
     // want to type into to the FRONT within 3 s; then the daemon's active-window
     // probe runs and its process becomes the picker's current item.
-    auto f_win3 = [&]{
-        std::this_thread::sleep_for(std::chrono::seconds(3));   // blocking countdown
-        const QString wname = pktm::active_window();
-        const QString wproc = pktm::active_process();
-        g_winTitle = (wname == pktm::unknown_window()) ? QString() : wname;
-        g_winProc = wproc;
+    // NEVER sleep in the click handler: froze the window (KDE 'not responding').
+    // Timer ticks (1 s) update lblWin; at 0 win_probe() runs. Test hooks for
+    // headless gates: PKT_WIN_DELAY_MS / PKT_WIN_COUNT / PKT_WIN_FAKE 'title::proc'.
+    auto win_probe = [&]{
+        QString wname, wproc;
+        const char *fake = getenv("PKT_WIN_FAKE");
+        if (fake && *fake) {
+            const QString f = QString::fromUtf8(fake);
+            const int k = f.indexOf(QStringLiteral("::"));
+            if (k < 0) wname = f; else { wname = f.left(k); wproc = f.mid(k + 2); }
+        } else {
+            wname = pktm::active_window();
+            wproc = pktm::active_process();
+            if (wname == pktm::unknown_window()) wname = QString();
+        }
+        g_winTitle = wname; g_winProc = wproc;
+        lblWin.setText(QStringLiteral("fenster '%1' proc '%2'").arg(wname).arg(wproc));
         if (!wproc.isEmpty()) {
             int idx = -1;
             for (int i = 0; i < procPick.count(); ++i)
@@ -886,7 +900,24 @@ int main(int argc, char **argv) {
         }
         refresh(false);
     };
-    winbtn.connect(&winbtn, &QPushButton::clicked, [&]{ f_win3(); });
+    QTimer winT;
+    {
+        const char *d = getenv("PKT_WIN_DELAY_MS");
+        winT.setInterval((d && *d) ? QString(d).toInt() : 1000);
+    }
+    if (!winT.connect(&winT, &QTimer::timeout, [&]{
+        if (win_secs <= 0) return;
+        --win_secs;
+        if (win_secs == 0) win_probe();
+        else lblWin.setText(QStringLiteral("fenster in %1 s — bring window to FRONT").arg(win_secs));
+    })) qWarning("pkteditor: winT signal not connected");
+    auto f_win3 = [&]{
+        const char *c = getenv("PKT_WIN_COUNT");
+        win_secs = (c && *c) ? QString(c).toInt() : 3;
+        lblWin.setText(QStringLiteral("fenster in %1 s — bring window to FRONT").arg(win_secs));
+        winT.start();
+    };
+    winbtn.connect(&winbtn, &QPushButton::clicked, [f_win3]{ f_win3(); });
     auto f_prev = [&]{
         const Map *mp = find_map_c(pm->pm, pm->sel);
         const QString t = mp ? pktm::preview_map(*mp, spinl.value())
@@ -948,7 +979,7 @@ int main(int argc, char **argv) {
         int gfail = 0;
         if (!(find_btn("add") && find_btn("set") && find_btn("del")
               && find_btn("dep") && find_btn("ren") && find_btn("copy")
-              && find_btn("preview") && find_btn("pick")))
+              && find_btn("preview") && find_btn("pick") && find_btn("win3")))
             { std::printf("clicktest FAIL: button by objectName missing\n"); ++gfail; }
         edit.setText(QStringLiteral("L1")); press_btn("add");
         edit.setText(QStringLiteral("L2")); press_btn("add");
@@ -981,6 +1012,21 @@ int main(int argc, char **argv) {
                     procs.isEmpty() ? "" : procs.first().toUtf8().constData());
         spinl.setValue(1);
         press_btn("pick");
+        {
+            const Map *mp = find_map_c(pm->pm, pm->sel);
+            const QString d = (mp && !mp->layers.isEmpty()) ? mp->layers[0].dependency : QString();
+            if (d.isEmpty()) { std::printf("clicktest FAIL: pick did not set a dep\n"); ++gfail; }
+        }
+        // countdown button: click starts the 3 s countdown (non-blocking!), headless
+        // gate runs the probe directly with a fake result
+        press_btn("win3");
+        if (win_secs <= 0) { std::printf("clicktest FAIL: countdown not started\n"); ++gfail; }
+        win_secs = 0;                       // stop countdown; probe below is direct
+        win_probe();
+        if (g_winProc != QStringLiteral("pkteditor")) {
+            std::printf("clicktest FAIL: probe proc wrong (got '%s')\n", g_winProc.toUtf8().constData());
+            ++gfail;
+        }
         {
             const Map *mp = find_map_c(pm->pm, pm->sel);
             std::printf("clicktest layers(sel=%d): %d\n", pm->sel, mp ? mp->layers.size() : -1);
