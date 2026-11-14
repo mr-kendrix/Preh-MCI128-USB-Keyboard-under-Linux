@@ -11,7 +11,10 @@ add_executable(pkteditor gui_main.cpp upload.cpp pmap_dom.cpp mapper.cpp ${PKT_S
 add_executable(pktxc pktxc_main.cpp pktxc.cpp)
 # LB5 upload engine + gate (own target: upload.cpp needs Qt6 Widgets, pktest must not)
 add_executable(pktup upload_main.cpp upload.cpp pmap.cpp transport.cpp)
-# Phase 0 (2026-11-12): lossless pmap DOM round-trip gate + lib for GUI/CLI
+# Phase 2 (2026-11-14): IPC gate — unix stream socket round trip (ipc.cpp + gate main)
+add_executable(ipcg tools/ipc_peer.cpp ipc.cpp)
+target_include_directories(ipcg PRIVATE ${CMAKE_SOURCE_DIR} /usr/include/qt6 /usr/include/qt6/QtCore)
+target_link_libraries(ipcg PRIVATE Qt6Core)
 add_executable(pmaprt pmap_rt_main.cpp pmap_dom.cpp pmap.cpp)
 target_include_directories(pmaprt PRIVATE /usr/include/qt6 /usr/include/qt6/QtCore)
 target_link_libraries(pmaprt PRIVATE Qt6Core)
@@ -25,7 +28,7 @@ target_include_directories(pktup PRIVATE /usr/include/qt6/QtWidgets /usr/include
 # hotspot: CMakeLists.txt — pktm mount added by the rules layer (own TU mapper.*;
 # rules layer is pure Qt Core/Gui; --live additionally reuses transport.cpp, so
 # pktm links USB+HID too — link line moved below find_library)
-add_executable(pktm mapper_main.cpp mapper.cpp pmap.cpp transport.cpp)
+add_executable(pktm mapper_main.cpp mapper.cpp pmap.cpp transport.cpp ipc.cpp)
 target_include_directories(pktm PRIVATE /usr/include/qt6 /usr/include/qt6/QtCore /usr/include/qt6/QtNetwork)
 
 find_library(USB_LIB NAMES usb-1.0)

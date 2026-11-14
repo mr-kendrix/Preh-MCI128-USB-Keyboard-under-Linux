@@ -9,6 +9,7 @@
 //                                scan->POSKey (calib) -> rules -> ydotool inject.
 // Every vendor body is cp1252-hexed; mapper.cpp does the rule decode.
 #include "mapper.h"
+#include "ipc.h"
 #include <QFile>
 #include <QLocalSocket>
 #include <cstdio>
@@ -121,6 +122,7 @@ int main(int argc, char **argv) {
     int poskey = -1;
     bool allow_actions = false;   // actions OFF by default (shell-free argv exec,
                                   // still: only run what the user explicitly allows)
+    bool ipc_on = false;          // --ipc: bind the Phase 2 status socket
     QString feed, calib, device;
     int secs = 0;   // --live default: run until signalled; tests pass explicit time
     for (int i = 1; i < argc; ++i) {
@@ -138,6 +140,7 @@ int main(int argc, char **argv) {
         else if (a == "--device") { if (i + 1 < argc) device = argv[++i]; }
         else if (a == "--seconds") { if (i + 1 < argc) secs = QString(argv[++i]).toInt(); }
         else if (a == "--allow-actions") allow_actions = true;
+        else if (a == "--ipc") ipc_on = true;
         else if (a == "--cooldown-test") mode = "cooldown-test";
         else if (path.isEmpty()) path = a;
     }
@@ -199,7 +202,8 @@ int main(int argc, char **argv) {
         std::fprintf(stderr, "open fail %s\n", path.toUtf8().constData());
         return 1;
     }
-    const RuleSet rs = parse_rules(f.readAll());
+    const RuleSet rs0 = parse_rules(f.readAll());
+    RuleSet rs = rs0;   // non-const: --ipc 'reload' control replaces the rules
 
     if (mode == "report") {
         const QByteArray nm = rs.name.toUtf8();
@@ -372,6 +376,59 @@ int main(int argc, char **argv) {
                 std::printf(">> note: calib has no '_board_chk' stamp — restamp after table uploads\n");
             }
         }
+        // ---- Phase 2 IPC (design runs/phase2_ipc_design.md): one bound NDJSON
+        // socket; the GUI is the peer. Emits are best-effort: a broken pipe warns
+        // once and NEVER kills the pump loop (keyboard must keep working).
+        int ipc_fd = -1;
+        int ipc_peer = -1;   // connected peer fd once accept picked the connect up
+        bool ipc_broken = false;
+        if (ipc_on) {
+            QString e2;
+            ipc_fd = pktipc::bind_socket(e2);
+            if (ipc_fd < 0) { std::printf(">> ipc bind failed: %s — running without peer\n", e2.toUtf8().constData()); ipc_on = false; }
+            else { std::printf("ipc bound: %s\n", pktipc::sock_path().toUtf8().constData());
+                   pktipc::start_accept(ipc_fd); }
+        }
+        pktipc::LineBuf ipc_in;
+        auto ipc_line = [&](const QString &l) {
+            if (ipc_peer < 0 || ipc_broken) return;   // emits only once a peer is connected
+            QString e2;
+            if (!pktipc::send_line(ipc_peer, l, e2)) {
+                ipc_broken = true;   // dead peer: stop spamming, keyboard unaffected
+                std::printf(">> ipc send failed (%s) — emits disabled\n", e2.toUtf8().constData());
+            }
+        };
+        bool ipc_quit = false;
+        auto ipc_consume_once = [&]() {
+            if (ipc_peer < 0 || ipc_broken) return;
+            if (!ipc_in.acc.contains('\n')) {   // buffered full line: consume without poll
+                struct pollfd pf{ ipc_peer, POLLIN, 0 };
+                if (::poll(&pf, 1, 0) <= 0) return;
+            }
+            QString line, e2;
+            if (!pktipc::recv_line(ipc_peer, ipc_in, line, e2) || line.isEmpty()) return;
+            pktipc::Msg m;
+            QString why;
+            if (!pktipc::parse_line(line, m, why)) { ipc_line(pktipc::mk_error(QStringLiteral("ipc"), why)); return; }
+            if (m.t == QLatin1String("reload") || m.t == QLatin1String("set-value") ||
+                m.t == QLatin1String("set-dep")) {
+                // GUI wrote the file first (undo-safe there); daemon only rereads.
+                QFile g(path);
+                if (g.open(QIODevice::ReadOnly)) {
+                    rs = parse_rules(g.readAll());
+                    ipc_line(pktipc::mk_reload(path, rs.rules.size()));
+                } else
+                    ipc_line(pktipc::mk_error(QStringLiteral("reload"), QStringLiteral("reread failed")));
+            } else if (m.t == QLatin1String("quit")) {
+                ipc_quit = true;
+            } else {
+                ipc_line(pktipc::mk_error(QStringLiteral("ipc"), QStringLiteral("unknown t '%1'").arg(m.t)));
+            }
+        };
+        auto ipc_finish = [&]() {   // unlink the node + close daemon-side fds on exit
+            if (ipc_fd >= 0) { pktipc::drop_bound(ipc_fd); ipc_fd = -1; }
+            if (ipc_peer >= 0) { ::close(ipc_peer); ipc_peer = -1; }
+        };
         const QString sock = [=]() {                                       // resolve+sanity: typo'd
             QString s = getenv("YDOTOOL_SOCKET") ? QString(getenv("YDOTOOL_SOCKET"))          // YDOTOOL_SOCKET
                     : QStringLiteral("/tmp/.ydotool_socket");                                 // (the one ydotoold
@@ -404,6 +461,7 @@ int main(int argc, char **argv) {
         int max_hold_s = 30;
         if (const char *h = getenv("PKT_MAX_HOLD_S")) { const int v = atoi(h); if (v > 0) max_hold_s = v; }
         int presses = 0, injected = 0, skipped = 0;
+        int polls_seen = 0;   // --ipc health cadence
         // remove one key from the exit-sweep array (normal AR release, flush,
         // watchdog): swap-remove; a signal inside the swap window may re-up the
         // swapped key once — up events are idempotent, accepted by ydotool
@@ -437,6 +495,7 @@ int main(int argc, char **argv) {
                 ++skipped; return;
             }
             const int pk = table.value(scancode);
+            ipc_line(pktipc::mk_press(pk, true, pktipc::now_ms()));   // machine view (design msg)
             const Rule *hit = nullptr;
             for (const Rule &r : rs.rules)
                 if (r.poskey == pk) { hit = &r; break; }
@@ -445,7 +504,8 @@ int main(int argc, char **argv) {
             bool need_dep = false;
             for (const pktm::Layer &l : hit->layers) if (!l.dep.isEmpty()) { need_dep = true; break; }
             QString win = unknown_window(), proc;
-            if (need_dep) { win = active_window(); proc = active_process(); }
+            if (need_dep) { win = active_window(); proc = active_process();
+                            ipc_line(pktipc::mk_window(win, proc, pktipc::now_ms())); }
             const int sel = match_layer(*hit, proc, win);
             if (sel < 0) {
                 std::printf("POSKey %d -> no rule match (window '%s' proc '%s') -> nothing injected\n",
@@ -457,14 +517,18 @@ int main(int argc, char **argv) {
             const pktm::Layer &L = hit->layers[sel];
             if (layer_is_action(L)) {           // vendor ACTION layer: exec, not typing
                 const QVector<QString> av = action_argv(L, why);
-                if (av.isEmpty())
+                if (av.isEmpty()) {
                     std::printf("POSKey %d -> ACTION %s '%s' -> REFUSED (%s), nothing run\n",
                                 pk, L.type.toUtf8().constData(),
                                 L.value.toUtf8().constData(), why.toUtf8().constData());
-                else if (!allow_actions)
+                    ipc_line(pktipc::mk_error(QStringLiteral("action"), why));
+                }
+                else if (!allow_actions) {
                     std::printf("POSKey %d -> ACTION %s '%s' -> BLOCKED (add --allow-actions)\n",
                                 pk, L.type.toUtf8().constData(),
                                 L.value.toUtf8().constData());
+                    ipc_line(pktipc::mk_inject(pk, QStringLiteral("action-blocked"), QString(), pktipc::now_ms()));
+                }
                 else {
                     // time base = first action; cooldown via unit-testable fn
                     static QHash<int, qint64> act_lastms;
@@ -481,6 +545,7 @@ int main(int argc, char **argv) {
                                     pk, L.type.toUtf8().constData(),
                                     av.join(QLatin1Char(' ')).toUtf8().constData());
                         spawn_argv(av);
+                        ipc_line(pktipc::mk_inject(pk, QStringLiteral("action"), QString(), pktipc::now_ms()));
                     }
                 }
                 return;
@@ -488,6 +553,7 @@ int main(int argc, char **argv) {
             if (!value_script(*hit, L, seq, why)) {
                 std::printf("POSKey %d -> %s -> REFUSED, nothing injected\n",
                             pk, why.toUtf8().constData());
+                ipc_line(pktipc::mk_error(QStringLiteral("rule"), why));
                 return;
             }
             QString typed = literal_to_type(*hit, hit->layers[sel]); // label only
@@ -518,6 +584,7 @@ int main(int argc, char **argv) {
                     ++injected;
                     std::printf("POSKey %d '%s' -> AutoRepeat press (ydotool key %d down only)\n",
                                 pk, typed.toUtf8().constData(), seq[0].first);
+                    ipc_line(pktipc::mk_inject(pk, QStringLiteral("text"), QStringLiteral("%1:1").arg(seq[0].first), pktipc::now_ms()));
                 } else {
                     std::printf("POSKey %d '%s' -> NOT injected: socket rc=%d (%s)\n",
                                 pk, typed.toUtf8().constData(), rc, sock.toUtf8().constData());
@@ -535,9 +602,11 @@ int main(int argc, char **argv) {
                 for (const auto &p : seq) pairs += QString("%1:%2 ").arg(p.first).arg(p.second);
                 std::printf("POSKey %d '%s' -> rule match -> injected (ydotool key %s)\n",
                             pk, typed.toUtf8().constData(), pairs.toUtf8().constData());
+                ipc_line(pktipc::mk_inject(pk, QStringLiteral("text"), pairs, pktipc::now_ms()));
             } else {
                 std::printf("POSKey %d '%s' -> NOT injected: socket rc=%d (%s)\n",
                             pk, typed.toUtf8().constData(), rc, sock.toUtf8().constData());
+                ipc_line(pktipc::mk_error(QStringLiteral("ydotool"), QStringLiteral("rc=%1").arg(rc)));
             }
         };
         auto do_sweep = [&]() {
@@ -562,10 +631,28 @@ int main(int argc, char **argv) {
         };
 
         if (!feed.isEmpty()) {           // synthetic recorded feed stays batch (gate)
+            // --ipc: peer connects right after daemon start — wait ≤3 s for its
+            // pending connect BEFORE emitting the feed's press/inject lines.
+            if (ipc_fd >= 0) {
+                for (int t = 0; t < 60 && ipc_peer < 0; ++t) {
+                    const int p = pktipc::accepted_fd();
+                    if (p >= 0) { ipc_peer = p; std::printf("ipc peer accepted\n"); }
+                    else ::usleep(50000);
+                }
+            }
             const QVector<KeyEvent> events = decode_stream(hex_to_bytes(feed));
             for (const KeyEvent &ev : events) on_event(ev.scancode, ev.down);
+            // feed gate: drain peer control lines (reload/quit) so --ipc is testable
+            // without a live board (test path only; the event loop consumes per round)
+            if (ipc_peer >= 0)
+                for (int k = 0; k < 32; ++k) {
+                    struct pollfd pf{ ipc_peer, POLLIN, 0 };
+                    if (::poll(&pf, 1, 50) <= 0 && ipc_in.acc.isEmpty()) break;
+                    ipc_consume_once();
+                }
             std::printf("-- %d presses, %d injected, %d unknown scancodes skipped\n",
                         presses, injected, skipped);
+            ipc_finish();
             return 0;
         }
 
@@ -652,6 +739,10 @@ int main(int argc, char **argv) {
         int dead_opens = 0;   // open succeeded but read fails immediately, in a row
         while (true) {
             if (secs > 0 && std::time(nullptr) - t0 >= secs) break;
+            if (ipc_fd >= 0 && ipc_peer < 0) {   // pick up the GUI peer once connected
+                const int p = pktipc::accepted_fd();
+                if (p >= 0) { ipc_peer = p; std::printf("ipc peer accepted\n"); }
+            }
             // AutoRepeat watchdog: runs EVERY iteration, so a held key without new
             // IN reports can still be released (see poll below — read would block)
             if (!ar_since.isEmpty()) {
@@ -705,10 +796,16 @@ int main(int argc, char **argv) {
             buf.append(reinterpret_cast<const char*>(rep), int(n));
             for (const KeyEvent &ev : decode_stream(buf)) on_event(ev.scancode, ev.down);
             buf.clear();
+            ++polls_seen;
+            ipc_consume_once();
+            if (polls_seen % 128 == 0)
+                ipc_line(pktipc::mk_health(polls_seen, injected, QString(), QString()));
+            if (ipc_quit) break;
         }
         if (sweep_count.load() > 0) do_sweep();
         std::printf("-- %d presses, %d injected, %d unknown scancodes skipped\n",
                     presses, injected, skipped);
+        ipc_finish();
         return 0;
     }
 
