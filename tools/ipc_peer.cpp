@@ -10,12 +10,11 @@ int main(int argc, char **av) {
     const int p = pktipc::connect_peer(err);
     if (p < 0) { std::printf("ipc peer FAIL: connect %s\n", err.toUtf8().constData()); return 2; }
 
-    // control toward the daemon (design: GUI writes the file first, daemon rereads)
+    // control toward the daemon (design: pmap file = only source of truth;
+    // the channel carries reload and quit only — no set-value / set-dep)
     QString es;
-    if (!pktipc::send_line(p, pktipc::mk_set_value(2, "hello"), es)) std::printf("peer send1 fail: %s\n", es.toUtf8().constData());
-    if (!pktipc::send_line(p, pktipc::mk_set_dep(2, "(konsole)"), es)) std::printf("peer send2 fail: %s\n", es.toUtf8().constData());
-    if (!pktipc::send_line(p, pktipc::mk_reload_req(), es)) std::printf("peer send3 fail: %s\n", es.toUtf8().constData());
-    if (!pktipc::send_line(p, pktipc::mk_quit(), es)) std::printf("peer send4 fail: %s\n", es.toUtf8().constData());
+    if (!pktipc::send_line(p, pktipc::mk_reload_req(), es)) std::printf("peer send1 fail: %s\n", es.toUtf8().constData());
+    if (!pktipc::send_line(p, pktipc::mk_quit(), es)) std::printf("peer send2 fail: %s\n", es.toUtf8().constData());
 
     int saw_press = 0, saw_inject = 0, saw_reload = 0, saw_quit = 0, bad = 0;
     pktipc::LineBuf lb;

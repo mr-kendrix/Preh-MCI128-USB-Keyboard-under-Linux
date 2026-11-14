@@ -352,6 +352,10 @@ int main(int argc, char **argv) {
             g_mark_fd = ::open(mk, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         std::signal(SIGTERM, sweep_handler);
         std::signal(SIGINT, sweep_handler);
+        // IPC socket writes raise SIGPIPE when the peer died (default action =
+        // terminate the daemon = dead keyboard). Ignore it: ::write then returns
+        // EPIPE and ipc_line() disables further emits.
+        std::signal(SIGPIPE, SIG_IGN);
 
         const QString calib_path = calib.isEmpty() ? (getenv("PKT_CALIB") ? QString(getenv("PKT_CALIB")) : QString()) : calib;
         if (calib_path.isEmpty()) {
@@ -386,8 +390,7 @@ int main(int argc, char **argv) {
             QString e2;
             ipc_fd = pktipc::bind_socket(e2);
             if (ipc_fd < 0) { std::printf(">> ipc bind failed: %s — running without peer\n", e2.toUtf8().constData()); ipc_on = false; }
-            else { std::printf("ipc bound: %s\n", pktipc::sock_path().toUtf8().constData());
-                   pktipc::start_accept(ipc_fd); }
+            else std::printf("ipc bound: %s\n", pktipc::sock_path().toUtf8().constData());
         }
         pktipc::LineBuf ipc_in;
         auto ipc_line = [&](const QString &l) {
@@ -410,9 +413,10 @@ int main(int argc, char **argv) {
             pktipc::Msg m;
             QString why;
             if (!pktipc::parse_line(line, m, why)) { ipc_line(pktipc::mk_error(QStringLiteral("ipc"), why)); return; }
-            if (m.t == QLatin1String("reload") || m.t == QLatin1String("set-value") ||
-                m.t == QLatin1String("set-dep")) {
+            if (m.t == QLatin1String("reload")) {
                 // GUI wrote the file first (undo-safe there); daemon only rereads.
+                // pmap file = only source of truth: set-value/set-dep are NOT
+                // accepted — a rule change without a file change must not exist.
                 QFile g(path);
                 if (g.open(QIODevice::ReadOnly)) {
                     rs = parse_rules(g.readAll());
@@ -635,7 +639,8 @@ int main(int argc, char **argv) {
             // pending connect BEFORE emitting the feed's press/inject lines.
             if (ipc_fd >= 0) {
                 for (int t = 0; t < 60 && ipc_peer < 0; ++t) {
-                    const int p = pktipc::accepted_fd();
+                    QString e2;
+                    const int p = pktipc::poll_accept(ipc_fd, e2);
                     if (p >= 0) { ipc_peer = p; std::printf("ipc peer accepted\n"); }
                     else ::usleep(50000);
                 }
@@ -739,8 +744,9 @@ int main(int argc, char **argv) {
         int dead_opens = 0;   // open succeeded but read fails immediately, in a row
         while (true) {
             if (secs > 0 && std::time(nullptr) - t0 >= secs) break;
-            if (ipc_fd >= 0 && ipc_peer < 0) {   // pick up the GUI peer once connected
-                const int p = pktipc::accepted_fd();
+            if (ipc_fd >= 0 && ipc_peer < 0) {   // pick up the GUI peer once it connects
+                QString e2;
+                const int p = pktipc::poll_accept(ipc_fd, e2);
                 if (p >= 0) { ipc_peer = p; std::printf("ipc peer accepted\n"); }
             }
             // AutoRepeat watchdog: runs EVERY iteration, so a held key without new

@@ -12,8 +12,7 @@
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
-#include <thread>
-#include <atomic>
+#include <poll.h>
 
 namespace pktipc {
 
@@ -38,9 +37,10 @@ static bool fill_un(sockaddr_un &un, const QString &p) {
 bool ensure_dir() {
     const QString p = sock_path();
     const QString dir = p.left(p.size() - QStringLiteral("/daemon.sock").size());
-    QDir d(dir);
-    if (d.exists()) return true;
-    return d.mkdir(QString(), {QFile::Permissions(0x1ff)});   // 0700 like the design
+    if (QDir(dir).exists()) return true;
+    // Qt6 Permissions are an ENUM bitmask (ReadUser/WriteUser/ExeUser), not octal:
+    // 0700 = the three User bits. mkpath creates parents as needed.
+    return QDir().mkpath(dir, {QFile::Permissions(QFile::ReadUser | QFile::WriteUser | QFile::ExeUser)});
 }
 
 int bind_socket(QString &err) {
@@ -59,9 +59,10 @@ int bind_socket(QString &err) {
         ::close(fd);
         return -1;
     }
-    // kernel 6.12+ AF_UNIX reconnect rework: a plain bound socket is NOT a receiver —
-    // accept gives EINVAL and peer connect ECONNREFUSED until listen()/SO_LISTEN
-    // marks sk_state TCP_LISTEN. Backlog 1 = the single GUI peer.
+    // Standard stream-socket semantics: bind() alone is not a receiver. accept()
+    // answers EINVAL and peer connect ECONNREFUSED until listen() marks the socket
+    // TCP_LISTEN. This is not a kernel-version change — listen() is simply required.
+    // Backlog 1 is enough for the single GUI peer.
     if (::listen(fd, 1) != 0) {
         err = QStringLiteral("listen: %1").arg(errno);
         ::close(fd);
@@ -75,8 +76,8 @@ int connect_peer(QString &err) {
     const QString p = sock_path();
     sockaddr_un un {};
     if (!fill_un(un, p)) { err = QStringLiteral("path too long"); return -1; }
-    // retry on ECONNREFUSED: a receiver that has not marked itself listening yet
-    // refuses (kernel 6.12+ reconnect semantics) — wait up to ~1 s.
+    // retry on ECONNREFUSED: connect beats the daemon's own listen() window; a
+    // not-yet-listening receiver refuses — wait up to ~1 s.
     for (int attempt = 0; attempt < 40; ++attempt) {
         const int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
         if (fd < 0) { err = QStringLiteral("sock: %1").arg(errno); return -1; }
@@ -94,22 +95,21 @@ int connect_peer(QString &err) {
     return -1;
 }
 
-static std::atomic<int> g_peer{-1};   // accepted peer fd (-1 pending, -2 failed)
-
-void start_accept(int bound_fd) {
-    // detached thread parked on a blocking accept4: kernel 6.18 gives no usable
-    // nonblock accept4 (probe: SO_* flags EINVAL, SOCK_NONBLOCK still blocks), so
-    // the accept lives on its own thread; process exit ends the blocked syscall.
-    std::thread t([bound_fd]{
-        struct sockaddr_un ap {};
-        socklen_t al = sizeof ap;
-        const int p = ::accept4(bound_fd, reinterpret_cast<sockaddr *>(&ap), &al, 0);
-        g_peer.store(p < 0 ? -2 : p);
-    });
-    t.detach();
+int poll_accept(int fd, QString &err) {
+    // poll(POLLIN) on the LISTENing socket reports a pending peer connect (verified
+    // on kernel 6.18: 0 without pending, 1 after a connect, 0 after its accept).
+    // Guarding accept4 with it keeps the pump loop non-blocking; without a pending
+    // connect accept4 on a LISTEN socket would WAIT for one. If the poll signal is
+    // stale (peer died meanwhile) accept4 answers EAGAIN — callers treat p<0 as
+    // 'no peer now' and retry on the next loop iteration.
+    struct pollfd pf{ fd, POLLIN, 0 };
+    if (::poll(&pf, 1, 0) <= 0) return -1;
+    struct sockaddr_un ap {};
+    socklen_t al = sizeof ap;
+    const int p = ::accept4(fd, reinterpret_cast<sockaddr *>(&ap), &al, 0);
+    if (p < 0) { err = QStringLiteral("accept: %1").arg(errno); return -1; }
+    return p;
 }
-
-int accepted_fd() { return g_peer.load(); }
 
 void drop_bound(int fd) {
     if (fd >= 0) ::close(fd);
@@ -120,9 +120,9 @@ bool send_line(int fd, const QString &line, QString &err) {
     const QByteArray d = (line + QLatin1Char('\n')).toUtf8();
     int off = 0;
     while (off < d.size()) {
-        // glibc <sys/socket.h> carries a 4.4-BSD 'send' relic with 4 args — ::send
-        // on a socket fd resolves to the wrong symbol family (ENOTSOCK). ::write is
-        // the safe call for connected sockets.
+        // ::write on the CONNECTED accepted peer fd. (The original ENOTSOCK bug
+        // was sending on the BOUND fd — never valid for IO.) Dead peer: EPIPE;
+        // SIGPIPE is SIG_IGN'd in the daemon so the pump loop survives.
         const ssize_t n = ::write(fd, d.constData() + off, size_t(d.size() - off));
         if (n < 0 && errno == EINTR) continue;
         if (n <= 0) { err = QStringLiteral("send: %1").arg(errno); return false; }
@@ -195,18 +195,10 @@ QString mk_error(const QString &where, const QString &why) {
                       {QStringLiteral("why"), why}});
 }
 
-QString mk_set_value(int layer, const QString &text) {
-    return pack_line({{QStringLiteral("t"), QStringLiteral("set-value")},
-                      {QStringLiteral("layer"), layer},
-                      {QStringLiteral("text"), text}});
-}
-QString mk_set_dep(int layer, const QString &proc) {
-    return pack_line({{QStringLiteral("t"), QStringLiteral("set-dep")},
-                      {QStringLiteral("layer"), layer},
-                      {QStringLiteral("proc"), proc}});
-}
-QString mk_probe_window() { return pack_line({{QStringLiteral("t"), QStringLiteral("probe-window")}}); }
-QString mk_reload_req()   { return pack_line({{QStringLiteral("t"), QStringLiteral("reload")}}); }
+// GUI -> daemon messages: reload and quit ONLY. set-value / set-dep / probe-window
+// were removed by design: the pmap file on disk is the single source of truth; the
+// GUI saves it atomically and sends reload. Two live rule copies must not exist.
+QString mk_reload_req() { return pack_line({{QStringLiteral("t"), QStringLiteral("reload")}}); }
 QString mk_quit()         { return pack_line({{QStringLiteral("t"), QStringLiteral("quit")}}); }
 
 bool parse_line(const QString &line, Msg &m, QString &why) {

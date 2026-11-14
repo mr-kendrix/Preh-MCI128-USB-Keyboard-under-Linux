@@ -15,11 +15,9 @@ QString sock_path();                 // design path (XDG_RUNTIME_DIR or /tmp fal
 bool  ensure_dir();                  // mkdir $XDG_RUNTIME_DIR/derpktxc mode 0700
 int   bind_socket(QString &err);     // unlink stale, bind; fd bound to path
 int   connect_peer(QString &err);    // GUI side: connect to the bound path
-void  start_accept(int bound_fd);    // daemon side: detached thread parked on a BLOCKING
-                                     // accept4 — kernel 6.18 has no working nonblock accept4
-                                     // (SO_* flags EINVAL, SOCK_* ignored); pending peer
-                                     // connects are queued, the thread picks them up
-int   accepted_fd();                 // -1 pending / >=0 connected peer / -2 accept failed
+int   poll_accept(int bound_fd, QString &err); // daemon side: poll(POLLIN) on the LISTENing
+                                     // socket signals a pending peer connect (0 = none,
+                                     // verified on kernel 6.18); then accept4 cannot block
 void  drop_bound(int bound_fd);      // unlink the path + close fd (daemon exit cleanup)
 bool  send_line(int fd, const QString &line, QString &err);   // NUL-terminated write
 
@@ -37,9 +35,7 @@ QString mk_reload(const QString &path, int rules);
 QString mk_error(const QString &where, const QString &why);
 
 // --- messages (GUI -> daemon) ----------------------------------------------
-QString mk_set_value(int layer, const QString &text);
-QString mk_set_dep(int layer, const QString &proc);
-QString mk_probe_window();
+// pmap file = only source of truth: the channel carries reload and quit only.
 QString mk_reload_req();
 QString mk_quit();
 
