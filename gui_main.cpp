@@ -1194,7 +1194,7 @@ int main(int argc, char **argv) {
     if (!pc) qWarning("pkteditor: IN-poll signal NOT connected (bug!)");
 
     QString save_note;
-    static QStringList g_backups;              // newest-first backup paths
+    static QStringList g_backups, g_restoreRows;  // newest-first paths + display rows
     auto refresh = [&](bool saved) {
         ipc_drain();   // daemon status lines -> g_ipc_status (nonblocking poll)
         { static int tref = 0;   // dead link? retry every ~4 s over the nb route only
@@ -1270,11 +1270,25 @@ int main(int argc, char **argv) {
           }
           std::sort(found.begin(), found.end(),
                     [](const auto &a, const auto &b){ return a.first > b.first; });
-          QStringList fl;
-          for (const auto &p : found) fl << QString::fromUtf8(p.second.u8string().c_str());
-          g_backups = fl;
+          static QHash<QString, QString> rline;   // path -> display row (cached)
+          QStringList fl, rows;
+          for (const auto &p : found) {
+              const QString path = QString::fromUtf8(p.second.u8string().c_str());
+              QString line = rline.value(path);
+              if (line.isEmpty()) {
+                  const long long secs = std::chrono::duration_cast<std::chrono::seconds>(p.first.time_since_epoch()).count();
+                  QFile bf(path);
+                  const int nk = bf.open(QIODevice::ReadOnly) ? bf.readAll().count(QByteArrayLiteral("<Poskey")) : -1;
+                  bf.close();
+                  line = QDateTime::fromSecsSinceEpoch(secs).toString(QStringLiteral("yyyy-MM-dd hh:mm"))
+                       + QStringLiteral(" . %1 keys . %2").arg(nk).arg(QFileInfo(path).fileName());
+                  rline.insert(path, line);
+              }
+              fl << path; rows << line;
+          }
+          g_backups = fl; g_restoreRows = rows;
           restoreW->clear();
-          for (const QString &f : fl) restoreW->addItem(QFileInfo(f).fileName());
+          for (const QString &l : rows) restoreW->addItem(l);
           restoreSel->setMaximum(qMax(1, fl.size()));
           restoreSel->setValue(qBound(1, restoreSel->value(), qMax(1, fl.size())));
         }
@@ -1535,7 +1549,8 @@ int main(int argc, char **argv) {
         pm->path = path;
         pm->pm = parse_pmap(QString::fromLatin1(bytes));
         refresh(true);
-        save_note = QStringLiteral("restored %1").arg(g_backups.size() - i);
+        save_note = QStringLiteral("restored %1 (of %2)")
+                                   .arg(g_backups.size() - i).arg(g_backups.size());
     };
     restoreBtn->connect(restoreBtn, &QPushButton::clicked, [&]{ do_restore(); });
     macrobtn->connect(macrobtn, &QPushButton::clicked, [&]{
@@ -1781,6 +1796,10 @@ int main(int argc, char **argv) {
                 std::printf("clicktest FAIL: restore did not run\n"); ++gfail;
             }
             if (pm->path != before) { std::printf("clicktest FAIL: restore moved path\n"); ++gfail; }
+            const QString r0 = g_restoreRows.value(0);
+            if (r0.length() < 12 || !r0.contains(QStringLiteral(" keys"))) {
+                std::printf("clicktest FAIL: restore row lacks summary ('%s')\n", r0.toUtf8().constData()); ++gfail;
+            }
         }
         // MACRO tray: spin selects a macro, button appends it to the box.
         dlgout->setText(QStringLiteral("hello"));
