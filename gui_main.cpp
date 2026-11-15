@@ -30,6 +30,7 @@
 #include <QSpinBox>
 #include <QComboBox>
 #include <QListWidget>
+#include <QCheckBox>
 #include <QHBoxLayout>
 #include <QSettings>
 #include <QVBoxLayout>
@@ -941,7 +942,7 @@ int main(int argc, char **argv) {
     vlay->addWidget(head);
     MapView *board = new MapView(body);
     board->m_ = pm;
-    board->setMinimumSize(QSize(480, 160));   // min height fits small windows too
+    board->setMinimumSize(QSize(480, 140));   // min height fits small windows too
     // Vendor left column: process list selects the view (radio list);
     // board sits right of it in one row — real layout, no coordinates.
     QWidget *mid = new QWidget(body);
@@ -1007,6 +1008,10 @@ int main(int argc, char **argv) {
     dweb->setText(QStringLiteral("Open web page"));
     dweb->setEnabled(false);
     dweb->setToolTip(QStringLiteral("not in file model"));
+    QCheckBox *cbBtf = new QCheckBox(dlg); cbBtf->setText(QStringLiteral("Bring to foreground"));
+        QCheckBox *cbRep = new QCheckBox(dlg); cbRep->setText(QStringLiteral("AutoRepeat"));
+        QCheckBox *cbSlw = new QCheckBox(dlg); cbSlw->setText(QStringLiteral("SlowOutput"));
+    cbBtf->setObjectName("cbBtf"); cbRep->setObjectName("cbRep"); cbSlw->setObjectName("cbSlw");
     spinl->setMinimum(1);
     spinl->setValue(1);
     dgrid->addWidget(laylbl, 0, 0); dgrid->addWidget(spinl, 0, 1);
@@ -1016,6 +1021,7 @@ int main(int argc, char **argv) {
     dgrid->addWidget(copybtn, 2, 2); dgrid->addWidget(dclosebtn, 2, 3);
     dgrid->addWidget(dfn, 3, 0); dgrid->addWidget(dft, 3, 1);
     dgrid->addWidget(dapp, 3, 2); dgrid->addWidget(dweb, 3, 3);
+    dgrid->addWidget(cbBtf, 4, 0); dgrid->addWidget(cbRep, 4, 1); dgrid->addWidget(cbSlw, 4, 2);
     dlg->hide();                                   // openDlg shows it
     vwin.addWidget(sbar);                          // status line at the bottom
     QPushButton *undobtn = new QPushButton(QStringLiteral("Undo"), ctl);
@@ -1246,7 +1252,15 @@ int main(int argc, char **argv) {
     delbtn->connect(delbtn, &QPushButton::clicked, [pm, &save_note, &refresh, f_del]{ f_del(); });
     renbtn->connect(renbtn, &QPushButton::clicked, [pm, &edit, &save_note, &refresh, f_ren]{ f_ren(edit->text()); });
     copybtn->connect(copybtn, &QPushButton::clicked, [pm, &save_note, &refresh, f_copy]{ f_copy(); });
-    savebtn->connect(savebtn, &QPushButton::clicked, [pm, &out, &save_note, &refresh]{
+    savebtn->connect(savebtn, &QPushButton::clicked, [pm, &out, &save_note, &refresh, &spinl,
+                                                      &cbBtf, &cbRep, &cbSlw]{
+        { Map &mx = ensure_map(pm->pm, pm->sel);
+          if (!mx.layers.isEmpty()) {
+              const int li = qBound(1, spinl->value(), (int)mx.layers.size()) - 1;
+              mx.layers[li].btf  = cbBtf->isChecked() ? QStringLiteral("True") : QStringLiteral("False");
+              mx.layers[li].rep  = cbRep->isChecked() ? QStringLiteral("True") : QStringLiteral("False");
+              mx.layers[li].slow = cbSlw->isChecked() ? QStringLiteral("True") : QStringLiteral("False");
+          } }
         save_note = save_pmap(*pm, pm->path.isEmpty() ? out : pm->path); refresh(true); });
     auto do_undo = [&save_note, &refresh]{
         if (g_undo.isEmpty()) save_note = QStringLiteral("undo: nothing in this session");
@@ -1300,6 +1314,8 @@ int main(int argc, char **argv) {
     };
     auto open_dialog = [&](int pk){
         pm->sel = pk;
+        dlg->setGeometry(QRect(6, 6, qMax(360, win.width() - 12),
+                               qMin(320, qMax(200, win.height() / 2))));
         dlg->show();
         dlg_open = true;
         const int n = [pk](Model *p) -> int { for (const Map &mm : p->pm.maps)
@@ -1308,6 +1324,12 @@ int main(int argc, char **argv) {
         spinl->setMinimum(1);
         spinl->setMaximum(qMax(1, n));
         spinl->setValue(1);
+        if (const Map *mx = find_map_c(pm->pm, pk); mx && !mx->layers.isEmpty()) {
+            const Layer &L = mx->layers.first();
+            cbBtf->setChecked(L.btf.compare(QStringLiteral("true"), Qt::CaseInsensitive) == 0);
+            cbRep->setChecked(L.rep.compare(QStringLiteral("true"), Qt::CaseInsensitive) == 0);
+            cbSlw->setChecked(L.slow.compare(QStringLiteral("true"), Qt::CaseInsensitive) == 0);
+        } else { cbBtf->setChecked(false); cbRep->setChecked(false); cbSlw->setChecked(false); }
         refresh(false);
     };
     pm->openDlg = open_dialog;
@@ -1385,6 +1407,9 @@ int main(int argc, char **argv) {
         pm->cells = layout_cells(board->size());  // paintEvent not run in clicktest
         board->mousePressEvent(&ev);
         pm->openDlg(pm->sel);             // layer buttons now live in the dialog
+        std::printf("dlg geom: %d,%d %dx%d savebtn %d,%d %dx%d\n", dlg->x(), dlg->y(),
+                    dlg->width(), dlg->height(), savebtn->x(), savebtn->y(),
+                    savebtn->width(), savebtn->height());
         std::printf("clicktest sel=%d target=(900,300) cell=%s\n",
                     pm->sel, describe_cell(pm->sel).toUtf8().constData());
         // BUTTON-WIRING GATE: real click events via QTest::mouseClick (Qt6 keeps
@@ -1497,6 +1522,28 @@ int main(int argc, char **argv) {
                 }
             }
         }
+        // FLAG checkboxes: checked state lands on the picker layer on Save;
+        // verify round-trip through the DOM writer into the fixture file.
+        {
+            cbRep->setChecked(true);
+            spinl->setValue(1);
+            if (!find_map_c(pm->pm, pm->sel) || find_map_c(pm->pm, pm->sel)->layers.isEmpty())
+                f_add(QStringLiteral("REPCHECK"));
+            press_btn("save");
+            bool hit = false;
+            for (const Map &m : pm->pm.maps)
+                if (m.poskey == pm->sel)
+                    for (const Layer &l : m.layers)
+                        if (l.rep == QStringLiteral("True")) hit = true;
+            if (!hit) { std::printf("clicktest FAIL: AutoRepeat flag lost\n"); ++gfail; }
+            QFile fx(pm->path.isEmpty() ? out : pm->path);
+            if (fx.open(QIODevice::ReadOnly)) {
+                const QByteArray all = fx.readAll();
+                fx.close();
+                if (!all.contains(QByteArrayLiteral("54727565")))
+                    { std::printf("clicktest FAIL: hex True missing in file\n"); ++gfail; }
+            }
+        }
         // MENU items: QActions exist per menu (live app: popup click fires
         // triggered -> handler); headless the gate calls the same handlers.
         if (fm->children().size() < 4 || em->children().size() < 4
@@ -1540,7 +1587,7 @@ int main(int argc, char **argv) {
             stat, spinl, laylbl, addbtn, setbtn, delbtn, savebtn, undobtn, depbtn,
             renbtn, copybtn, prevbtn, prevlbl, upload, lblPick, procPick, pickbtn,
             winbtn, recbtn, lblWin, dlg, dclosebtn, dfn, dft, dapp, dweb, menu, sbar,
-            mid, procW, renprocBtn, delprocBtn, statusline };
+            mid, procW, renprocBtn, delprocBtn, statusline, cbBtf, cbRep, cbSlw };
         QWidget *saboteur = nullptr;
         if (getenv("PKT_LAYOUT_SABOTAGE")) {
             // A fixed-coordinate placement with NO layout parent: exactly what
@@ -1568,6 +1615,7 @@ int main(int argc, char **argv) {
                    x == dfn ? 38 : x == dft ? 39 : x == dapp ? 40 : x == dweb ? 41 :
                    x == menu ? 43 : x == sbar ? 44 : x == mid ? 45 : x == procW ? 46 :
                    x == renprocBtn ? 47 : x == delprocBtn ? 48 : x == statusline ? 49 :
+                   x == cbBtf ? 50 : x == cbRep ? 51 : x == cbSlw ? 52 :
                    x == body ? 2 : x == &win ? 1 : 0;
         };
         std::function<void (QWidget *)> walk = [&](QWidget *w) {
@@ -1594,6 +1642,7 @@ int main(int argc, char **argv) {
                         c == dfn ? 38 : c == dft ? 39 : c == dapp ? 40 : c == dweb ? 41 :
                         c == menu ? 43 : c == sbar ? 44 : c == mid ? 45 : c == procW ? 46 :
                         c == renprocBtn ? 47 : c == delprocBtn ? 48 : c == statusline ? 49 :
+                        c == cbBtf ? 50 : c == cbRep ? 51 : c == cbSlw ? 52 :
                         c == body ? 2 : 0,
                         c->x(), c->y(), c->width(), c->height(), w->width(), w->height());
                 }

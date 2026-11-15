@@ -39,6 +39,12 @@ Pmap parse_pmap(const QString &xml) {
                              QRegularExpression::DotMatchesEverythingOption);
     QRegularExpression depRe("<Dependency>(.*?)</Dependency>",
                              QRegularExpression::DotMatchesEverythingOption);
+    QRegularExpression btfRe("<BringToForeground>(.*?)</BringToForeground>",
+                             QRegularExpression::DotMatchesEverythingOption);
+    QRegularExpression repRe("<AutoRepeat>(.*?)</AutoRepeat>",
+                             QRegularExpression::DotMatchesEverythingOption);
+    QRegularExpression slwRe("<SlowOutput>(.*?)</SlowOutput>",
+                             QRegularExpression::DotMatchesEverythingOption);
 
     {
         QRegularExpressionMatchIterator it = mapRe.globalMatch(xml);
@@ -77,6 +83,21 @@ Pmap parse_pmap(const QString &xml) {
                                 la.dependency = unhex_local(b).trimmed();
                         }
                     }
+                    {
+                        QRegularExpressionMatch bm = btfRe.match(lb);
+                        if (bm.isValid() && !bm.captured(1).trimmed().isEmpty())
+                            la.btf = unhex_local(bm.captured(1)).trimmed();
+                    }
+                    {
+                        QRegularExpressionMatch bm = repRe.match(lb);
+                        if (bm.isValid() && !bm.captured(1).trimmed().isEmpty())
+                            la.rep = unhex_local(bm.captured(1)).trimmed();
+                    }
+                    {
+                        QRegularExpressionMatch bm = slwRe.match(lb);
+                        if (bm.isValid() && !bm.captured(1).trimmed().isEmpty())
+                            la.slow = unhex_local(bm.captured(1)).trimmed();
+                    }
                     m.layers.append(la);
                 }
             }
@@ -106,6 +127,12 @@ QString serialize_pmap(const Pmap &p) {
                + "</Type><Value>" + to_hex_cp1252(l.value) + "</Value>";
             if (!l.dependency.isEmpty())
                 x += "<Dependency>" + to_hex_cp1252(l.dependency) + "</Dependency>";
+            if (!l.btf.isEmpty())
+                x += "<BringToForeground>" + to_hex_cp1252(l.btf) + "</BringToForeground>";
+            if (!l.rep.isEmpty())
+                x += "<AutoRepeat>" + to_hex_cp1252(l.rep) + "</AutoRepeat>";
+            if (!l.slow.isEmpty())
+                x += "<SlowOutput>" + to_hex_cp1252(l.slow) + "</SlowOutput>";
             x += "</LAYER>";
         }
         x += "</MAP>";

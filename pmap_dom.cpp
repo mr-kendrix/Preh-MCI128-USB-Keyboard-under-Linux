@@ -277,6 +277,12 @@ Pmap dom_view(const DomDoc &d)
                 if (!dt.trimmed().isEmpty())     // vendor empty = raw whitespace, not hex
                     la.dependency = unhex_cp1252(dt);
             }
+            if (const int be = dom_find_child(d, le, QStringLiteral("BringToForeground")); be >= 0)
+                la.btf = unhex_cp1252(dom_text(d, be)).trimmed();
+            if (const int be = dom_find_child(d, le, QStringLiteral("AutoRepeat")); be >= 0)
+                la.rep = unhex_cp1252(dom_text(d, be)).trimmed();
+            if (const int be = dom_find_child(d, le, QStringLiteral("SlowOutput")); be >= 0)
+                la.slow = unhex_cp1252(dom_text(d, be)).trimmed();
             m.layers.push_back(la);
         }
         p.maps.push_back(m);
@@ -376,7 +382,24 @@ static QByteArray dom_apply_model_impl(DomDoc &d, const Pmap &pm, QString &err)
                                                 to_hex_cp1252(src.dependency));
                     d.pool[domLayers[j]].children.append(de);
                 }
-            }
+            auto flag_sync = [&](const QString &tag, const QString &ov, const QString &sv) {
+                if (!fresh && ov == sv) return true;
+                if (const int fe = dom_find_child(d, domLayers[j], tag); fe >= 0) {
+                    if (!dom_set_text(d, fe,
+                        format_hex_like(dom_text(d, fe), to_hex_cp1252(sv)).toUtf8()))
+                        { err = QStringLiteral("SAVE BLOCKED: ambiguous %1 text").arg(tag); return false; }
+                    return true;
+                }
+                if (!sv.isEmpty()) {
+                    const int fe = dom_new_elem(d, tag, to_hex_cp1252(sv));
+                    d.pool[domLayers[j]].children.append(fe);
+                }
+                return true;
+            };
+            if (!flag_sync(QStringLiteral("BringToForeground"), old.btf, src.btf)) return {};
+            if (!flag_sync(QStringLiteral("AutoRepeat"), old.rep, src.rep)) return {};
+            if (!flag_sync(QStringLiteral("SlowOutput"), old.slow, src.slow)) return {};
+        }
         }
         for (int j = m.layers.size(); j < domLayers.size(); ++j)
             dom_erase_child(d, me, domLayers[j]);           // drop extra layers
@@ -395,6 +418,14 @@ static QByteArray dom_apply_model_impl(DomDoc &d, const Pmap &pm, QString &err)
                                             to_hex_cp1252(m.layers[j].dependency));
                 d.pool[le].children.append(de);
             }
+            for (const auto &pr : { QStringLiteral("BringToForeground"),
+                                    QStringLiteral("AutoRepeat"),
+                                    QStringLiteral("SlowOutput") })
+                if (const int fe = dom_find_child(d, le, pr); fe >= 0)
+                    dom_set_text(d, fe, to_hex_cp1252(
+                        pr == QStringLiteral("BringToForeground") ? m.layers[j].btf
+                        : pr == QStringLiteral("AutoRepeat") ? m.layers[j].rep
+                                                             : m.layers[j].slow).toUtf8());
             d.pool[me].children.append(le);
         }
     }
