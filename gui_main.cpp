@@ -739,6 +739,39 @@ static int layout_selftest(int argc, char **av) {
     return fails ? 2 : 0;
 }
 
+// Minimal one-page PDF (Helvetica text) for "Export labels (PDF)".
+static QByteArray make_label_pdf(const QVector<std::pair<int, QString>> &rows)
+{
+    const QChar L('<'), G('>');
+    auto dict = [&](const QString &inner){ QString s; s += L; s += L; s += inner; s += G; s += G; return s; };
+    auto esc = [](const QString &s) {
+        QString r;
+        for (const QChar c : s) { if (c == QLatin1Char('(') || c == QLatin1Char(')') || c == QLatin1Char('\\')) r += QLatin1Char('\\'); r += c; }
+        return r;
+    };
+    QString body = QStringLiteral("BT\n/F0 9 Tf\n14 TL\n20 790 Td\n");
+    for (const auto &r : rows)
+        body += esc(QStringLiteral("%1: %2").arg(r.first).arg(r.second)) + QStringLiteral("\nT*\n");
+    body += QStringLiteral("ET\n");
+    const QByteArray c = body.toUtf8();
+    QByteArray pdf(QStringLiteral("%PDF-1.4\n").toUtf8());
+    QVector<int> off(8, 0);
+    auto put = [&](int n, const QString &s) { off[n] = pdf.size(); pdf += QStringLiteral("%1 0 obj\n").arg(n).toUtf8(); pdf += s.toUtf8(); pdf += QByteArrayLiteral("\nendobj\n"); };
+    const QString f0 = dict(QStringLiteral("/F0 5 0 obj "));
+    const QString res = dict(QStringLiteral("/Font ") + f0 + QStringLiteral(" "));
+    put(1, dict(QStringLiteral("/Pages 2 0 obj ")));
+    put(2, dict(QStringLiteral("/Type /Pages /Kids [3 0 obj] /Count 1 ")));
+    put(3, dict(QStringLiteral("/Type /Page /Parent 2 0 obj /Resources ") + res + QStringLiteral(" /MediaBox [0 0 595 842] /Contents 4 0 obj ")));
+    put(4, dict(QStringLiteral("/Length %1 ").arg(c.size())) + QStringLiteral(" stream\n") + QString::fromLatin1(c) + QStringLiteral("\nendstream"));
+    put(5, dict(QStringLiteral("/Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding ")));
+    QString xref = QStringLiteral("xref\n0 6\n0000000000 65535 f \n");
+    for (int n = 1; n <= 5; ++n) xref += QStringLiteral("%1 00000 n \n").arg(off[n], 10, 10, QLatin1Char('0'));
+    const int xpos = pdf.size();
+    pdf += xref.toUtf8();
+    pdf += (QStringLiteral("trailer\n") + dict(QStringLiteral("/Root 1 0 obj")) + QStringLiteral("\nstartxref\n") + QString::number(xpos) + QStringLiteral("\n%%EOF\n")).toUtf8();
+    return pdf;
+}
+
 int main(int argc, char **argv) {
     Model m;
     QStringList cells;
@@ -915,6 +948,7 @@ int main(int argc, char **argv) {
     static char *cargv[16];
     for (int i = 0; i < argc && i < 13; ++i) cargv[i] = argv[i];
     int cargc = qMin(argc, 13);
+
     if (mode == "clicktest") {
         cargv[cargc++] = off1;
         cargv[cargc++] = off2;
@@ -1007,13 +1041,16 @@ int main(int argc, char **argv) {
     QLineEdit *dlgout = new QLineEdit(dlg);
     dlgout->setPlaceholderText(QStringLiteral("output text / path / URL"));
     dlgout->setObjectName("dlgout");
-    QLabel *macros = new QLabel(dlg);
-    macros->setWordWrap(true);
-    macros->setText(QStringLiteral("macros: {N1}..{N14} {ESC} {TAB} {DELAY} {POS} {POSKEY} {MSR}"));
     QCheckBox *cbBtf = new QCheckBox(dlg); cbBtf->setText(QStringLiteral("Bring to foreground"));
         QCheckBox *cbRep = new QCheckBox(dlg); cbRep->setText(QStringLiteral("AutoRepeat"));
         QCheckBox *cbSlw = new QCheckBox(dlg); cbSlw->setText(QStringLiteral("SlowOutput"));
     cbBtf->setObjectName("cbBtf"); cbRep->setObjectName("cbRep"); cbSlw->setObjectName("cbSlw");
+    QListWidget *macroW = new QListWidget(dlg);
+    macroW->setObjectName("macroW"); macroW->setMinimumSize(120, 24);
+    QSpinBox *macroSel = new QSpinBox(dlg);
+    macroSel->setObjectName("macroSel"); macroSel->setMinimum(1); macroSel->setValue(1);
+    QPushButton *macrobtn = new QPushButton(QStringLiteral("Macro +"), dlg);
+    macrobtn->setObjectName("macro");
     spinl->setMinimum(1);
     spinl->setValue(1);
     dgrid->addWidget(laylbl, 0, 0); dgrid->addWidget(spinl, 0, 1);
@@ -1025,7 +1062,40 @@ int main(int argc, char **argv) {
     dgrid->addWidget(dfn, 3, 0); dgrid->addWidget(dft, 3, 1);
     dgrid->addWidget(dapp, 3, 2); dgrid->addWidget(dweb, 3, 3);
     dgrid->addWidget(cbBtf, 4, 0); dgrid->addWidget(cbRep, 4, 1); dgrid->addWidget(cbSlw, 4, 2);
-    dgrid->addWidget(macros, 5, 0, 1, 4);
+    dgrid->addWidget(macroW, 5, 0, 1, 2); dgrid->addWidget(macroSel, 5, 2); dgrid->addWidget(macrobtn, 5, 3);
+    static const QStringList gMacros{QStringLiteral("ESC"), QStringLiteral("TAB"), QStringLiteral("N1"), QStringLiteral("N2"),
+                                     QStringLiteral("N3"), QStringLiteral("DELAY"), QStringLiteral("POS"), QStringLiteral("POSKEY")};
+    { QStringList disp; for (const QString &m : gMacros) disp << QStringLiteral("{%1}").arg(m);
+      macroW->addItems(disp); macroSel->setMaximum(qMax(1, (int)gMacros.size())); }
+    static QStringList gProgs, gBrows;
+    if (gProgs.isEmpty()) {
+        std::error_code ec;
+        for (const char *d : {"/usr/bin", "/usr/local/bin"}) {
+            std::filesystem::directory_iterator it{std::filesystem::path{d}, ec}, end;
+            for (; it != end; it.increment(ec)) gProgs << QString::fromUtf8(it->path().filename().string().c_str());
+        }
+        gProgs.removeDuplicates(); gProgs.sort();
+        for (const QString &n : gProgs) {
+            const QString l = n.toLower();
+            if (l.contains(QStringLiteral("firefox")) || l.contains(QStringLiteral("chrome")) || l.contains(QStringLiteral("brave"))
+                || l.contains(QStringLiteral("opera")) || l.contains(QStringLiteral("vivaldi")) || l.contains(QStringLiteral("qute"))
+                || l.contains(QStringLiteral("konqueror"))) gBrows << n;
+        }
+    }
+    QListWidget *progW = new QListWidget(ctl);
+    progW->setObjectName("progW");
+    QSpinBox *progSel = new QSpinBox(ctl);
+    progSel->setObjectName("progSel"); progSel->setMinimum(1); progSel->setValue(1);
+    QLabel *brLabel = new QLabel(ctl);
+    brLabel->setObjectName("brLabel");
+    QPushButton *appbtn = new QPushButton(QStringLiteral("App +"), ctl);
+    appbtn->setObjectName("appbtn");
+    QPushButton *webbtn = new QPushButton(QStringLiteral("Web +"), ctl);
+    webbtn->setObjectName("webbtn");
+    progW->addItems(gProgs);
+    progSel->setMaximum(qMax(1, gProgs.size()));
+    brLabel->setWordWrap(true);
+    brLabel->setText(gBrows.join(QStringLiteral(", ")));
     dlg->hide();                                   // openDlg shows it
     vwin.addWidget(sbar);                          // status line at the bottom
     QPushButton *undobtn = new QPushButton(QStringLiteral("Undo"), ctl);
@@ -1067,9 +1137,12 @@ int main(int argc, char **argv) {
     restoreBtn->setObjectName("restore");
     grid->addWidget(restoreW, 7, 0, 2, 2); grid->addWidget(restoreSel, 7, 3);
     grid->addWidget(restoreBtn, 7, 4);
+    grid->addWidget(progW, 8, 0, 1, 2); grid->addWidget(progSel, 8, 3);
+    grid->addWidget(appbtn, 8, 4); grid->addWidget(webbtn, 8, 5);
+    grid->addWidget(brLabel, 9, 3, 1, 2);
     grid->addWidget(stat, 5, 0, 1, 3);
     grid->addWidget(prevlbl, 6, 0, 1, 2);
-    grid->addWidget(layers, 9, 0, 1, 3);
+    grid->addWidget(layers, 10, 0, 1, 3);
     addbtn->setObjectName("add"); setbtn->setObjectName("set"); delbtn->setObjectName("del");
     depbtn->setObjectName("dep"); renbtn->setObjectName("ren"); copybtn->setObjectName("copy");
     savebtn->setObjectName("save"); undobtn->setObjectName("undo");
@@ -1465,6 +1538,40 @@ int main(int argc, char **argv) {
         save_note = QStringLiteral("restored %1").arg(g_backups.size() - i);
     };
     restoreBtn->connect(restoreBtn, &QPushButton::clicked, [&]{ do_restore(); });
+    macrobtn->connect(macrobtn, &QPushButton::clicked, [&]{
+        const int i = qBound(1, macroSel->value(), (int)gMacros.size()) - 1;
+        QString v = dlgout->text();
+        if (!v.isEmpty() && !v.endsWith(QLatin1Char(' '))) v += QLatin1Char(' ');
+        dlgout->setText(v + gMacros.at(i));
+        refresh(false);
+    });
+    appbtn->connect(appbtn, &QPushButton::clicked, [&]{
+        const int i = qBound(1, progSel->value(), gProgs.size()) - 1;
+        if (i >= gProgs.size()) return;
+        set_layer_type(pm->pm, pm->sel, spinl->value(), QStringLiteral("APPLICATION"));
+        set_layer_value(pm->pm, pm->sel, spinl->value(), gProgs.at(i));
+        refresh(false);
+    });
+    webbtn->connect(webbtn, &QPushButton::clicked, [&]{
+        set_layer_type(pm->pm, pm->sel, spinl->value(), QStringLiteral("WEBSITE"));
+        set_layer_value(pm->pm, pm->sel, spinl->value(),
+                        dlgout->text().isEmpty() ? QStringLiteral("https://") : dlgout->text());
+        refresh(false);
+    });
+    auto do_export_pdf = [&save_note, &out, pm]{
+        QVector<std::pair<int, QString>> rows;
+        for (const Map &mp : pm->pm.maps)
+            rows << std::make_pair(mp.poskey, mp.layers.isEmpty() ? QString() : mp.layers.first().value);
+        if (rows.isEmpty()) { save_note = QStringLiteral("export: no keys"); return; }
+        const QByteArray pdf = make_label_pdf(rows);
+        const QString tgt = (pm->path.isEmpty() ? out : pm->path) + QStringLiteral(".labels.pdf");
+        QFile pf(tgt);
+        if (!pf.open(QIODevice::WriteOnly)) { save_note = QStringLiteral("export: cannot write"); return; }
+        pf.write(pdf); pf.close();
+        save_note = QStringLiteral("exported %1 labels -> %2").arg(rows.size()).arg(tgt);
+    };
+
+    mk_item(em, QStringLiteral("Export labels (PDF)"), do_export_pdf);
 
     if (mode == "clicktest") {
         const QPoint target(900, 300);   // board-local target (widget coords)
@@ -1674,6 +1781,50 @@ int main(int argc, char **argv) {
                 std::printf("clicktest FAIL: restore did not run\n"); ++gfail;
             }
             if (pm->path != before) { std::printf("clicktest FAIL: restore moved path\n"); ++gfail; }
+        }
+        // MACRO tray: spin selects a macro, button appends it to the box.
+        dlgout->setText(QStringLiteral("hello"));
+        macroSel->setValue(3);
+        press_btn("macro");
+        if (!dlgout->text().contains(gMacros.at(2))) {
+            std::printf("clicktest FAIL: macro not appended ('%s')\n", dlgout->text().toUtf8().constData()); ++gfail;
+        }
+        // APPLICATION button: selected program name becomes the value.
+        progSel->setValue(4);
+        press_btn("appbtn");
+        {
+            const Map *mp = find_map_c(pm->pm, pm->sel);
+            const QString nm = gProgs.value(3);
+            const bool ok = mp && !mp->layers.isEmpty()
+                            && mp->layers[0].type == QStringLiteral("APPLICATION")
+                            && mp->layers[0].value == nm;
+            if (!ok) { std::printf("clicktest FAIL: appbtn value ('%s'/'%s')\n", mp && !mp->layers.isEmpty() ? mp->layers[0].type.toUtf8().constData() : "", mp && !mp->layers.isEmpty() ? mp->layers[0].value.toUtf8().constData() : ""); ++gfail; }
+            if (progW->count() < 1 || gBrows.isEmpty()) { std::printf("clicktest FAIL: prog/browser list empty\n"); ++gfail; }
+        }
+        // WEB button: box text = URL.
+        dlgout->setText(QStringLiteral("https://example.com"));
+        spinl->setValue(1);
+        press_btn("webbtn");
+        {
+            const Map *mp = find_map_c(pm->pm, pm->sel);
+            if (!mp || mp->layers.isEmpty() || mp->layers[0].type != QStringLiteral("WEBSITE")
+                || mp->layers[0].value != QStringLiteral("https://example.com")) {
+                std::printf("clicktest FAIL: webbtn not set\n"); ++gfail;
+            }
+        }
+        // PDF export (menu handler, direct call): minimal PDF with label rows.
+        do_export_pdf();
+        {
+            const QString tgt = (pm->path.isEmpty() ? out : pm->path) + QStringLiteral(".labels.pdf");
+            QFile pf(tgt);
+            if (!pf.open(QIODevice::ReadOnly)) { std::printf("clicktest FAIL: pdf missing\n"); ++gfail; }
+            else {
+                const QByteArray all = pf.readAll(); pf.close();
+                const QString txt = QString::fromLatin1(all);
+                if (!txt.startsWith(QStringLiteral("%PDF-1.4")) || !txt.contains(QStringLiteral("T*"))
+                    || !txt.contains(QStringLiteral("%%EOF"))) { std::printf("clicktest FAIL: pdf malformed\n"); ++gfail; }
+                else if (!txt.contains(QStringLiteral("1: "))) { std::printf("clicktest FAIL: pdf missing label row\n"); ++gfail; }
+            }
         }
         // DIALOG gate: vendor entry = double-click on a key. openDlg must show it;
         // Close must hide it again. Target = first cell center (board size varies
