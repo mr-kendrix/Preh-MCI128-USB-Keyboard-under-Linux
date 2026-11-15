@@ -19,8 +19,9 @@ int main() {
             std::printf("fakekd peer accepted\n");
             pktipc::send_line(p, pktipc::mk_hello(), e2);   // handshake
             for (int k = 0; k < 32; ++k) {
+                if (!in.acc.contains('\n')) break;   // no more pending lines: don't stall the accept loop
                 QString line;
-                if (!pktipc::recv_line(p, in, line, e2) || line.isEmpty()) { ::usleep(20000); continue; }
+                if (!pktipc::recv_line(p, in, line, e2) || line.isEmpty()) break;
                 pktipc::Msg m;
                 QString why;
                 if (!pktipc::parse_line(line, m, why)) { pktipc::send_line(p, pktipc::mk_error("ipc", why), e2); continue; }
