@@ -26,6 +26,7 @@
 #include <QMenu>
 #include <QStatusBar>
 #include <QRadioButton>
+#include <QAction>
 #include <QSpinBox>
 #include <QComboBox>
 #include <QSettings>
@@ -919,10 +920,10 @@ int main(int argc, char **argv) {
     // as layout children — QML/QMainWindow does not relayout in headless gates).
     QMenuBar *menu = new QMenuBar(&win);
     menu->setObjectName("menu");
-    menu->addMenu(QStringLiteral("File"));
-    menu->addMenu(QStringLiteral("Edit"));
-    menu->addMenu(QStringLiteral("Settings"));
-    menu->addMenu(QStringLiteral("Help"));
+    QMenu *fm = menu->addMenu(QStringLiteral("File"));
+    QMenu *em = menu->addMenu(QStringLiteral("Edit"));
+    QMenu *sm = menu->addMenu(QStringLiteral("Settings"));
+    QMenu *hm = menu->addMenu(QStringLiteral("Help"));
     vwin.insertWidget(0, menu);            // top of the content column
     QStatusBar *sbar = new QStatusBar(&win);
     sbar->setObjectName("status");
@@ -1202,7 +1203,7 @@ int main(int argc, char **argv) {
     copybtn->connect(copybtn, &QPushButton::clicked, [pm, &save_note, &refresh, f_copy]{ f_copy(); });
     savebtn->connect(savebtn, &QPushButton::clicked, [pm, &out, &save_note, &refresh]{
         save_note = save_pmap(*pm, pm->path.isEmpty() ? out : pm->path); refresh(true); });
-    undobtn->connect(undobtn, &QPushButton::clicked, [&save_note, &refresh]{
+    auto do_undo = [&save_note, &refresh]{
         if (g_undo.isEmpty()) save_note = QStringLiteral("undo: nothing in this session");
         else {
             const UndoSnap last = g_undo.last();
@@ -1216,7 +1217,9 @@ int main(int argc, char **argv) {
             }
             g_undo.removeLast();
         }
-        refresh(true); });
+        refresh(true);
+    };
+    undobtn->connect(undobtn, &QPushButton::clicked, [&]{ do_undo(); });
 
     refresh(false);
     pm->notify = [&]() { refresh(false); };
@@ -1242,6 +1245,60 @@ int main(int argc, char **argv) {
         refresh(false);
     };
     pm->openDlg = open_dialog;
+    // Menu items: QAction children of the four QMenus; QMenu fires trigger() ->
+    // triggered signal -> handler. Same handlers a headless gate can call directly.
+    static Map clip_map;   // key clipboard (Copy/Paste key)
+    auto do_new = [&](bool q){ pm->pm = Pmap{}; if (!q) refresh(false); };
+    auto do_open = [&]{
+        QFile f(pm->path.isEmpty() ? out : pm->path);
+        if (f.open(QIODevice::ReadOnly))
+            pm->pm = parse_pmap(QString::fromLatin1(f.readAll()));
+        else save_note = QStringLiteral("open failed: %1").arg(pm->path);
+        refresh(false);
+    };
+    auto do_quit = [&]{ std::_Exit(0); };
+    auto do_copy_key = [&]{
+        if (const Map *m0 = find_map(pm->pm, pm->sel)) clip_map = *m0;
+        else save_note = QStringLiteral("copy key: selected cell has no map");
+    };
+    auto do_paste_key = [&]{
+        if (const Map *src = find_map(pm->pm, pm->sel)) {
+            Map &t = ensure_map(pm->pm, pm->sel);   // same cell = replace layers
+            t.layers = src->layers;
+        }
+        refresh(false);
+    };
+    auto do_delete_key = [&]{
+        for (int i = 0; i < pm->pm.maps.size(); ++i)
+            if (pm->pm.maps[i].poskey == pm->sel) { pm->pm.maps.remove(i); break; }
+        refresh(false);
+    };
+    auto do_proc_list = [&]{
+        procPick->clear();
+        procPick->insertItem(0, QStringLiteral("-"));
+        for (const QString &p : pktm::list_processes(120)) procPick->addItem(p);
+        refresh(false);
+    };
+    auto do_about = [&]{
+        save_note = QStringLiteral("pkteditor — Preh MCI-128 Mapping-List Editor");
+        refresh(false);
+    };
+    auto mk_item = [&](QMenu *mm, const QString &txt, const std::function<void()> &fn){
+        QAction *a = new QAction(txt, mm);
+        a->setObjectName(QStringLiteral("menu:") + txt);
+        QObject::connect(a, &QAction::triggered, [fn]{ if (fn) fn(); });
+    };
+    mk_item(fm, QStringLiteral("New"), [&]{ do_new(false); });
+    mk_item(fm, QStringLiteral("Open"), do_open);
+    mk_item(fm, QStringLiteral("Close"), [&]{ do_new(false); });
+    mk_item(fm, QStringLiteral("Quit"), do_quit);
+    mk_item(em, QStringLiteral("Undo"), do_undo);
+    mk_item(em, QStringLiteral("Copy key"), do_copy_key);
+    mk_item(em, QStringLiteral("Paste key"), do_paste_key);
+    mk_item(em, QStringLiteral("Delete key"), do_delete_key);
+    mk_item(sm, QStringLiteral("Reconnect daemon"), [&]{ ipc_adopt_peer(false); refresh(false); });
+    mk_item(sm, QStringLiteral("Process list"), do_proc_list);
+    mk_item(hm, QStringLiteral("About"), do_about);
     dclosebtn->connect(dclosebtn, &QPushButton::clicked, [&]{ close_dialog(); });
     dfn->connect(dfn, &QRadioButton::clicked, [pm, &spinl, &refresh]{
         set_layer_value(pm->pm, pm->sel, spinl->value(), QString());
@@ -1345,6 +1402,23 @@ int main(int argc, char **argv) {
             const QPixmap pm_img = screens.first()->grabWindow(0);
             pm_img.save(shot.isEmpty() ? QStringLiteral("/tmp/wshot.png") : shot);
             std::printf("shot saved %s\n", shot.isEmpty() ? "/tmp/wshot.png" : shot.toUtf8().constData());
+        }
+        // MENU items: QActions exist per menu (live app: popup click fires
+        // triggered -> handler); headless the gate calls the same handlers.
+        if (fm->children().size() < 4 || em->children().size() < 4
+            || sm->children().size() < 2 || hm->children().size() < 1) {
+            std::printf("clicktest FAIL: menu item counts wrong (%d/%d/%d/%d)\n",
+                        (int)fm->children().size(), (int)em->children().size(),
+                        (int)sm->children().size(), (int)hm->children().size()); ++gfail;
+        }
+        do_copy_key();
+        {
+            const Map *m0 = find_map(pm->pm, pm->sel);
+            const int n0 = m0 ? (int)m0->layers.size() : -1;
+            do_paste_key();
+            const Map *m1 = find_map(pm->pm, pm->sel);
+            const int n1 = m1 ? (int)m1->layers.size() : -1;
+            if (n0 != n1 || n0 < 0) { std::printf("clicktest FAIL: copy/paste key broken\n"); ++gfail; }
         }
         // DIALOG gate: vendor entry = double-click on a key. openDlg must show it;
         // Close must hide it again. Target = first cell center (board size varies
