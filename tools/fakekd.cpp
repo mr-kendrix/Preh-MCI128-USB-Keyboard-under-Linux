@@ -3,6 +3,7 @@
 #include "ipc.h"
 #include <cstdio>
 #include <cstdlib>
+#include <poll.h>
 #include <unistd.h>
 
 int main() {
