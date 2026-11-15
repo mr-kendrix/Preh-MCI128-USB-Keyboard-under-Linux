@@ -29,6 +29,8 @@
 #include <QAction>
 #include <QSpinBox>
 #include <QComboBox>
+#include <QListWidget>
+#include <QHBoxLayout>
 #include <QSettings>
 #include <QVBoxLayout>
 #include <QGridLayout>
@@ -97,6 +99,7 @@ struct Model {
     QString path;             // source file (save target)
     QVector<Cell> cells;      // board-local geometry
     QPoint dbg;               // last click point (debug)
+    QString procSel;            // process view selection ("" = Always)
 };
 
 // physical truth (user 2026-11-06): 110 caps in 128 slots
@@ -242,6 +245,25 @@ static QString describe_cell(int poskey) {
 
 // ---------------------------------------------------------------- painting ----
 
+// Process-view: does this layer belong to the selected process? "" = Always
+// (unconditional layers); "proc" also admits the vendor "proc:title" form.
+static bool sel_layer(const Layer &l, const QString &proc) {
+    if (proc.isEmpty()) return l.dependency.isEmpty();
+    if (l.dependency.compare(proc, Qt::CaseInsensitive) == 0) return true;
+    return l.dependency.startsWith(proc + QChar(':'), Qt::CaseInsensitive);
+}
+
+static QStringList procs_of(const Pmap &pm) {
+    QStringList out{QStringLiteral("Always")};
+    for (const Map &m : pm.maps)
+        for (const Layer &l : m.layers) {
+            if (l.dependency.isEmpty()) continue;
+            const QString p = l.dependency.split(QLatin1Char(':')).first();
+            if (!out.contains(p, Qt::CaseInsensitive)) out << p;
+        }
+    return out;
+}
+
 static void paint_grid(QPainter &pt, const Model &m, const QSize &board) {
     pt.setBrush(QColor(0x1b, 0x1d, 0x22));
     pt.setPen(QColor(0x35, 0x38, 0x3e));
@@ -254,8 +276,14 @@ static void paint_grid(QPainter &pt, const Model &m, const QSize &board) {
         for (const Cell &cc : m.cells)
             if (cc.poskey == c.poskey + 1 && cc.rc == c.rc) { fill = QColor(0xc8, 0xd8, 0xe2); break; }
         if (mp && !mp->layers.isEmpty()) {
-            const int n = qMin(mp->layers.size(), 4);
-            fill = QColor(0xb8 - 8 * n, 0xd6 - 4 * n, 0xf2 - 4 * n);
+            // vendor border semantics: green = function FOR the selected process,
+            // blue-grey = only for other processes, light = no function at all.
+            bool for_sel = false, for_other = false;
+            for (const Layer &l : mp->layers)
+                (sel_layer(l, m.procSel) ? for_sel : for_other) = true;
+            if (for_sel) fill = QColor(0x9a, 0xc8, 0x9e);
+            else if (for_other) fill = QColor(0xb4, 0xbc, 0xc8);
+            else fill = QColor(0xe6, 0xe7, 0xea);
         }
         if (is_sel) fill = QColor(0xff, 0x8a, 0x3d);
         pt.setBrush(fill);
@@ -914,7 +942,16 @@ int main(int argc, char **argv) {
     MapView *board = new MapView(body);
     board->m_ = pm;
     board->setMinimumSize(QSize(480, 160));   // min height fits small windows too
-    vlay->addWidget(board);
+    // Vendor left column: process list selects the view (radio list);
+    // board sits right of it in one row — real layout, no coordinates.
+    QWidget *mid = new QWidget(body);
+    QHBoxLayout *hrow = new QHBoxLayout(mid);
+    QListWidget *procW = new QListWidget(mid);
+    procW->setObjectName("procview");
+    procW->setMinimumWidth(140);
+    hrow->addWidget(procW, 1);
+    hrow->addWidget(board, 4);
+    vlay->addWidget(mid);
     board->start_heartbeat();
     // Vendor shell (review 2026-11-15): menu bar + status bar (QMenuBar/QStatusBar
     // as layout children — QML/QMainWindow does not relayout in headless gates).
@@ -985,6 +1022,10 @@ int main(int argc, char **argv) {
     grid->addWidget(undobtn, 1, 0);
     QPushButton *prevbtn = new QPushButton(QStringLiteral("Preview"), ctl);
     grid->addWidget(prevbtn, 2, 3);
+    QPushButton *renprocBtn = new QPushButton(QStringLiteral("Rename proc"), ctl);
+    QPushButton *delprocBtn = new QPushButton(QStringLiteral("Delete proc"), ctl);
+    grid->addWidget(renprocBtn, 1, 4);
+    grid->addWidget(delprocBtn, 2, 4);
     QLabel *prevlbl = new QLabel(ctl);
     prevlbl->setWordWrap(true);
     // LB5: button + QProgressDialog + mapped errors, one mount (upload.h)
@@ -1121,6 +1162,10 @@ int main(int argc, char **argv) {
                                  .arg(pm->pm.maps.size()).arg(pm->pressed.size())
                                  .arg(nocard.join(QStringLiteral(",")))
                                  .arg(g_winTitle).arg(g_ipc_status));
+        { const QStringList ps = procs_of(pm->pm);   // process view: Always + deps
+          procW->clear();
+          procW->addItems(ps);
+        }
     };
     auto f_add = [&](const QString &v){ add_layer(pm->pm, pm->sel, v.isEmpty() ? edit->text() : v); refresh(false); };
     auto f_set = [&](const QString &v){ set_layer_value(pm->pm, pm->sel, spinl->value(), v.isEmpty() ? edit->text() : v); refresh(false); };
@@ -1232,6 +1277,27 @@ int main(int argc, char **argv) {
         dlg_open = false;
         refresh(false);
     };
+    auto do_sel_proc = [&](const QString &name){
+        pm->procSel = (name == QStringLiteral("Always") || name.isEmpty())
+                          ? QString() : name;
+        refresh(false);
+    };
+    auto do_rename_proc = [&]{
+        const QString np = edit->text();
+        int n = 0;
+        for (Map &m : pm->pm.maps)
+            for (Layer &l : m.layers)
+                if (sel_layer(l, pm->procSel) && !pm->procSel.isEmpty()) { l.dependency = np; ++n; }
+        save_note = QStringLiteral("renamed %1 keys' layers -> '%2'").arg(n).arg(np);
+    };
+    auto do_delete_proc = [&]{
+        int n = 0;
+        for (Map &m : pm->pm.maps)
+            for (Layer &l : m.layers)
+                if (sel_layer(l, pm->procSel) && !pm->procSel.isEmpty()) { l.dependency = QString(); ++n; }
+        save_note = QStringLiteral("removed process from %1 keys' layers").arg(n);
+        refresh(false);
+    };
     auto open_dialog = [&](int pk){
         pm->sel = pk;
         dlg->show();
@@ -1299,6 +1365,8 @@ int main(int argc, char **argv) {
     mk_item(sm, QStringLiteral("Reconnect daemon"), [&]{ ipc_adopt_peer(false); refresh(false); });
     mk_item(sm, QStringLiteral("Process list"), do_proc_list);
     mk_item(hm, QStringLiteral("About"), do_about);
+    renprocBtn->connect(renprocBtn, &QPushButton::clicked, [&]{ do_rename_proc(); refresh(false); });
+    delprocBtn->connect(delprocBtn, &QPushButton::clicked, [&]{ do_delete_proc(); });
     dclosebtn->connect(dclosebtn, &QPushButton::clicked, [&]{ close_dialog(); });
     dfn->connect(dfn, &QRadioButton::clicked, [pm, &spinl, &refresh]{
         set_layer_value(pm->pm, pm->sel, spinl->value(), QString());
@@ -1403,6 +1471,32 @@ int main(int argc, char **argv) {
             pm_img.save(shot.isEmpty() ? QStringLiteral("/tmp/wshot.png") : shot);
             std::printf("shot saved %s\n", shot.isEmpty() ? "/tmp/wshot.png" : shot.toUtf8().constData());
         }
+        // PROCESS view: sidebar list mirrors file deps; Rename/Delete apply to
+        // ALL keys (vendor small buttons under the process list).
+        {
+            const QStringList ps = procs_of(pm->pm);
+            if (procW->count() != ps.size()) {
+                std::printf("clicktest FAIL: proc view stale (%d vs %d)\n",
+                            (int)procW->count(), (int)ps.size()); ++gfail;
+            }
+            if (ps.size() > 1) {
+                const QString dp = ps.at(1);
+                do_sel_proc(dp);
+                edit->setText(QStringLiteral("RENPROC"));
+                do_rename_proc();
+                refresh(false);
+                int n = 0, back = 0;
+                for (const Map &m : pm->pm.maps)
+                    for (const Layer &l : m.layers) {
+                        if (l.dependency == QStringLiteral("RENPROC")) ++n;
+                        if (l.dependency.compare(dp, Qt::CaseInsensitive) == 0) ++back;
+                    }
+                do_delete_proc();
+                if (n == 0 || back != 0) {
+                    std::printf("clicktest FAIL: rename/delete proc (%d/%d)\n", n, back); ++gfail;
+                }
+            }
+        }
         // MENU items: QActions exist per menu (live app: popup click fires
         // triggered -> handler); headless the gate calls the same handlers.
         if (fm->children().size() < 4 || em->children().size() < 4
@@ -1445,7 +1539,8 @@ int main(int argc, char **argv) {
         QSet<const QWidget *> appw{ body, head, board, ctl, edit, layers,
             stat, spinl, laylbl, addbtn, setbtn, delbtn, savebtn, undobtn, depbtn,
             renbtn, copybtn, prevbtn, prevlbl, upload, lblPick, procPick, pickbtn,
-            winbtn, recbtn, lblWin, dlg, dclosebtn, dfn, dft, dapp, dweb, menu, sbar };
+            winbtn, recbtn, lblWin, dlg, dclosebtn, dfn, dft, dapp, dweb, menu, sbar,
+            mid, procW, renprocBtn, delprocBtn, statusline };
         QWidget *saboteur = nullptr;
         if (getenv("PKT_LAYOUT_SABOTAGE")) {
             // A fixed-coordinate placement with NO layout parent: exactly what
@@ -1471,7 +1566,9 @@ int main(int argc, char **argv) {
                    x == procPick ? 30 : x == pickbtn ? 31 : x == winbtn ? 32 : x == recbtn ? 33 :
                    x == lblWin ? 34 : x == dlg ? 35 : x == dclosebtn ? 36 :
                    x == dfn ? 38 : x == dft ? 39 : x == dapp ? 40 : x == dweb ? 41 :
-                   x == menu ? 43 : x == sbar ? 44 : x == body ? 2 : x == &win ? 1 : 0;
+                   x == menu ? 43 : x == sbar ? 44 : x == mid ? 45 : x == procW ? 46 :
+                   x == renprocBtn ? 47 : x == delprocBtn ? 48 : x == statusline ? 49 :
+                   x == body ? 2 : x == &win ? 1 : 0;
         };
         std::function<void (QWidget *)> walk = [&](QWidget *w) {
             QVector<QWidget *> kids;
@@ -1495,7 +1592,9 @@ int main(int argc, char **argv) {
                         c == procPick ? 30 : c == pickbtn ? 31 : c == winbtn ? 32 : c == recbtn ? 33 :
                         c == lblWin ? 34 : c == dlg ? 35 : c == dclosebtn ? 36 :
                         c == dfn ? 38 : c == dft ? 39 : c == dapp ? 40 : c == dweb ? 41 :
-                        c == menu ? 43 : c == sbar ? 44 : c == body ? 2 : 0,
+                        c == menu ? 43 : c == sbar ? 44 : c == mid ? 45 : c == procW ? 46 :
+                        c == renprocBtn ? 47 : c == delprocBtn ? 48 : c == statusline ? 49 :
+                        c == body ? 2 : 0,
                         c->x(), c->y(), c->width(), c->height(), w->width(), w->height());
                 }
                 for (int j = i + 1; j < kids.size(); ++j) {
