@@ -89,6 +89,31 @@ static int try_connect_once(QString &err) {
 
 int try_connect(QString &err) { return try_connect_once(err); }
 
+int try_connect_nb(QString &err) {
+    // SOCK_NONBLOCK belongs in the TYPE argument (2nd), not the 3rd (that is the
+    // protocol field -> EPROTONOSUPPORT 93 when passed there, an old probe bug).
+    const QString p = sock_path();
+    sockaddr_un un {};
+    if (!fill_un(un, p)) { err = QStringLiteral("path too long"); return -1; }
+    const int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0);
+    if (fd < 0) { err = QStringLiteral("sock(nb): %1").arg(errno); return -1; }
+    const socklen_t len = offsetof(sockaddr_un, sun_path) + qstrlen(p.toUtf8().constData()) + 1;
+    if (::connect(fd, reinterpret_cast<const sockaddr *>(&un), len) == 0)
+        return fd;
+    const int e = errno;
+    if (e == EAGAIN || e == ENOENT || e == ENOTDIR) {
+        // queue full / not ready: connected once poll sees data; <=200 ms only.
+        struct pollfd pf{ fd, POLLOUT, 0 };
+        if (::poll(&pf, 1, 200) > 0) return fd;
+        ::close(fd);
+        err = QStringLiteral("connect: timeout (accept queue)");
+        return -1;
+    }
+    ::close(fd);
+    err = QStringLiteral("connect: %1").arg(e);
+    return -1;
+}
+
 int connect_peer(QString &err) {
     // retry on ECONNREFUSED/ENOENT/ENOTDIR: daemon may not have (re)bound yet
     for (int attempt = 0; attempt < 40; ++attempt) {

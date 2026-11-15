@@ -15,7 +15,8 @@ QString sock_path();                 // design path (XDG_RUNTIME_DIR or /tmp fal
 bool  ensure_dir();                  // mkdir $XDG_RUNTIME_DIR/pkt mode 0700
 int   bind_socket(QString &err);     // unlink stale, bind; fd bound to path
 int   connect_peer(QString &err);    // GUI side: connect to the bound path
-int   try_connect(QString &err);     // single attempt, no retry loop (GUI use)
+int   try_connect(QString &err);     // single attempt, no retry loop (GUI: no 1 s stall when daemon died)
+int   try_connect_nb(QString &err);  // SOCK_NONBLOCK-in-type creation + <=200 ms poll: never blocks, degrades via errno
 int   poll_accept(int bound_fd, QString &err); // daemon side: poll(POLLIN) on the LISTENing
                                      // socket signals a pending peer connect (0 = none,
                                      // verified on kernel 6.18); then accept4 cannot block

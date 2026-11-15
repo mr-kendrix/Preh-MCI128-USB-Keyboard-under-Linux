@@ -373,12 +373,12 @@ static void ipc_drain() {
     }
 }
 
-static void ipc_adopt_peer();   // fwd: defined below, used by ipc_reload_note
+static void ipc_adopt_peer(bool nb_only);   // fwd: defined below, used by ipc_reload_note
 static QString ipc_reload_note() {
-    ipc_adopt_peer();   // ONE pair per GUI process: reuse the adopted socket,
-    // never connect a second pair (a 2nd SYS_CONNECT under the KDE app.slice
-    // seccomp filter gets SYS_KILL -> glibc sock_set_errno sees -512 -> assert
-    // -> SIGABRT crash, seen 2026-11-15). adopt is a no-op once connected.
+    ipc_adopt_peer(true);   // ONE pair per GUI process: reuse the adopted socket,
+    // never stack a second connect against a daemon that does not accept (its
+    // queue would hold us blocked in connect() — seen 2026-11-15 as an external
+    // SIGABRT on a GUI stuck in SYS_CONNECT). adopt is a no-op once connected.
     const int fd = g_ipc_peer;
     if (fd < 0) return QStringLiteral(" | daemon: not connected");
     QString e2;
@@ -415,14 +415,18 @@ static QString ipc_reload_note() {
 
 // Window startup: adopt the peer socket with a HELLO handshake — the daemon sends
 // hello right after each accept; without that line the GUI is NOT connected (stale
-// or busy daemon — its accept queue owns the pair) -> close and give up this GUI
-// session (one more attempt per session would eventually hit the small queue).
-static bool ipc_gave_up = false;
-static void ipc_adopt_peer() {
-    if (ipc_gave_up || g_ipc_peer >= 0) return;
+// or busy daemon — its accept queue owns the pair) -> close and try again later.
+// Auto attempts (startup, heartbeat every few seconds) use the NONBLOCKING route
+// only, so the GUI can never hang against a daemon that does not accept; if the
+// kernel/lib lacks nonblocking creation (93/22) they fall back to the drain+hello
+// route once. A manual Reconnect button may use the full route.
+static void ipc_adopt_peer(bool nb_only) {
+    if (g_ipc_peer >= 0) return;
     if (!QFile::exists(pktipc::sock_path())) return;
     QString derr;
-    const int fd = pktipc::try_connect(derr);   // single attempt, no 1 s loop
+    int fd = pktipc::try_connect_nb(derr);
+    if (fd < 0 && (derr.contains(QStringLiteral("sock(nb): 93")) || derr.contains(QStringLiteral("sock(nb): 22"))))
+        fd = pktipc::try_connect(derr);   // no nonblocking socket here: drain+hello route (slower, bounded by hello)
     if (fd < 0) return;
     pktipc::LineBuf hb;
     bool hello = false;
@@ -439,8 +443,7 @@ static void ipc_adopt_peer() {
     }
     if (!hello) {
         ::close(fd);
-        ipc_gave_up = true;
-        std::printf("ipc: no hello from daemon (queue/stale peer) — not connected, GUI will not reconnect this session\n");
+        std::printf("ipc: no hello from daemon (queue/stale peer) — not connected, retry later\n");
         return;
     }
     g_ipc_peer = fd;
@@ -898,6 +901,9 @@ int main(int argc, char **argv) {
     pickbtn.setObjectName("pick");
     pickbtn.move(756, 738);
     QPushButton winbtn(QStringLiteral("Aktive Fenster (3s)"), &win);
+    QPushButton recbtn(QStringLiteral("Reconnect"), &win);   // manual (full-route) link retry
+    recbtn.setObjectName("reconnect");
+    recbtn.move(632, 738);
     winbtn.setObjectName("win3");
     winbtn.move(508, 738);
     QLabel lblWin(QStringLiteral("fenster: —"), &win);   // countdown/probe readout
@@ -907,7 +913,7 @@ int main(int argc, char **argv) {
     upload.setFixedSize(QSize(260, 90));
 
     // live board: pressed POSKeys get a green ring (calib maps scancode->POSKey)
-    ipc_adopt_peer();   // daemon already listening? peer up front, watch stays off
+    ipc_adopt_peer(true);   // daemon already listening? peer up front, watch stays off
     const QHash<int, int> cal = load_calib(
         calib.isEmpty() ? QStringLiteral("/home/nonrmy/MK.calib.json") : calib);
     QTimer poll;
@@ -954,6 +960,8 @@ int main(int argc, char **argv) {
     QString save_note;
     auto refresh = [&](bool saved) {
         ipc_drain();   // daemon status lines -> g_ipc_status (nonblocking poll)
+        { static int tref = 0;   // dead link? retry every ~4 s over the nb route only
+          if (g_ipc_peer < 0 && ++tref % 80 == 0) ipc_adopt_peer(true); }
         const int pk = pm->sel;
         head.setText(QStringLiteral("%1  maps=%2  sel=%3  dbg=%4,%5  pressed=%6")
                          .arg(pm->pm.name.isEmpty() ? QStringLiteral("no pmap loaded")
@@ -1070,6 +1078,7 @@ int main(int argc, char **argv) {
         winT.start();
     };
     winbtn.connect(&winbtn, &QPushButton::clicked, [f_win3]{ f_win3(); });
+    recbtn.connect(&recbtn, &QPushButton::clicked, [&]{ ipc_adopt_peer(false); refresh(true); });
     auto f_prev = [&]{
         const Map *mp = find_map_c(pm->pm, pm->sel);
         const QString t = mp ? pktm::preview_map(*mp, spinl.value())
