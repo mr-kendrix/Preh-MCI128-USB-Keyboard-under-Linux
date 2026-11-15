@@ -814,6 +814,32 @@ int main(int argc, char **argv) {
         else if (!a.startsWith("--")) path = a;
     }
 
+    // Recent files (vendor File menu): persistent list in the tool dir.
+    static QStringList gRecent;
+    {
+        const QString rl = QDir::homePath() + QStringLiteral("/.local/share/pkteditor/recent.txt");
+        std::error_code ec;
+        QStringList old;
+        QFile rf(rl);
+        if (rf.open(QIODevice::ReadOnly)) {
+            const QString all = QString::fromUtf8(rf.readAll());
+            rf.close();
+            for (const QString &l : all.split(QLatin1Char('\n')))
+                if (!l.isEmpty() && !old.contains(l)) old << l;
+        }
+        if (mode == QStringLiteral("clicktest") && !path.isEmpty()) {
+            const QString seed = QStringLiteral("/tmp/pkt_prev_seed.pmap");
+            std::filesystem::copy_file(std::filesystem::path{std::string(path.toUtf8().constData())},
+                                       std::filesystem::path{std::string("/tmp" "/pkt_prev_seed.pmap")}, ec);
+            old.prepend(seed);
+        }
+        gRecent.clear();
+        if (!path.isEmpty()) gRecent << path;
+        for (const QString &l : old) { if (gRecent.size() >= 8) break; if (!gRecent.contains(l)) gRecent << l; }
+        QFile wf(rl);
+        if (wf.open(QIODevice::WriteOnly)) { wf.write(gRecent.join(QLatin1Char('\n')).toUtf8()); wf.close(); }
+    }
+
     if (!path.isEmpty()) {
         QFile f(path);
         if (!f.open(QIODevice::ReadOnly)) {
@@ -1100,6 +1126,12 @@ int main(int argc, char **argv) {
     swN->setObjectName("swN"); swN->setMinimum(1); swN->setMaximum(256); swN->setValue(1);
     QPushButton *swapbtn = new QPushButton(QStringLiteral("Swap keys"), ctl);
     swapbtn->setObjectName("swap");
+    QListWidget *recentW = new QListWidget(ctl);
+    recentW->setObjectName("recentW");
+    QSpinBox *recentSel = new QSpinBox(ctl);
+    recentSel->setObjectName("recentSel"); recentSel->setMinimum(1); recentSel->setValue(1);
+    QPushButton *recentbtn = new QPushButton(QStringLiteral("Open recent"), ctl);
+    recentbtn->setObjectName("recent");
     progW->addItems(gProgs);
     progSel->setMaximum(qMax(1, gProgs.size()));
     brLabel->setWordWrap(true);
@@ -1150,6 +1182,7 @@ int main(int argc, char **argv) {
     grid->addWidget(brLabel, 9, 3, 1, 2);
     grid->addWidget(swA, 10, 3); grid->addWidget(swB, 10, 4);
     grid->addWidget(swN, 11, 0); grid->addWidget(swapbtn, 11, 1);
+    grid->addWidget(recentW, 12, 0, 1, 2); grid->addWidget(recentSel, 12, 3); grid->addWidget(recentbtn, 12, 4);
     grid->addWidget(stat, 5, 0, 1, 3);
     grid->addWidget(prevlbl, 6, 0, 1, 2);
     grid->addWidget(layers, 10, 0, 1, 3);
@@ -1594,6 +1627,24 @@ int main(int argc, char **argv) {
         save_note = QStringLiteral("swapped %1 keys (A=%2 B=%3)").arg(n).arg(a).arg(b);
     };
     swapbtn->connect(swapbtn, &QPushButton::clicked, [&]{ do_swap_keys(); });
+    const auto do_open_recent = [&save_note, &refresh, pm, recentSel]{
+        if (gRecent.isEmpty()) { save_note = QStringLiteral("open recent: list empty"); return; }
+        const int i = qBound(1, recentSel->value(), gRecent.size()) - 1;
+        const QString f = gRecent.at(i);
+        QFile rf(f);
+        if (!rf.open(QIODevice::ReadOnly)) { save_note = QStringLiteral("open recent: unreadable"); return; }
+        pm->pm = parse_pmap(QString::fromUtf8(rf.readAll()));
+        rf.close();
+        pm->path = f;
+        refresh(false);
+        save_note = QStringLiteral("opened recent ") + QString::number(i + 1);
+    };
+    recentW->addItems(gRecent); recentSel->setMaximum(qMax(1, gRecent.size()));
+    recentbtn->connect(recentbtn, &QPushButton::clicked, [&]{ do_open_recent(); });
+    mk_item(fm, QStringLiteral("Open recent"), [&]{ do_open_recent(); });
+    mk_item(fm, QStringLiteral("Recent files"), [&]{
+        recentW->clear(); recentW->addItems(gRecent); refresh(false);
+    });
     mk_item(em, QStringLiteral("Swap keys"), [&]{ do_swap_keys(); });
     webbtn->connect(webbtn, &QPushButton::clicked, [&]{
         set_layer_type(pm->pm, pm->sel, spinl->value(), QStringLiteral("WEBSITE"));
@@ -1887,6 +1938,17 @@ int main(int argc, char **argv) {
                 std::printf("clicktest FAIL: swap not exchanged ('%s'->'%s'/'%s'->'%s')\n",
                             v1.toUtf8().constData(), v1b.toUtf8().constData(),
                             v3.toUtf8().constData(), v3b.toUtf8().constData());
+                ++gfail;
+            }
+        }
+        // RECENT list + Open recent: entry 2 = seeded previous file.
+        {
+            recentSel->setValue(2);
+            const int before_n = gRecent.size();
+            press_btn("recent");
+            if (before_n < 2 || !pm->path.contains(QStringLiteral("pkt_prev_seed"))
+                || !save_note.startsWith(QStringLiteral("opened recent 2"))) {
+                std::printf("clicktest FAIL: open recent broken (n=%d path=%s)\n", before_n, pm->path.toUtf8().constData());
                 ++gfail;
             }
         }
