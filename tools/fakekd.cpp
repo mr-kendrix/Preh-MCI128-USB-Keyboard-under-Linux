@@ -2,6 +2,7 @@
 // via the tested ipc library, answers reload acks and quit. Never for a board.
 #include "ipc.h"
 #include <cstdio>
+#include <cstdlib>
 #include <unistd.h>
 
 int main() {
