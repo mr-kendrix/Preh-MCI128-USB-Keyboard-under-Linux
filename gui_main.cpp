@@ -1092,6 +1092,14 @@ int main(int argc, char **argv) {
     appbtn->setObjectName("appbtn");
     QPushButton *webbtn = new QPushButton(QStringLiteral("Web +"), ctl);
     webbtn->setObjectName("webbtn");
+    QSpinBox *swA = new QSpinBox(ctl);
+    swA->setObjectName("swA"); swA->setMinimum(1); swA->setMaximum(1024); swA->setValue(1);
+    QSpinBox *swB = new QSpinBox(ctl);
+    swB->setObjectName("swB"); swB->setMinimum(1); swB->setMaximum(1024); swB->setValue(65);
+    QSpinBox *swN = new QSpinBox(ctl);
+    swN->setObjectName("swN"); swN->setMinimum(1); swN->setMaximum(256); swN->setValue(1);
+    QPushButton *swapbtn = new QPushButton(QStringLiteral("Swap keys"), ctl);
+    swapbtn->setObjectName("swap");
     progW->addItems(gProgs);
     progSel->setMaximum(qMax(1, gProgs.size()));
     brLabel->setWordWrap(true);
@@ -1140,6 +1148,8 @@ int main(int argc, char **argv) {
     grid->addWidget(progW, 8, 0, 1, 2); grid->addWidget(progSel, 8, 3);
     grid->addWidget(appbtn, 8, 4); grid->addWidget(webbtn, 8, 5);
     grid->addWidget(brLabel, 9, 3, 1, 2);
+    grid->addWidget(swA, 10, 3); grid->addWidget(swB, 10, 4);
+    grid->addWidget(swN, 11, 0); grid->addWidget(swapbtn, 11, 1);
     grid->addWidget(stat, 5, 0, 1, 3);
     grid->addWidget(prevlbl, 6, 0, 1, 2);
     grid->addWidget(layers, 10, 0, 1, 3);
@@ -1567,6 +1577,24 @@ int main(int argc, char **argv) {
         set_layer_value(pm->pm, pm->sel, spinl->value(), gProgs.at(i));
         refresh(false);
     });
+    auto do_swap_keys = [&save_note, &refresh, swA, swB, swN, pm]{
+        const int a = swA->value(), b = swB->value(), n = swN->value();
+        if (a < 1 || n < 1 || b < a + n) { save_note = QStringLiteral("swap: ranges overlap/too big"); return; }
+        auto idx = [&](int pk){ for (int i = 0; i < pm->pm.maps.size(); ++i) if (pm->pm.maps[i].poskey == pk) return i; return -1; };
+        for (int k = 0; k < n; ++k) {
+            const int pa = a + k, pb = b + k;
+            const int ia = idx(pa), ib = idx(pb);
+            QVector<Layer> tmp;
+            if (ia >= 0) tmp = pm->pm.maps[ia].layers;
+            if (ia >= 0) pm->pm.maps[ia].layers = (ib >= 0) ? pm->pm.maps[ib].layers : QVector<Layer>();
+            if (ib >= 0) pm->pm.maps[ib].layers = tmp;
+            else if (!tmp.isEmpty()) pm->pm.maps << Map{pb, tmp};
+        }
+        refresh(false);
+        save_note = QStringLiteral("swapped %1 keys (A=%2 B=%3)").arg(n).arg(a).arg(b);
+    };
+    swapbtn->connect(swapbtn, &QPushButton::clicked, [&]{ do_swap_keys(); });
+    mk_item(em, QStringLiteral("Swap keys"), [&]{ do_swap_keys(); });
     webbtn->connect(webbtn, &QPushButton::clicked, [&]{
         set_layer_type(pm->pm, pm->sel, spinl->value(), QStringLiteral("WEBSITE"));
         set_layer_value(pm->pm, pm->sel, spinl->value(),
@@ -1843,6 +1871,23 @@ int main(int argc, char **argv) {
                 if (!txt.startsWith(QStringLiteral("%PDF-1.4")) || !txt.contains(QStringLiteral("T*"))
                     || !txt.contains(QStringLiteral("%%EOF"))) { std::printf("clicktest FAIL: pdf malformed\n"); ++gfail; }
                 else if (!txt.contains(QStringLiteral("1: "))) { std::printf("clicktest FAIL: pdf missing label row\n"); ++gfail; }
+            }
+        }
+        // SWAP keys (vendor "exchange layout" at the poskey level): model-level block swap.
+        swA->setValue(1); swB->setValue(3); swN->setValue(1);
+        {
+            auto valof = [&](int pk){ for (int i = 0; i < pm->pm.maps.size(); ++i)
+                                        if (pm->pm.maps[i].poskey == pk)
+                                            return pm->pm.maps[i].layers.isEmpty() ? QString() : pm->pm.maps[i].layers.first().value;
+                                     return QString(); };
+            const QString v1 = valof(1), v3 = valof(3);
+            press_btn("swap");
+            const QString v1b = valof(1), v3b = valof(3);
+            if (v1b != v3 || v3b != v1) {
+                std::printf("clicktest FAIL: swap not exchanged ('%s'->'%s'/'%s'->'%s')\n",
+                            v1.toUtf8().constData(), v1b.toUtf8().constData(),
+                            v3.toUtf8().constData(), v3b.toUtf8().constData());
+                ++gfail;
             }
         }
         // DIALOG gate: vendor entry = double-click on a key. openDlg must show it;
