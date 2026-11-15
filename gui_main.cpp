@@ -1002,12 +1002,14 @@ int main(int argc, char **argv) {
     dft->setText(QStringLiteral("Text/Shortcut"));
     QRadioButton *dapp = new QRadioButton(dlg);
     dapp->setText(QStringLiteral("Application"));
-    dapp->setEnabled(false);   // not in file model: honest refusal, no fake UI
-    dapp->setToolTip(QStringLiteral("not in file model"));
     QRadioButton *dweb = new QRadioButton(dlg);
     dweb->setText(QStringLiteral("Open web page"));
-    dweb->setEnabled(false);
-    dweb->setToolTip(QStringLiteral("not in file model"));
+    QLineEdit *dlgout = new QLineEdit(dlg);
+    dlgout->setPlaceholderText(QStringLiteral("output text / path / URL"));
+    dlgout->setObjectName("dlgout");
+    QLabel *macros = new QLabel(dlg);
+    macros->setWordWrap(true);
+    macros->setText(QStringLiteral("macros: {N1}..{N14} {ESC} {TAB} {DELAY} {POS} {POSKEY} {MSR}"));
     QCheckBox *cbBtf = new QCheckBox(dlg); cbBtf->setText(QStringLiteral("Bring to foreground"));
         QCheckBox *cbRep = new QCheckBox(dlg); cbRep->setText(QStringLiteral("AutoRepeat"));
         QCheckBox *cbSlw = new QCheckBox(dlg); cbSlw->setText(QStringLiteral("SlowOutput"));
@@ -1015,6 +1017,7 @@ int main(int argc, char **argv) {
     spinl->setMinimum(1);
     spinl->setValue(1);
     dgrid->addWidget(laylbl, 0, 0); dgrid->addWidget(spinl, 0, 1);
+    dgrid->addWidget(dlgout, 0, 2, 1, 2);
     dgrid->addWidget(addbtn, 1, 0); dgrid->addWidget(setbtn, 1, 1);
     dgrid->addWidget(delbtn, 1, 2); dgrid->addWidget(savebtn, 1, 3);
     dgrid->addWidget(depbtn, 2, 0); dgrid->addWidget(renbtn, 2, 1);
@@ -1022,6 +1025,7 @@ int main(int argc, char **argv) {
     dgrid->addWidget(dfn, 3, 0); dgrid->addWidget(dft, 3, 1);
     dgrid->addWidget(dapp, 3, 2); dgrid->addWidget(dweb, 3, 3);
     dgrid->addWidget(cbBtf, 4, 0); dgrid->addWidget(cbRep, 4, 1); dgrid->addWidget(cbSlw, 4, 2);
+    dgrid->addWidget(macros, 5, 0, 1, 4);
     dlg->hide();                                   // openDlg shows it
     vwin.addWidget(sbar);                          // status line at the bottom
     QPushButton *undobtn = new QPushButton(QStringLiteral("Undo"), ctl);
@@ -1054,9 +1058,18 @@ int main(int argc, char **argv) {
     grid->addWidget(procPick, 0, 4, 1, 1);
     grid->addWidget(winbtn, 3, 0); grid->addWidget(recbtn, 3, 1); grid->addWidget(pickbtn, 3, 2);
     grid->addWidget(lblWin, 4, 0); grid->addWidget(lblPick, 4, 1);
+    // Restore dialog (vendor: list of saved states): backups from the tool dir.
+    QListWidget *restoreW = new QListWidget(ctl);
+    restoreW->setObjectName("restoreW");
+    QSpinBox *restoreSel = new QSpinBox(ctl);
+    restoreSel->setObjectName("restoreSel"); restoreSel->setMinimum(1); restoreSel->setValue(1);
+    QPushButton *restoreBtn = new QPushButton(QStringLiteral("Restore"), ctl);
+    restoreBtn->setObjectName("restore");
+    grid->addWidget(restoreW, 7, 0, 2, 2); grid->addWidget(restoreSel, 7, 3);
+    grid->addWidget(restoreBtn, 7, 4);
     grid->addWidget(stat, 5, 0, 1, 3);
     grid->addWidget(prevlbl, 6, 0, 1, 2);
-    grid->addWidget(layers, 7, 0, 1, 3);
+    grid->addWidget(layers, 9, 0, 1, 3);
     addbtn->setObjectName("add"); setbtn->setObjectName("set"); delbtn->setObjectName("del");
     depbtn->setObjectName("dep"); renbtn->setObjectName("ren"); copybtn->setObjectName("copy");
     savebtn->setObjectName("save"); undobtn->setObjectName("undo");
@@ -1108,6 +1121,7 @@ int main(int argc, char **argv) {
     if (!pc) qWarning("pkteditor: IN-poll signal NOT connected (bug!)");
 
     QString save_note;
+    static QStringList g_backups;              // newest-first backup paths
     auto refresh = [&](bool saved) {
         ipc_drain();   // daemon status lines -> g_ipc_status (nonblocking poll)
         { static int tref = 0;   // dead link? retry every ~4 s over the nb route only
@@ -1171,6 +1185,25 @@ int main(int argc, char **argv) {
         { const QStringList ps = procs_of(pm->pm);   // process view: Always + deps
           procW->clear();
           procW->addItems(ps);
+        }
+        { // restore list: newest-first backups from the tool dir
+          std::error_code ec;
+          const std::filesystem::path bdir{std::string(QDir::homePath().toUtf8().constData()) + "/.local/share/pkteditor"};
+          std::vector<std::pair<std::filesystem::file_time_type, std::filesystem::path>> found;
+          for (const auto &de : std::filesystem::directory_iterator(bdir, ec)) {
+              const std::string nm = de.path().filename().string();
+              if (nm.rfind("pmap_backup_", 0) == 0 && nm.substr(nm.size() - 5) == ".pmap")
+                  found.emplace_back(de.last_write_time(ec), de.path());
+          }
+          std::sort(found.begin(), found.end(),
+                    [](const auto &a, const auto &b){ return a.first > b.first; });
+          QStringList fl;
+          for (const auto &p : found) fl << QString::fromUtf8(p.second.u8string().c_str());
+          g_backups = fl;
+          restoreW->clear();
+          for (const QString &f : fl) restoreW->addItem(QFileInfo(f).fileName());
+          restoreSel->setMaximum(qMax(1, fl.size()));
+          restoreSel->setValue(qBound(1, restoreSel->value(), qMax(1, fl.size())));
         }
     };
     auto f_add = [&](const QString &v){ add_layer(pm->pm, pm->sel, v.isEmpty() ? edit->text() : v); refresh(false); };
@@ -1248,7 +1281,7 @@ int main(int argc, char **argv) {
     prevbtn->connect(prevbtn, &QPushButton::clicked, [&]{ f_prev(); });
     addbtn->connect(addbtn, &QPushButton::clicked, [pm, &edit, &save_note, &refresh, f_add]{ f_add(edit->text()); });
     depbtn->connect(depbtn, &QPushButton::clicked, [pm, &edit, &save_note, &refresh, f_dep]{ f_dep(edit->text()); });
-    setbtn->connect(setbtn, &QPushButton::clicked, [pm, &edit, &save_note, &refresh, f_set]{ f_set(edit->text()); });
+    setbtn->connect(setbtn, &QPushButton::clicked, [pm, &edit, &dlgout, &save_note, &refresh, f_set]{ f_set(dlgout->text().isEmpty() ? edit->text() : dlgout->text()); });
     delbtn->connect(delbtn, &QPushButton::clicked, [pm, &save_note, &refresh, f_del]{ f_del(); });
     renbtn->connect(renbtn, &QPushButton::clicked, [pm, &edit, &save_note, &refresh, f_ren]{ f_ren(edit->text()); });
     copybtn->connect(copybtn, &QPushButton::clicked, [pm, &save_note, &refresh, f_copy]{ f_copy(); });
@@ -1318,6 +1351,10 @@ int main(int argc, char **argv) {
                                qMin(320, qMax(200, win.height() / 2))));
         dlg->show();
         dlg_open = true;
+        { QString v; for (const Map &mm : pm->pm.maps)
+              if (mm.poskey == pk && !mm.layers.isEmpty()) { v = mm.layers.first().value; break; }
+          dlgout->setText(v);
+        }
         const int n = [pk](Model *p) -> int { for (const Map &mm : p->pm.maps)
                                       if (mm.poskey == pk) return (int)mm.layers.size();
                                     return 0; }(pm);
@@ -1390,14 +1427,44 @@ int main(int argc, char **argv) {
     renprocBtn->connect(renprocBtn, &QPushButton::clicked, [&]{ do_rename_proc(); refresh(false); });
     delprocBtn->connect(delprocBtn, &QPushButton::clicked, [&]{ do_delete_proc(); });
     dclosebtn->connect(dclosebtn, &QPushButton::clicked, [&]{ close_dialog(); });
-    dfn->connect(dfn, &QRadioButton::clicked, [pm, &spinl, &refresh]{
+    dfn->connect(dfn, &QRadioButton::clicked, [pm, &spinl, &refresh]{   // Do nothing
         set_layer_value(pm->pm, pm->sel, spinl->value(), QString());
+        set_layer_type(pm->pm, pm->sel, spinl->value(), QString());
         refresh(false);
     });
-    dft->connect(dft, &QRadioButton::clicked, [pm, &spinl, &refresh]{
+    dft->connect(dft, &QRadioButton::clicked, [pm, &spinl, &dlgout, &refresh]{
         set_layer_type(pm->pm, pm->sel, spinl->value(), QStringLiteral("TEXT"));
+        if (!dlgout->text().isEmpty())
+            set_layer_value(pm->pm, pm->sel, spinl->value(), dlgout->text());
         refresh(false);
     });
+    dapp->connect(dapp, &QRadioButton::clicked, [pm, &spinl, &dlgout, &refresh]{
+        set_layer_type(pm->pm, pm->sel, spinl->value(), QStringLiteral("APPLICATION"));
+        if (!dlgout->text().isEmpty())
+            set_layer_value(pm->pm, pm->sel, spinl->value(), dlgout->text());
+        refresh(false);
+    });
+    dweb->connect(dweb, &QRadioButton::clicked, [pm, &spinl, &dlgout, &refresh]{
+        set_layer_type(pm->pm, pm->sel, spinl->value(), QStringLiteral("WEBSITE"));
+        if (!dlgout->text().isEmpty())
+            set_layer_value(pm->pm, pm->sel, spinl->value(), dlgout->text());
+        refresh(false);
+    });
+    auto do_restore = [&save_note, &refresh, pm, out, restoreSel]{
+        if (g_backups.isEmpty()) { save_note = QStringLiteral("restore: no backups"); return; }
+        const int i = qBound(1, restoreSel->value(), (int)g_backups.size()) - 1;
+        QFile f(g_backups[i]);
+        if (!f.open(QIODevice::ReadOnly)) { save_note = QStringLiteral("restore: unreadable"); return; }
+        const QByteArray bytes = f.readAll(); f.close();
+        const QString path = pm->path.isEmpty() ? out : pm->path;
+        const QString e = write_atomic(path, bytes);
+        if (!e.isEmpty()) { save_note = QStringLiteral("restore: ") + e; return; }
+        pm->path = path;
+        pm->pm = parse_pmap(QString::fromLatin1(bytes));
+        refresh(true);
+        save_note = QStringLiteral("restored %1").arg(g_backups.size() - i);
+    };
+    restoreBtn->connect(restoreBtn, &QPushButton::clicked, [&]{ do_restore(); });
 
     if (mode == "clicktest") {
         const QPoint target(900, 300);   // board-local target (widget coords)
@@ -1544,6 +1611,42 @@ int main(int argc, char **argv) {
                     { std::printf("clicktest FAIL: hex True missing in file\n"); ++gfail; }
             }
         }
+        // OUTPUT box + radios: text in the dialog box; click fires type + value.
+        {
+            dlgout->setText(QStringLiteral("BOXVAL"));
+            spinl->setValue(1);
+            press_btn("set");
+            const Map *mp = find_map_c(pm->pm, pm->sel);
+            const QString v = (mp && !mp->layers.isEmpty()) ? mp->layers[0].value : QString();
+            if (v != QStringLiteral("BOXVAL")) {
+                std::printf("clicktest FAIL: box value not set ('%s')\n", v.toUtf8().constData()); ++gfail;
+            }
+            QTest::mouseClick(dweb, Qt::LeftButton, Qt::KeyboardModifiers(),
+                              QPoint(12, dweb->height() / 2));
+            std::printf("radio geom dweb %d,%d %dx%d dapp %d,%d %dx%d\n",
+                        dweb->x(), dweb->y(), dweb->width(), dweb->height(),
+                        dapp->x(), dapp->y(), dapp->width(), dapp->height());
+            std::printf("checked: dapp %d dweb %d\n", dapp->isChecked(), dweb->isChecked());
+            const Map *m2 = find_map_c(pm->pm, pm->sel);
+            const QString t = (m2 && !m2->layers.isEmpty()) ? m2->layers[0].type : QString();
+            if (t != QStringLiteral("WEBSITE")) {
+                std::printf("clicktest FAIL: web radio type missing ('%s')\n", t.toUtf8().constData()); ++gfail;
+            }
+            QTest::mouseClick(dapp, Qt::LeftButton, Qt::KeyboardModifiers(),
+                              QPoint(12, dapp->height() / 2));
+            const Map *m3 = find_map_c(pm->pm, pm->sel);
+            const QString t2 = (m3 && !m3->layers.isEmpty()) ? m3->layers[0].type : QString();
+            if (t2 != QStringLiteral("APPLICATION")) {
+                std::printf("clicktest FAIL: app radio type missing ('%s')\n", t2.toUtf8().constData()); ++gfail;
+            }
+            QTest::mouseClick(dfn, Qt::LeftButton, Qt::KeyboardModifiers(),
+                              QPoint(12, dfn->height() / 2));
+            const Map *m4 = find_map_c(pm->pm, pm->sel);
+            const QString v4 = (m4 && !m4->layers.isEmpty()) ? m4->layers[0].value + m4->layers[0].type : QString();
+            if (!v4.isEmpty()) {
+                std::printf("clicktest FAIL: do-nothing not cleared ('%s')\n", v4.toUtf8().constData()); ++gfail;
+            }
+        }
         // MENU items: QActions exist per menu (live app: popup click fires
         // triggered -> handler); headless the gate calls the same handlers.
         if (fm->children().size() < 4 || em->children().size() < 4
@@ -1560,6 +1663,17 @@ int main(int argc, char **argv) {
             const Map *m1 = find_map(pm->pm, pm->sel);
             const int n1 = m1 ? (int)m1->layers.size() : -1;
             if (n0 != n1 || n0 < 0) { std::printf("clicktest FAIL: copy/paste key broken\n"); ++gfail; }
+        }
+        // RESTORE: newest backup in tool dir, click fires file + model.
+        {
+            if (restoreW->count() < 1) { std::printf("clicktest FAIL: restore list empty\n"); ++gfail; }
+            restoreSel->setValue(1);
+            const QString before = pm->path.isEmpty() ? out : pm->path;
+            press_btn("restore");
+            if (g_backups.isEmpty() || !save_note.startsWith(QStringLiteral("restored"))) {
+                std::printf("clicktest FAIL: restore did not run\n"); ++gfail;
+            }
+            if (pm->path != before) { std::printf("clicktest FAIL: restore moved path\n"); ++gfail; }
         }
         // DIALOG gate: vendor entry = double-click on a key. openDlg must show it;
         // Close must hide it again. Target = first cell center (board size varies
