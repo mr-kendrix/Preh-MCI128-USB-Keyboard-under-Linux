@@ -10,11 +10,13 @@ int main() {
     if (fd < 0) { std::printf("fakekd bind FAIL: %s\n", err.toUtf8().constData()); return 1; }
     std::printf("fakekd bound\n");
     pktipc::LineBuf in;
-    for (int round = 0; round < 200; ++round) {          // ~10 s poll loop
+    for (int round = 0; round < 200; ++round) {   // ~10 s at 50 ms
+        if (getenv("KD_NEVER_ACCEPT")) continue;  // rogue-daemon test: never accept
         QString e2;
         const int p = pktipc::poll_accept(fd, e2);
         if (p >= 0) {
             std::printf("fakekd peer accepted\n");
+            pktipc::send_line(p, pktipc::mk_hello(), e2);   // handshake
             for (int k = 0; k < 32; ++k) {
                 QString line;
                 if (!pktipc::recv_line(p, in, line, e2) || line.isEmpty()) { ::usleep(20000); continue; }

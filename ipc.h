@@ -33,6 +33,7 @@ QString mk_inject(int poskey, const QString &kind, const QString &seq, qint64 ms
 QString mk_window(const QString &title, const QString &proc, qint64 ms);
 QString mk_health(int polls, int heartbeat, const QString &board_chk, const QString &warns);
 QString mk_reload(const QString &path, int rules);
+QString mk_hello();   // first line after each accept — the peer's handshake
 QString mk_error(const QString &where, const QString &why);
 
 // --- messages (GUI -> daemon) ----------------------------------------------

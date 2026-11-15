@@ -413,15 +413,38 @@ static QString ipc_reload_note() {
     return note;
 }
 
-// Window startup: if a daemon is already listening, take the peer connection up
-// front — the hidraw watch stays off from the first heartbeat (reviewer round-2:
-// the GUI watch conflicts with a live daemon on the same node).
+// Window startup: adopt the peer socket with a HELLO handshake — the daemon sends
+// hello right after each accept; without that line the GUI is NOT connected (stale
+// or busy daemon — its accept queue owns the pair) -> close and give up this GUI
+// session (one more attempt per session would eventually hit the small queue).
+static bool ipc_gave_up = false;
 static void ipc_adopt_peer() {
-    if (g_ipc_peer < 0 && QFile::exists(pktipc::sock_path())) {
-        QString derr;
-        const int fd = pktipc::try_connect(derr);   // single attempt: no 1 s stall when daemon died
-        if (fd >= 0) { g_ipc_peer = fd; std::printf("ipc peer connected (own hidraw watch off)\n"); }
+    if (ipc_gave_up || g_ipc_peer >= 0) return;
+    if (!QFile::exists(pktipc::sock_path())) return;
+    QString derr;
+    const int fd = pktipc::try_connect(derr);   // single attempt, no 1 s loop
+    if (fd < 0) return;
+    pktipc::LineBuf hb;
+    bool hello = false;
+    for (int k = 0; k < 10 && !hello; ++k) {   // <=~500 ms
+        struct pollfd pf{ fd, POLLIN, 0 };
+        if (::poll(&pf, 1, 50) <= 0) continue;
+        QString line;
+        if (!pktipc::recv_line(fd, hb, line, derr)) break;
+        if (line.isEmpty()) continue;
+        pktipc::Msg m;
+        QString why;
+        if (!pktipc::parse_line(line, m, why)) continue;
+        if (m.t == QLatin1String("hello")) hello = true;
     }
+    if (!hello) {
+        ::close(fd);
+        ipc_gave_up = true;
+        std::printf("ipc: no hello from daemon (queue/stale peer) — not connected, GUI will not reconnect this session\n");
+        return;
+    }
+    g_ipc_peer = fd;
+    std::printf("ipc peer connected (own hidraw watch off)\n");
 }
 
 // Undo stack: save_pmap pushes (path, pre-save raw, post-save bytes) AFTER a

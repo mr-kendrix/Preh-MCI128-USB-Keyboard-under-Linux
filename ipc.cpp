@@ -207,6 +207,8 @@ QString mk_error(const QString &where, const QString &why) {
 // were removed by design: the pmap file on disk is the single source of truth; the
 // GUI saves it atomically and sends reload. Two live rule copies must not exist.
 QString mk_reload_req() { return pack_line({{QStringLiteral("t"), QStringLiteral("reload")}}); }
+QString mk_hello() { return pack_line({{QStringLiteral("t"), QStringLiteral("hello")},
+                                        {QStringLiteral("v"), 1}}); }
 QString mk_quit()         { return pack_line({{QStringLiteral("t"), QStringLiteral("quit")}}); }
 
 bool parse_line(const QString &line, Msg &m, QString &why) {

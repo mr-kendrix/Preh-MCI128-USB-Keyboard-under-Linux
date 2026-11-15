@@ -661,7 +661,9 @@ int main(int argc, char **argv) {
                 for (int t = 0; t < 60 && ipc_peer < 0; ++t) {
                     QString e2;
                     const int p = pktipc::poll_accept(ipc_fd, e2);
-                    if (p >= 0) { ipc_peer = p; std::printf("ipc peer accepted\n"); }
+                    if (p >= 0) { ipc_peer = p;
+                        pktipc::send_line(ipc_peer, pktipc::mk_hello(), e2);
+                        std::printf("ipc peer accepted\n"); }
                     else ::usleep(50000);
                 }
             }
@@ -754,10 +756,20 @@ int main(int argc, char **argv) {
         int dead_opens = 0;   // open succeeded but read fails immediately, in a row
         while (true) {
             if (secs > 0 && std::time(nullptr) - t0 >= secs) break;
-            if (ipc_fd >= 0 && ipc_peer < 0) {   // pick up the GUI peer once it connects
+            if (ipc_fd >= 0) {   // ALWAYS drain the accept queue (backlog is small:
+                // an accepted-but-unclaimed pair would otherwise block the next connect)
                 QString e2;
                 const int p = pktipc::poll_accept(ipc_fd, e2);
-                if (p >= 0) { ipc_peer = p; std::printf("ipc peer accepted\n"); }
+                if (p >= 0) {
+                    if (ipc_peer >= 0) {   // one live pair: replace explicitly,
+                        ipc_line(pktipc::mk_error(QStringLiteral("ipc"), QStringLiteral("peer replaced — this GUI is history")));
+                        ::close(ipc_peer); // old pair gets EPIPE, GUI survives
+                    }
+                    ipc_peer = p;
+                    ipc_broken = false;   // new pair: emits live again
+                    pktipc::send_line(ipc_peer, pktipc::mk_hello(), e2);  // handshake: the peer must see hello
+                    std::printf("ipc peer accepted\n");
+                }
             }
             // AutoRepeat watchdog: runs EVERY iteration, so a held key without new
             // IN reports can still be released (see poll below — read would block)
