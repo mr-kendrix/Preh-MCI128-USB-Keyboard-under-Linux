@@ -15,6 +15,7 @@
 // through the "ohne Cap" chips in the sidebar.
 
 #include <QApplication>
+#include <functional>
 #include <QWidget>
 #include <QLabel>
 #include <QPoint>
@@ -22,6 +23,9 @@
 #include <QPushButton>
 #include <QSpinBox>
 #include <QComboBox>
+#include <QSettings>
+#include <QVBoxLayout>
+#include <QGridLayout>
 #include <QtTest/QTest>
 #include <QtTest/qtestmouse.h>
 #include <QRegularExpression>
@@ -661,6 +665,36 @@ public:
 
 // ------------------------------------------------------------------- main ----
 
+// Layout gate parent: spawn one self per (scale, DPI, window size) config; the
+// child (PKT_LAYOUT_CHECK=1) resizes the window, walks the widget tree and exits
+// with the violation count. A sabotage run (fixed-coordinate re-placement) MUST
+// report > 0 — a checker that stays silent is blind, which is itself a failure.
+static int layout_selftest(int argc, char **av) {
+    QString args;
+    for (int i = 0; i < argc; ++i) {
+        QString a = QString::fromUtf8(av[i]);
+        if (a == QLatin1String("--layout-selftest")) continue;
+        args += "'" + a + "' ";
+    }
+    struct C { const char *sc; const char *dpi; int w, h; } cfg[] = {
+        {"1.0", "96", 1024, 600},  {"1.5", "96", 1366, 768},  {"2.0", "96", 1920, 1080},
+        {"1.0", "144", 1024, 600}, {"1.5", "144", 1366, 768}, {"2.0", "144", 1920, 1080},
+    };
+    int fails = 0;
+    for (const auto &c : cfg) {
+        const QString cmd = QStringLiteral("PKT_LAYOUT_CHECK=1 PKT_CHECK_SIZE=%1x%2 QT_SCALE_FACTOR=%3 QT_FONT_DPI=%4 ")
+                                .arg(c.w).arg(c.h).arg(c.sc).arg(c.dpi) + args;
+        const int st = std::system(cmd.toUtf8().constData());
+        std::printf("  cfg sc=%s dpi=%s %dx%d exit=%d\n", c.sc, c.dpi, c.w, c.h, st);
+        if (st != 0) ++fails;
+    }
+    const int st = std::system(("PKT_LAYOUT_CHECK=1 PKT_LAYOUT_SABOTAGE=1 PKT_CHECK_SIZE=1366x768 " + args).toUtf8().constData());
+    std::printf("  sabotage exit=%d (expected !=0)\n", st);
+    if (st == 0) { std::printf("  CHECK BLIND: sabotage not caught!\n"); ++fails; }
+    std::printf("layout-selftest: fails=%d\n", fails);
+    return fails ? 2 : 0;
+}
+
 int main(int argc, char **argv) {
     Model m;
     QStringList cells;
@@ -676,6 +710,7 @@ int main(int argc, char **argv) {
         if (a == "--smoke") mode = "smoke";
         else if (a == "--clicktest") mode = "clicktest";
         else if (a == "--shot") { next(shot); if (mode != "clicktest") mode = "shot"; }
+        else if (a == "--layout-selftest") mode = "layout";
         else if (a == "--cells") { QString v; next(v);
             // ';' separates cells when raw board coords are used (px:X,Y keeps
             // its own comma); otherwise plain ',' lists work as before.
@@ -774,6 +809,7 @@ int main(int argc, char **argv) {
                     sn.join(QLatin1Char(' ')).toUtf8().constData());
         return unknown == 0 ? 0 : 1;
     }
+    if (mode == "layout") return layout_selftest(argc, argv);
     if (mode == "smoke") return gate_smoke(m);
     if (mode == "watch") {
         if (QFile::exists(pktipc::sock_path())) {
@@ -845,72 +881,86 @@ int main(int argc, char **argv) {
     if (pm->sel < 0) pm->sel = 1;   // default A01 (bottom-left cap)
 
     QWidget win;
-    win.setFixedSize(1180, 740);
-    MapView board(&win);
-    board.m_ = pm;
-    board.move(8, 64);
-    board.setFixedSize(QSize(1164, 560));
-    board.start_heartbeat();
-
-    QLabel head(&win);
-    head.move(10, 10);
-    head.setWordWrap(true);
-    QLineEdit edit(&win);
-    edit.move(8, 640);
-    edit.setPlaceholderText(QStringLiteral("MACRO"));
-    QLabel layers(&win);
-    layers.move(10, 662);
-    QLabel stat(&win);
-    stat.move(10, 690);
-    QPushButton addbtn(QStringLiteral("+ Layer"), &win);
-    QPushButton setbtn(QStringLiteral("Set"), &win);
-    QPushButton delbtn(QStringLiteral("Delete Layer"), &win);
-    QPushButton savebtn(QStringLiteral("Save"), &win);
-    QPushButton undobtn(QStringLiteral("Undo"), &win);
-    QPushButton depbtn(QStringLiteral("Set Dep"), &win);
-    QPushButton renbtn(QStringLiteral("Type"), &win);
-    QPushButton copybtn(QStringLiteral("Copy"), &win);
-    QSpinBox spinl(&win);              // LAYER PICKER: 1..n, clamped by refresh
-    QLabel laylbl(QStringLiteral("Layer #"), &win);
-    spinl.setMinimum(1);
-    spinl.setValue(1);
-    laylbl.move(140, 648);
-    spinl.move(138, 664);
-    addbtn.move(260, 662);      setbtn.move(384, 662);    delbtn.move(508, 662);
-    savebtn.move(632, 662);    undobtn.move(756, 662);
-    depbtn.move(260, 700);      // 2nd row: edit text -> dependency of picked layer
-    renbtn.move(384, 700);      // rename TYPE of picked layer
-    copybtn.move(508, 700);     // duplicate picked layer at end
-    addbtn.setObjectName("add");   setbtn.setObjectName("set");   delbtn.setObjectName("del");
-    depbtn.setObjectName("dep");   renbtn.setObjectName("ren");   copybtn.setObjectName("copy");
-    savebtn.setObjectName("save"); undobtn.setObjectName("undo");
-    QPushButton prevbtn(QStringLiteral("Preview"), &win);
-    QLabel prevlbl(&win);
-    prevbtn.move(632, 700);
-    prevbtn.setObjectName("preview");
-    prevlbl.move(10, 726);
+    win.setMinimumSize(QSize(880, 520));   // real min; NO fixed window (review layout pass)
+    { QSettings qs(QStringLiteral("pkteditor"), QStringLiteral("Window"));
+      const QSize last = qs.value(QStringLiteral("last")).toSize();
+      win.resize(qMax(880, last.width() > 1 ? last.width() : 1180),
+                 qMax(520, last.height() > 1 ? last.height() : 820)); }   // remember size
+    QVBoxLayout vwin(&win);                // win layout = one content area, resize follows
+    QWidget *body = new QWidget(&win);     // heap: vwin owns it
+    vwin.addWidget(body);
+    body->resize(win.width(), win.height());
+    QVBoxLayout *vlay = new QVBoxLayout(body);
+    vlay->setSpacing(6);
+    QLabel *head = new QLabel(body);     // heap: layouts own their widgets
+    head->setWordWrap(true);
+    vlay->addWidget(head);
+    MapView *board = new MapView(body);
+    board->m_ = pm;
+    board->setMinimumSize(QSize(480, 240));   // grid scales: layout_cells(size())
+    vlay->addWidget(board);
+    board->start_heartbeat();
+    QWidget *ctl = new QWidget(body);          // control area: one grid, no coords
+    QGridLayout *grid = new QGridLayout(ctl);
+    grid->setSpacing(8);
+    vlay->addWidget(ctl);
+    QLineEdit *edit = new QLineEdit(ctl);
+    edit->setPlaceholderText(QStringLiteral("MACRO"));
+    grid->addWidget(edit, 0, 0, 1, 2);
+    QLabel *layers = new QLabel(ctl);
+    layers->setWordWrap(true);
+    QLabel *stat = new QLabel(ctl);
+    stat->setWordWrap(true);
+    QLabel *laylbl = new QLabel(QStringLiteral("Layer #"), ctl);
+    QSpinBox *spinl = new QSpinBox(ctl);
+    QPushButton *addbtn = new QPushButton(QStringLiteral("+ Layer"), ctl);
+    QPushButton *setbtn = new QPushButton(QStringLiteral("Set"), ctl);
+    QPushButton *delbtn = new QPushButton(QStringLiteral("Delete Layer"), ctl);
+    QPushButton *savebtn = new QPushButton(QStringLiteral("Save"), ctl);
+    QPushButton *undobtn = new QPushButton(QStringLiteral("Undo"), ctl);
+    QPushButton *depbtn = new QPushButton(QStringLiteral("Set Dep"), ctl);
+    QPushButton *renbtn = new QPushButton(QStringLiteral("Type"), ctl);
+    QPushButton *copybtn = new QPushButton(QStringLiteral("Copy"), ctl);
+    grid->addWidget(laylbl, 0, 2);
+    spinl->setMinimum(1);
+    spinl->setValue(1);
+    grid->addWidget(spinl, 0, 3);
+    grid->addWidget(addbtn, 1, 0); grid->addWidget(setbtn, 1, 1); grid->addWidget(delbtn, 1, 2);
+    grid->addWidget(savebtn, 1, 3); grid->addWidget(undobtn, 1, 4);
+    grid->addWidget(depbtn, 2, 0);  // 2nd row: edit text -> dependency of picked layer
+    grid->addWidget(renbtn, 2, 1);  // rename TYPE of picked layer
+    grid->addWidget(copybtn, 2, 2); // duplicate picked layer at end
+    QPushButton *prevbtn = new QPushButton(QStringLiteral("Preview"), ctl);
+    grid->addWidget(prevbtn, 2, 3);
+    QLabel *prevlbl = new QLabel(ctl);
+    prevlbl->setWordWrap(true);
     // LB5: button + QProgressDialog + mapped errors, one mount (upload.h)
-    UploadPanel upload(&win, &pm->pm, mwx,
-                       up_arm || getenv("PKT_UPLOAD_ARM") != nullptr);
-    QLabel lblPick(&win);               // process-picker readout
-    lblPick.move(10, 750);
-    QComboBox procPick(&win);           // PROCESS PICKER (GUI Plan Phase 1)
-    procPick.setObjectName("procpick");
-    procPick.move(8, 728);
-    QPushButton pickbtn(QStringLiteral("Use Picked Proc"), &win);
-    pickbtn.setObjectName("pick");
-    pickbtn.move(756, 738);
-    QPushButton winbtn(QStringLiteral("Aktive Fenster (3s)"), &win);
-    QPushButton recbtn(QStringLiteral("Reconnect"), &win);   // manual (full-route) link retry
-    recbtn.setObjectName("reconnect");
-    recbtn.move(632, 738);
-    winbtn.setObjectName("win3");
-    winbtn.move(508, 738);
-    QLabel lblWin(QStringLiteral("fenster: —"), &win);   // countdown/probe readout
-    lblWin.move(10, 766);
+    UploadPanel *upload = new UploadPanel(ctl, &pm->pm, mwx,
+                                          up_arm || getenv("PKT_UPLOAD_ARM") != nullptr);
+    QLabel *lblPick = new QLabel(ctl);          // process-picker readout
+    QComboBox *procPick = new QComboBox(ctl);   // PROCESS PICKER (GUI Plan Phase 1)
+    procPick->setObjectName("procpick");
+    QPushButton *pickbtn = new QPushButton(QStringLiteral("Use Picked Proc"), ctl);
+    pickbtn->setObjectName("pick");
+    QPushButton *winbtn = new QPushButton(QStringLiteral("Aktive Fenster (3s)"), ctl);
+    QPushButton *recbtn = new QPushButton(QStringLiteral("Reconnect"), ctl);   // manual link retry
+    recbtn->setObjectName("reconnect");
+    winbtn->setObjectName("win3");
+    QLabel *lblWin = new QLabel(QStringLiteral("fenster: —"), ctl);   // countdown/probe readout
     int win_secs = 0;                                    // >0 = countdown running
     QString g_winTitle, g_winProc;   // last --active-window probe (shown in stat)
-    upload.setFixedSize(QSize(260, 90));
+    upload->setFixedSize(QSize(260, 90));
+    grid->addWidget(upload, 3, 4);
+    grid->addWidget(procPick, 0, 4, 1, 1);
+    grid->addWidget(winbtn, 3, 0); grid->addWidget(recbtn, 3, 1); grid->addWidget(pickbtn, 3, 2);
+    grid->addWidget(lblWin, 4, 0); grid->addWidget(lblPick, 4, 1);
+    grid->addWidget(stat, 5, 0, 1, 3);
+    grid->addWidget(prevlbl, 6, 0, 1, 2);
+    grid->addWidget(layers, 7, 0, 1, 3);
+    addbtn->setObjectName("add"); setbtn->setObjectName("set"); delbtn->setObjectName("del");
+    depbtn->setObjectName("dep"); renbtn->setObjectName("ren"); copybtn->setObjectName("copy");
+    savebtn->setObjectName("save"); undobtn->setObjectName("undo");
+    prevbtn->setObjectName("preview");
 
     // live board: pressed POSKeys get a green ring (calib maps scancode->POSKey)
     ipc_adopt_peer(true);   // daemon already listening? peer up front, watch stays off
@@ -963,7 +1013,7 @@ int main(int argc, char **argv) {
         { static int tref = 0;   // dead link? retry every ~4 s over the nb route only
           if (g_ipc_peer < 0 && ++tref % 80 == 0) ipc_adopt_peer(true); }
         const int pk = pm->sel;
-        head.setText(QStringLiteral("%1  maps=%2  sel=%3  dbg=%4,%5  pressed=%6")
+        head->setText(QStringLiteral("%1  maps=%2  sel=%3  dbg=%4,%5  pressed=%6")
                          .arg(pm->pm.name.isEmpty() ? QStringLiteral("no pmap loaded")
                                                     : pm->pm.name)
                          .arg(pm->pm.maps.size())
@@ -974,9 +1024,9 @@ int main(int argc, char **argv) {
         const Map *mp = find_map_c(pm->pm, pk);
         if (mp && !mp->layers.isEmpty()) {
             const int n = mp->layers.size();
-            if (spinl.maximum() != n) spinl.setMaximum(n);
-            spinl.setValue(qBound(1, spinl.value(), n));
-            const int lsel = spinl.value();
+            if (spinl->maximum() != n) spinl->setMaximum(n);
+            spinl->setValue(qBound(1, spinl->value(), n));
+            const int lsel = spinl->value();
             QStringList ls;
             int li = 0;
             for (const Layer &l : mp->layers) {
@@ -987,10 +1037,10 @@ int main(int argc, char **argv) {
                 if (++li == lsel) s = QStringLiteral("> %1").arg(s);
                 ls << s;
             }
-            layers.setText(QStringLiteral("layers (%1): %2").arg(n)
+            layers->setText(QStringLiteral("layers (%1): %2").arg(n)
                                               .arg(ls.join(" | ")));
         } else {
-            layers.setText(QStringLiteral("layers (0) — type a MACRO, then + Layer / Set"));
+            layers->setText(QStringLiteral("layers (0) — type a MACRO, then + Layer / Set"));
         }
         QStringList nocard;
         for (const Map &mm : pm->pm.maps)
@@ -1003,34 +1053,34 @@ int main(int argc, char **argv) {
         if (!g_ipc_status.isEmpty())
             s += QStringLiteral("  daemon: %1").arg(g_ipc_status);   // live status over IPC peer
         // process picker: (re)fill combo on save + first call; label = current pick
-        if (saved || procPick.count() == 0) {
-            procPick.clear();
-            procPick.addItems(pktm::list_processes(120));
+        if (saved || procPick->count() == 0) {
+            procPick->clear();
+            procPick->addItems(pktm::list_processes(120));
         }
-        if (procPick.count() > 0)
-            procPick.setCurrentIndex(qBound(0, procPick.currentIndex(), procPick.count() - 1));
-        const QString cur = procPick.count() ? procPick.itemText(procPick.currentIndex()) : QString();
-        lblPick.setText(cur.isEmpty()
+        if (procPick->count() > 0)
+            procPick->setCurrentIndex(qBound(0, procPick->currentIndex(), procPick->count() - 1));
+        const QString cur = procPick->count() ? procPick->itemText(procPick->currentIndex()) : QString();
+        lblPick->setText(cur.isEmpty()
             ? QStringLiteral("picker: running processes not listed (no probe)")
-            : QStringLiteral("picked: '%1' (n=%2)").arg(cur).arg(procPick.count()));
-        stat.setText(s);
+            : QStringLiteral("picked: '%1' (n=%2)").arg(cur).arg(procPick->count()));
+        stat->setText(s);
     };
-    auto f_add = [&](const QString &v){ add_layer(pm->pm, pm->sel, v.isEmpty() ? edit.text() : v); refresh(false); };
-    auto f_set = [&](const QString &v){ set_layer_value(pm->pm, pm->sel, spinl.value(), v.isEmpty() ? edit.text() : v); refresh(false); };
-    auto f_del = [&]{ del_layer(pm->pm, pm->sel, spinl.value()); refresh(false); };
-    auto f_dep = [&](const QString &v){ set_layer_dep(pm->pm, pm->sel, spinl.value(), v.isEmpty() ? edit.text() : v); refresh(false); };
-    auto f_ren = [&](const QString &v){ set_layer_type(pm->pm, pm->sel, spinl.value(), v.isEmpty() ? edit.text().toUpper() : v.toUpper()); refresh(false); };
-    auto f_copy = [&]{ copy_layer(pm->pm, pm->sel, spinl.value()); refresh(false); };
+    auto f_add = [&](const QString &v){ add_layer(pm->pm, pm->sel, v.isEmpty() ? edit->text() : v); refresh(false); };
+    auto f_set = [&](const QString &v){ set_layer_value(pm->pm, pm->sel, spinl->value(), v.isEmpty() ? edit->text() : v); refresh(false); };
+    auto f_del = [&]{ del_layer(pm->pm, pm->sel, spinl->value()); refresh(false); };
+    auto f_dep = [&](const QString &v){ set_layer_dep(pm->pm, pm->sel, spinl->value(), v.isEmpty() ? edit->text() : v); refresh(false); };
+    auto f_ren = [&](const QString &v){ set_layer_type(pm->pm, pm->sel, spinl->value(), v.isEmpty() ? edit->text().toUpper() : v.toUpper()); refresh(false); };
+    auto f_copy = [&]{ copy_layer(pm->pm, pm->sel, spinl->value()); refresh(false); };
     // Process picker: QComboBox fed by mapper.cpp list_processes() — the daemon's
     // own probe chain (kdotool ps) + comm names from /proc, i.e. exactly the
     // names the daemon's dep layer can match. 'Use Picked Proc' assigns the
     // combi's current entry as dep of the picked layer.
     auto f_pick = [&]{
-        const QString cur = procPick.count() ? procPick.itemText(procPick.currentIndex()) : QString();
-        set_layer_dep(pm->pm, pm->sel, spinl.value(), cur.isEmpty() ? edit.text() : cur);
+        const QString cur = procPick->count() ? procPick->itemText(procPick->currentIndex()) : QString();
+        set_layer_dep(pm->pm, pm->sel, spinl->value(), cur.isEmpty() ? edit->text() : cur);
         refresh(false);
     };
-    pickbtn.connect(&pickbtn, &QPushButton::clicked, [pm, &edit, &save_note, &refresh, f_pick]{ f_pick(); });
+    pickbtn->connect(pickbtn, &QPushButton::clicked, [pm, &edit, &save_note, &refresh, f_pick]{ f_pick(); });
     // 'Aktive Fenster (3s)': click starts a countdown — bring the window you
     // want to type into to the FRONT within 3 s; then the daemon's active-window
     // probe runs and its process becomes the picker's current item.
@@ -1050,13 +1100,13 @@ int main(int argc, char **argv) {
             if (wname == pktm::unknown_window()) wname = QString();
         }
         g_winTitle = wname; g_winProc = wproc;
-        lblWin.setText(QStringLiteral("fenster '%1' proc '%2'").arg(wname).arg(wproc));
+        lblWin->setText(QStringLiteral("fenster '%1' proc '%2'").arg(wname).arg(wproc));
         if (!wproc.isEmpty()) {
             int idx = -1;
-            for (int i = 0; i < procPick.count(); ++i)
-                if (procPick.itemText(i) == wproc) { idx = i; break; }
-            if (idx < 0) { procPick.insertItem(0, wproc); idx = 0; }
-            procPick.setCurrentIndex(idx);
+            for (int i = 0; i < procPick->count(); ++i)
+                if (procPick->itemText(i) == wproc) { idx = i; break; }
+            if (idx < 0) { procPick->insertItem(0, wproc); idx = 0; }
+            procPick->setCurrentIndex(idx);
         }
         refresh(false);
     };
@@ -1069,34 +1119,34 @@ int main(int argc, char **argv) {
         if (win_secs <= 0) return;
         --win_secs;
         if (win_secs == 0) win_probe();
-        else lblWin.setText(QStringLiteral("fenster in %1 s — bring window to FRONT").arg(win_secs));
+        else lblWin->setText(QStringLiteral("fenster in %1 s — bring window to FRONT").arg(win_secs));
     })) qWarning("pkteditor: winT signal not connected");
     auto f_win3 = [&]{
         const char *c = getenv("PKT_WIN_COUNT");
         win_secs = (c && *c) ? QString(c).toInt() : 3;
-        lblWin.setText(QStringLiteral("fenster in %1 s — bring window to FRONT").arg(win_secs));
+        lblWin->setText(QStringLiteral("fenster in %1 s — bring window to FRONT").arg(win_secs));
         winT.start();
     };
-    winbtn.connect(&winbtn, &QPushButton::clicked, [f_win3]{ f_win3(); });
-    recbtn.connect(&recbtn, &QPushButton::clicked, [&]{ ipc_adopt_peer(false); refresh(true); });
+    winbtn->connect(winbtn, &QPushButton::clicked, [f_win3]{ f_win3(); });
+    recbtn->connect(recbtn, &QPushButton::clicked, [&]{ ipc_adopt_peer(false); refresh(true); });
     auto f_prev = [&]{
         const Map *mp = find_map_c(pm->pm, pm->sel);
-        const QString t = mp ? pktm::preview_map(*mp, spinl.value())
+        const QString t = mp ? pktm::preview_map(*mp, spinl->value())
                              : QStringLiteral("no rule for selected cell");
-        prevlbl.setText(t);
+        prevlbl->setText(t);
         std::printf("preview: %s\n", t.toUtf8().constData());
         refresh(false);
     };
-    prevbtn.connect(&prevbtn, &QPushButton::clicked, [&]{ f_prev(); });
-    addbtn.connect(&addbtn, &QPushButton::clicked, [pm, &edit, &save_note, &refresh, f_add]{ f_add(edit.text()); });
-    depbtn.connect(&depbtn, &QPushButton::clicked, [pm, &edit, &save_note, &refresh, f_dep]{ f_dep(edit.text()); });
-    setbtn.connect(&setbtn, &QPushButton::clicked, [pm, &edit, &save_note, &refresh, f_set]{ f_set(edit.text()); });
-    delbtn.connect(&delbtn, &QPushButton::clicked, [pm, &save_note, &refresh, f_del]{ f_del(); });
-    renbtn.connect(&renbtn, &QPushButton::clicked, [pm, &edit, &save_note, &refresh, f_ren]{ f_ren(edit.text()); });
-    copybtn.connect(&copybtn, &QPushButton::clicked, [pm, &save_note, &refresh, f_copy]{ f_copy(); });
-    savebtn.connect(&savebtn, &QPushButton::clicked, [pm, &out, &save_note, &refresh]{
+    prevbtn->connect(prevbtn, &QPushButton::clicked, [&]{ f_prev(); });
+    addbtn->connect(addbtn, &QPushButton::clicked, [pm, &edit, &save_note, &refresh, f_add]{ f_add(edit->text()); });
+    depbtn->connect(depbtn, &QPushButton::clicked, [pm, &edit, &save_note, &refresh, f_dep]{ f_dep(edit->text()); });
+    setbtn->connect(setbtn, &QPushButton::clicked, [pm, &edit, &save_note, &refresh, f_set]{ f_set(edit->text()); });
+    delbtn->connect(delbtn, &QPushButton::clicked, [pm, &save_note, &refresh, f_del]{ f_del(); });
+    renbtn->connect(renbtn, &QPushButton::clicked, [pm, &edit, &save_note, &refresh, f_ren]{ f_ren(edit->text()); });
+    copybtn->connect(copybtn, &QPushButton::clicked, [pm, &save_note, &refresh, f_copy]{ f_copy(); });
+    savebtn->connect(savebtn, &QPushButton::clicked, [pm, &out, &save_note, &refresh]{
         save_note = save_pmap(*pm, pm->path.isEmpty() ? out : pm->path); refresh(true); });
-    undobtn.connect(&undobtn, &QPushButton::clicked, [&save_note, &refresh]{
+    undobtn->connect(undobtn, &QPushButton::clicked, [&save_note, &refresh]{
         if (g_undo.isEmpty()) save_note = QStringLiteral("undo: nothing in this session");
         else {
             const UndoSnap last = g_undo.last();
@@ -1119,20 +1169,25 @@ int main(int argc, char **argv) {
         const QPoint target(900, 300);   // board-local target (widget coords)
         QMouseEvent ev(QEvent::MouseButtonPress, QPointF(target), QPointF(target),
                        Qt::LeftButton, Qt::LeftButton, Qt::KeyboardModifiers());
-        board.mousePressEvent(&ev);      // direct handler call (Qt6 dropped QMeta GUI)
-        pm->cells = layout_cells(board.size());  // paintEvent not run in clicktest
-        board.mousePressEvent(&ev);
+        board->mousePressEvent(&ev);      // direct handler call (Qt6 dropped QMeta GUI)
+        pm->cells = layout_cells(board->size());  // paintEvent not run in clicktest
+        board->mousePressEvent(&ev);
         std::printf("clicktest sel=%d target=(900,300) cell=%s\n",
                     pm->sel, describe_cell(pm->sel).toUtf8().constData());
         // BUTTON-WIRING GATE: real click events via QTest::mouseClick (Qt6 keeps
         // the hook; only QMeta::Clicked itself was replaced). Buttons found by
         // objectName -> wiring, not just handlers.
         auto find_btn = [&](const char *name) -> QPushButton * {
-            for (QObject *w : win.children())
-                if (auto *pb = qobject_cast<QPushButton *>(w))
-                    if (pb->objectName() == QLatin1String(name))
-                        return pb;
-            return nullptr;
+            std::function<QPushButton *(QObject *)> walk = [&](QObject *o) -> QPushButton * {
+                for (QObject *c : o->children()) {
+                    if (auto *pb = qobject_cast<QPushButton *>(c))
+                        if (pb->objectName() == QLatin1String(name))
+                            return pb;
+                    if (auto *r = walk(c)) return r;
+                }
+                return nullptr;
+            };
+            return walk(&win);
         };
         auto press_btn = [&](const char *name) -> bool {
             if (QPushButton *pb = find_btn(name)) { QTest::mouseClick(pb, Qt::LeftButton); return true; }
@@ -1143,17 +1198,17 @@ int main(int argc, char **argv) {
               && find_btn("dep") && find_btn("ren") && find_btn("copy")
               && find_btn("preview") && find_btn("pick") && find_btn("win3")))
             { std::printf("clicktest FAIL: button by objectName missing\n"); ++gfail; }
-        edit.setText(QStringLiteral("L1")); press_btn("add");
-        edit.setText(QStringLiteral("L2")); press_btn("add");
-        spinl.setValue(1);
-        edit.setText(QStringLiteral("AAA")); press_btn("set");
-        edit.setText(QStringLiteral("DEP1")); press_btn("dep");
-        edit.setText(QStringLiteral("WEBSITE")); press_btn("ren");
+        edit->setText(QStringLiteral("L1")); press_btn("add");
+        edit->setText(QStringLiteral("L2")); press_btn("add");
+        spinl->setValue(1);
+        edit->setText(QStringLiteral("AAA")); press_btn("set");
+        edit->setText(QStringLiteral("DEP1")); press_btn("dep");
+        edit->setText(QStringLiteral("WEBSITE")); press_btn("ren");
         press_btn("copy");
-        spinl.setValue(3); press_btn("del");
+        spinl->setValue(3); press_btn("del");
         // negative case: disabled button must not fire
-        copybtn.setEnabled(false);
-        spinl.setValue(1);
+        copybtn->setEnabled(false);
+        spinl->setValue(1);
         {
             const Map *m0 = find_map_c(pm->pm, pm->sel);
             const int n_b = m0 ? m0->layers.size() : -1;
@@ -1164,15 +1219,15 @@ int main(int argc, char **argv) {
                         n_a == n_b ? "OK" : "FAIL", n_b, n_a);
             if (n_a != n_b) ++gfail;
         }
-        spinl.setValue(1);
+        spinl->setValue(1);
         press_btn("preview");
-        spinl.setValue(2);
+        spinl->setValue(2);
         press_btn("preview");
         // process-picker gate: list from mapper.cpp (same code the dep-match uses)
         const QStringList procs = pktm::list_processes(20);
         std::printf("picker n=%d first='%s'\n", (int)procs.size(),
                     procs.isEmpty() ? "" : procs.first().toUtf8().constData());
-        spinl.setValue(1);
+        spinl->setValue(1);
         press_btn("pick");
         {
             const Map *mp = find_map_c(pm->pm, pm->sel);
@@ -1205,6 +1260,93 @@ int main(int argc, char **argv) {
         }
         return gfail;
     }
+    // PKT_LAYOUT_CHECK child: resize, verify tree invariants, exit with bad count.
+    if (getenv("PKT_LAYOUT_CHECK")) {
+        // Only the app-owned subtree is checked: Qt's internal children (combo
+        // arrow, scrollbars, button internals) sit at private coords and would
+        // report thousands of false hits.
+        QSet<const QWidget *> appw{ body, head, board, ctl, edit, layers,
+            stat, spinl, addbtn, setbtn, delbtn, savebtn, undobtn, depbtn,
+            renbtn, copybtn, prevbtn, prevlbl, upload, lblPick, procPick, pickbtn,
+            winbtn, recbtn, lblWin, layers };
+        QWidget *saboteur = nullptr;
+        if (getenv("PKT_LAYOUT_SABOTAGE")) {
+            // A fixed-coordinate placement with NO layout parent: exactly what
+            // the old code did everywhere and what the checker must catch.
+            saboteur = new QWidget(&win);
+            saboteur->move(508, 738);
+            saboteur->resize(60, 40);
+            appw.insert(saboteur);
+        }
+        const QString sz = QString::fromUtf8(getenv("PKT_CHECK_SIZE"));
+        const int xx = sz.indexOf('x');
+        if (xx > 0)
+            win.resize(qMax(320, sz.left(xx).toInt()), qMax(240, sz.mid(xx + 1).toInt()));
+        win.show();   // show_helper() runs the layout pass (installLayout) offscreen
+        int badw = 0, badl = 0;
+        auto idw = [&](QWidget *x) -> int {
+            return x == head ? 10 : x == board ? 11 : x == ctl ? 12 : x == edit ? 13 :
+                   x == layers ? 14 : x == stat ? 15 : x == laylbl ? 16 : x == spinl ? 17 :
+                   x == addbtn ? 18 : x == setbtn ? 19 : x == delbtn ? 20 : x == savebtn ? 21 :
+                   x == undobtn ? 22 : x == depbtn ? 23 : x == renbtn ? 24 : x == copybtn ? 25 :
+                   x == prevbtn ? 26 : x == prevlbl ? 27 : x == upload ? 28 : x == lblPick ? 29 :
+                   x == procPick ? 30 : x == pickbtn ? 31 : x == winbtn ? 32 : x == recbtn ? 33 :
+                   x == lblWin ? 34 : x == body ? 2 : x == &win ? 1 : 0;
+        };
+        std::function<void (QWidget *)> walk = [&](QWidget *w) {
+            QVector<QWidget *> kids;
+            for (QObject *co : w->children()) {
+                QWidget *cw = qobject_cast<QWidget *>(co);
+                if (cw && appw.contains(cw)) kids.append(cw);
+            }
+            for (int i = 0; i < kids.size(); ++i) {
+                QWidget *c = kids[i];
+                if (c->x() < 0 || c->y() < 0 ||
+                    c->x() + c->width() > w->width() ||
+                    c->y() + c->height() > w->height()) {
+                    ++badw;
+                    std::printf("VIOL bounds parent=%d child=%d %d,%d %dx%d in %dx%d\n",
+                        w == &win ? 1 : w == body ? 2 : w == ctl ? 3 : 4,
+                        c == head ? 10 : c == board ? 11 : c == ctl ? 12 : c == edit ? 13 :
+                        c == layers ? 14 : c == stat ? 15 : c == laylbl ? 16 : c == spinl ? 17 :
+                        c == addbtn ? 18 : c == setbtn ? 19 : c == delbtn ? 20 : c == savebtn ? 21 :
+                        c == undobtn ? 22 : c == depbtn ? 23 : c == renbtn ? 24 : c == copybtn ? 25 :
+                        c == prevbtn ? 26 : c == prevlbl ? 27 : c == upload ? 28 : c == lblPick ? 29 :
+                        c == procPick ? 30 : c == pickbtn ? 31 : c == winbtn ? 32 : c == recbtn ? 33 :
+                        c == lblWin ? 34 : c == body ? 2 : 0,
+                        c->x(), c->y(), c->width(), c->height(), w->width(), w->height());
+                }
+                for (int j = i + 1; j < kids.size(); ++j) {
+                    const QRect a(c->x(), c->y(), c->width(), c->height());
+                    QWidget *d = kids[j];
+                    const QRect b(d->x(), d->y(), d->width(), d->height());
+                    const QRect ov = a & b;
+                    if (ov.width() > 0 && ov.height() > 0) {
+                        ++badw;
+                        std::printf("VIOL overlap id=%d/%d %dx%d at %d,%d\n", idw(c), idw(d), ov.width(), ov.height(), ov.x(), ov.y());
+                    }
+                }
+                walk(c);
+            }
+        };
+        walk(&win);
+        std::function<void (QWidget *)> lbls = [&](QWidget *w) {
+            for (QObject *co : w->children()) {
+                QWidget *c = qobject_cast<QWidget *>(co);
+                if (!c || !appw.contains(c)) continue;
+                if (auto *lb = qobject_cast<QLabel *>(co))
+                    if (!lb->wordWrap() && c->width() < lb->sizeHint().width())
+                        ++badl;
+                lbls(c);
+            }
+        };
+        lbls(&win);
+        std::printf("layout-check walk=%d lbls=%d\n", badw, badl);
+        return badw + badl;
+    }
     win.show();
-    return app.exec();
+    const int xrc = app.exec();
+    { QSettings qs(QStringLiteral("pkteditor"), QStringLiteral("Window"));
+      qs.setValue(QStringLiteral("last"), win.size()); }
+    return xrc;
 }
