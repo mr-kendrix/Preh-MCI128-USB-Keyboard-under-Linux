@@ -21,6 +21,11 @@
 #include <QPoint>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QMainWindow>
+#include <QMenuBar>
+#include <QMenu>
+#include <QStatusBar>
+#include <QRadioButton>
 #include <QSpinBox>
 #include <QComboBox>
 #include <QSettings>
@@ -87,6 +92,7 @@ struct Model {
     int sel = -1;             // selected POSKey
     QSet<int> pressed;        // POSKeys held down on the real board
     std::function<void()> notify;  // refresh UI after selection change
+    std::function<void(int)> openDlg;  // double-click -> per-key dialog (vendor)
     QString path;             // source file (save target)
     QVector<Cell> cells;      // board-local geometry
     QPoint dbg;               // last click point (debug)
@@ -661,6 +667,11 @@ public:
         if (pk >= 0) m_->sel = pk;
         if (m_->notify) m_->notify();             // refresh head/layers text
     }
+    void mouseDoubleClickEvent(QMouseEvent *ev) override {   // vendor entry point
+        const int pk = cell_at(*m_, ev->pos());
+        if (pk >= 0 && m_->openDlg) m_->openDlg(pk);
+        if (m_->notify) m_->notify();
+    }
 };
 
 // ------------------------------------------------------------------- main ----
@@ -684,9 +695,12 @@ static int layout_selftest(int argc, char **av) {
     for (const auto &c : cfg) {
         const QString cmd = QStringLiteral("PKT_LAYOUT_CHECK=1 PKT_CHECK_SIZE=%1x%2 QT_SCALE_FACTOR=%3 QT_FONT_DPI=%4 ")
                                 .arg(c.w).arg(c.h).arg(c.sc).arg(c.dpi) + args;
-        const int st = std::system(cmd.toUtf8().constData());
-        std::printf("  cfg sc=%s dpi=%s %dx%d exit=%d\n", c.sc, c.dpi, c.w, c.h, st);
-        if (st != 0) ++fails;
+        for (int openv = 0; openv <= 1; ++openv) {   // dialog closed AND open
+            const QString cmd2 = (openv ? QStringLiteral("PKT_OPEN_DIALOG=1 ") : QString()) + cmd;
+            const int st = std::system(cmd2.toUtf8().constData());
+            std::printf("  cfg sc=%s dpi=%s %dx%d dlg=%d exit=%d\n", c.sc, c.dpi, c.w, c.h, openv, st);
+            if (st != 0) ++fails;
+        }
     }
     const int st = std::system(("PKT_LAYOUT_CHECK=1 PKT_LAYOUT_SABOTAGE=1 PKT_CHECK_SIZE=1366x768 " + args).toUtf8().constData());
     std::printf("  sabotage exit=%d (expected !=0)\n", st);
@@ -886,8 +900,9 @@ int main(int argc, char **argv) {
       const QSize last = qs.value(QStringLiteral("last")).toSize();
       win.resize(qMax(880, last.width() > 1 ? last.width() : 1180),
                  qMax(520, last.height() > 1 ? last.height() : 820)); }   // remember size
-    QVBoxLayout vwin(&win);                // win layout = one content area, resize follows
-    QWidget *body = new QWidget(&win);     // heap: vwin owns it
+    QWidget *content = nullptr;   // (QML wrapper dropped: QLayout on win works headless)
+    QVBoxLayout vwin(&win);      // classic QLayout: relayout runs in show_helper
+    QWidget *body = new QWidget(&win);
     vwin.addWidget(body);
     body->resize(win.width(), win.height());
     QVBoxLayout *vlay = new QVBoxLayout(body);
@@ -897,9 +912,22 @@ int main(int argc, char **argv) {
     vlay->addWidget(head);
     MapView *board = new MapView(body);
     board->m_ = pm;
-    board->setMinimumSize(QSize(480, 240));   // grid scales: layout_cells(size())
+    board->setMinimumSize(QSize(480, 160));   // min height fits small windows too
     vlay->addWidget(board);
     board->start_heartbeat();
+    // Vendor shell (review 2026-11-15): menu bar + status bar (QMenuBar/QStatusBar
+    // as layout children — QML/QMainWindow does not relayout in headless gates).
+    QMenuBar *menu = new QMenuBar(&win);
+    menu->setObjectName("menu");
+    menu->addMenu(QStringLiteral("File"));
+    menu->addMenu(QStringLiteral("Edit"));
+    menu->addMenu(QStringLiteral("Settings"));
+    menu->addMenu(QStringLiteral("Help"));
+    vwin.insertWidget(0, menu);            // top of the content column
+    QStatusBar *sbar = new QStatusBar(&win);
+    sbar->setObjectName("status");
+    QLabel *statusline = new QLabel(sbar);
+    sbar->addWidget(statusline);
     QWidget *ctl = new QWidget(body);          // control area: one grid, no coords
     QGridLayout *grid = new QGridLayout(ctl);
     grid->setSpacing(8);
@@ -911,25 +939,49 @@ int main(int argc, char **argv) {
     layers->setWordWrap(true);
     QLabel *stat = new QLabel(ctl);
     stat->setWordWrap(true);
-    QLabel *laylbl = new QLabel(QStringLiteral("Layer #"), ctl);
-    QSpinBox *spinl = new QSpinBox(ctl);
-    QPushButton *addbtn = new QPushButton(QStringLiteral("+ Layer"), ctl);
-    QPushButton *setbtn = new QPushButton(QStringLiteral("Set"), ctl);
-    QPushButton *delbtn = new QPushButton(QStringLiteral("Delete Layer"), ctl);
-    QPushButton *savebtn = new QPushButton(QStringLiteral("Save"), ctl);
-    QPushButton *undobtn = new QPushButton(QStringLiteral("Undo"), ctl);
-    QPushButton *depbtn = new QPushButton(QStringLiteral("Set Dep"), ctl);
-    QPushButton *renbtn = new QPushButton(QStringLiteral("Type"), ctl);
-    QPushButton *copybtn = new QPushButton(QStringLiteral("Copy"), ctl);
-    grid->addWidget(laylbl, 0, 2);
+    // Per-key dialog (vendor): opens on double-click (openDlg), holds layer ops,
+    // radios + own Save. Hidden = no space in layout; layout pass reflows.
+    QWidget *dlg = new QWidget(&win);
+    dlg->setObjectName("keydlg");
+    vwin.addWidget(dlg);
+    QGridLayout *dgrid = new QGridLayout(dlg);
+    dgrid->setSpacing(4);
+    QLabel *laylbl = new QLabel(QStringLiteral("Layer #"), dlg);
+    QSpinBox *spinl = new QSpinBox(dlg);
+    QPushButton *addbtn = new QPushButton(QStringLiteral("+ Layer"), dlg);
+    QPushButton *setbtn = new QPushButton(QStringLiteral("Set"), dlg);
+    QPushButton *delbtn = new QPushButton(QStringLiteral("Delete Layer"), dlg);
+    QPushButton *savebtn = new QPushButton(QStringLiteral("Save key"), dlg);
+    QPushButton *depbtn = new QPushButton(QStringLiteral("Set Dep"), dlg);
+    QPushButton *renbtn = new QPushButton(QStringLiteral("Type"), dlg);
+    QPushButton *copybtn = new QPushButton(QStringLiteral("Copy"), dlg);
+    QPushButton *dclosebtn = new QPushButton(QStringLiteral("Close"), dlg);
+    dclosebtn->setObjectName("close");
+    QRadioButton *dfn = new QRadioButton(dlg);
+    dfn->setText(QStringLiteral("Do nothing"));
+    QRadioButton *dft = new QRadioButton(dlg);
+    dft->setText(QStringLiteral("Text/Shortcut"));
+    QRadioButton *dapp = new QRadioButton(dlg);
+    dapp->setText(QStringLiteral("Application"));
+    dapp->setEnabled(false);   // not in file model: honest refusal, no fake UI
+    dapp->setToolTip(QStringLiteral("not in file model"));
+    QRadioButton *dweb = new QRadioButton(dlg);
+    dweb->setText(QStringLiteral("Open web page"));
+    dweb->setEnabled(false);
+    dweb->setToolTip(QStringLiteral("not in file model"));
     spinl->setMinimum(1);
     spinl->setValue(1);
-    grid->addWidget(spinl, 0, 3);
-    grid->addWidget(addbtn, 1, 0); grid->addWidget(setbtn, 1, 1); grid->addWidget(delbtn, 1, 2);
-    grid->addWidget(savebtn, 1, 3); grid->addWidget(undobtn, 1, 4);
-    grid->addWidget(depbtn, 2, 0);  // 2nd row: edit text -> dependency of picked layer
-    grid->addWidget(renbtn, 2, 1);  // rename TYPE of picked layer
-    grid->addWidget(copybtn, 2, 2); // duplicate picked layer at end
+    dgrid->addWidget(laylbl, 0, 0); dgrid->addWidget(spinl, 0, 1);
+    dgrid->addWidget(addbtn, 1, 0); dgrid->addWidget(setbtn, 1, 1);
+    dgrid->addWidget(delbtn, 1, 2); dgrid->addWidget(savebtn, 1, 3);
+    dgrid->addWidget(depbtn, 2, 0); dgrid->addWidget(renbtn, 2, 1);
+    dgrid->addWidget(copybtn, 2, 2); dgrid->addWidget(dclosebtn, 2, 3);
+    dgrid->addWidget(dfn, 3, 0); dgrid->addWidget(dft, 3, 1);
+    dgrid->addWidget(dapp, 3, 2); dgrid->addWidget(dweb, 3, 3);
+    dlg->hide();                                   // openDlg shows it
+    vwin.addWidget(sbar);                          // status line at the bottom
+    QPushButton *undobtn = new QPushButton(QStringLiteral("Undo"), ctl);
+    grid->addWidget(undobtn, 1, 0);
     QPushButton *prevbtn = new QPushButton(QStringLiteral("Preview"), ctl);
     grid->addWidget(prevbtn, 2, 3);
     QLabel *prevlbl = new QLabel(ctl);
@@ -949,7 +1001,7 @@ int main(int argc, char **argv) {
     QLabel *lblWin = new QLabel(QStringLiteral("fenster: —"), ctl);   // countdown/probe readout
     int win_secs = 0;                                    // >0 = countdown running
     QString g_winTitle, g_winProc;   // last --active-window probe (shown in stat)
-    upload->setFixedSize(QSize(260, 90));
+    upload->setFixedSize(QSize(260, 64));
     grid->addWidget(upload, 3, 4);
     grid->addWidget(procPick, 0, 4, 1, 1);
     grid->addWidget(winbtn, 3, 0); grid->addWidget(recbtn, 3, 1); grid->addWidget(pickbtn, 3, 2);
@@ -1064,6 +1116,10 @@ int main(int argc, char **argv) {
             ? QStringLiteral("picker: running processes not listed (no probe)")
             : QStringLiteral("picked: '%1' (n=%2)").arg(cur).arg(procPick->count()));
         stat->setText(s);
+        statusline->setText(QStringLiteral("maps=%1  pressed=%2  grid=%3  fenster='%4'  daemon:%5")
+                                 .arg(pm->pm.maps.size()).arg(pm->pressed.size())
+                                 .arg(nocard.join(QStringLiteral(",")))
+                                 .arg(g_winTitle).arg(g_ipc_status));
     };
     auto f_add = [&](const QString &v){ add_layer(pm->pm, pm->sel, v.isEmpty() ? edit->text() : v); refresh(false); };
     auto f_set = [&](const QString &v){ set_layer_value(pm->pm, pm->sel, spinl->value(), v.isEmpty() ? edit->text() : v); refresh(false); };
@@ -1165,6 +1221,37 @@ int main(int argc, char **argv) {
     refresh(false);
     pm->notify = [&]() { refresh(false); };
     poll.start();
+    // Dialog wiring (vendor): Save per key, Close hides; openDlg(pk) shows +
+    // re-binds the layer picker for that key. Do nothing = empty Value.
+    bool dlg_open = false;
+    auto close_dialog = [&]{
+        dlg->hide();
+        dlg_open = false;
+        refresh(false);
+    };
+    auto open_dialog = [&](int pk){
+        pm->sel = pk;
+        dlg->show();
+        dlg_open = true;
+        const int n = [pk](Model *p) -> int { for (const Map &mm : p->pm.maps)
+                                      if (mm.poskey == pk) return (int)mm.layers.size();
+                                    return 0; }(pm);
+        spinl->setMinimum(1);
+        spinl->setMaximum(qMax(1, n));
+        spinl->setValue(1);
+        refresh(false);
+    };
+    pm->openDlg = open_dialog;
+    dclosebtn->connect(dclosebtn, &QPushButton::clicked, [&]{ close_dialog(); });
+    dfn->connect(dfn, &QRadioButton::clicked, [pm, &spinl, &refresh]{
+        set_layer_value(pm->pm, pm->sel, spinl->value(), QString());
+        refresh(false);
+    });
+    dft->connect(dft, &QRadioButton::clicked, [pm, &spinl, &refresh]{
+        set_layer_type(pm->pm, pm->sel, spinl->value(), QStringLiteral("TEXT"));
+        refresh(false);
+    });
+
     if (mode == "clicktest") {
         const QPoint target(900, 300);   // board-local target (widget coords)
         QMouseEvent ev(QEvent::MouseButtonPress, QPointF(target), QPointF(target),
@@ -1172,6 +1259,7 @@ int main(int argc, char **argv) {
         board->mousePressEvent(&ev);      // direct handler call (Qt6 dropped QMeta GUI)
         pm->cells = layout_cells(board->size());  // paintEvent not run in clicktest
         board->mousePressEvent(&ev);
+        pm->openDlg(pm->sel);             // layer buttons now live in the dialog
         std::printf("clicktest sel=%d target=(900,300) cell=%s\n",
                     pm->sel, describe_cell(pm->sel).toUtf8().constData());
         // BUTTON-WIRING GATE: real click events via QTest::mouseClick (Qt6 keeps
@@ -1258,6 +1346,21 @@ int main(int argc, char **argv) {
             pm_img.save(shot.isEmpty() ? QStringLiteral("/tmp/wshot.png") : shot);
             std::printf("shot saved %s\n", shot.isEmpty() ? "/tmp/wshot.png" : shot.toUtf8().constData());
         }
+        // DIALOG gate: vendor entry = double-click on a key. openDlg must show it;
+        // Close must hide it again. Target = first cell center (board size varies
+        // with layout, so a fixed pixel is not guaranteed to be on the board).
+        if (pm->cells.isEmpty()) { std::printf("clicktest FAIL: no cells for dblclick\n"); ++gfail; }
+        const QPointF dcp = pm->cells.isEmpty() ? QPointF(1,1)
+                          : QPointF(pm->cells.first().rc.center());
+        QMouseEvent dcv(QEvent::MouseButtonPress, dcp, dcp,
+                        Qt::LeftButton, Qt::LeftButton, Qt::KeyboardModifiers());
+        board->mouseDoubleClickEvent(&dcv);
+        if (!dlg_open) { std::printf("clicktest FAIL: dblclick did not open dialog\n"); ++gfail; }
+        if (!menu)    { std::printf("clicktest FAIL: no menu bar\n"); ++gfail; }
+        if (!find_btn("close")) { std::printf("clicktest FAIL: no Close button wired\n"); ++gfail; }
+        close_dialog();          // geometry without layout pass is meaningless for
+                                 // hit-testing; the connect above is the wiring
+        if (dlg_open)  { std::printf("clicktest FAIL: Close did not hide dialog\n"); ++gfail; }
         return gfail;
     }
     // PKT_LAYOUT_CHECK child: resize, verify tree invariants, exit with bad count.
@@ -1266,9 +1369,9 @@ int main(int argc, char **argv) {
         // arrow, scrollbars, button internals) sit at private coords and would
         // report thousands of false hits.
         QSet<const QWidget *> appw{ body, head, board, ctl, edit, layers,
-            stat, spinl, addbtn, setbtn, delbtn, savebtn, undobtn, depbtn,
+            stat, spinl, laylbl, addbtn, setbtn, delbtn, savebtn, undobtn, depbtn,
             renbtn, copybtn, prevbtn, prevlbl, upload, lblPick, procPick, pickbtn,
-            winbtn, recbtn, lblWin, layers };
+            winbtn, recbtn, lblWin, dlg, dclosebtn, dfn, dft, dapp, dweb, menu, sbar };
         QWidget *saboteur = nullptr;
         if (getenv("PKT_LAYOUT_SABOTAGE")) {
             // A fixed-coordinate placement with NO layout parent: exactly what
@@ -1282,6 +1385,7 @@ int main(int argc, char **argv) {
         const int xx = sz.indexOf('x');
         if (xx > 0)
             win.resize(qMax(320, sz.left(xx).toInt()), qMax(240, sz.mid(xx + 1).toInt()));
+        if (getenv("PKT_OPEN_DIALOG")) pm->openDlg(pm->sel > 0 ? pm->sel : 1);
         win.show();   // show_helper() runs the layout pass (installLayout) offscreen
         int badw = 0, badl = 0;
         auto idw = [&](QWidget *x) -> int {
@@ -1291,13 +1395,15 @@ int main(int argc, char **argv) {
                    x == undobtn ? 22 : x == depbtn ? 23 : x == renbtn ? 24 : x == copybtn ? 25 :
                    x == prevbtn ? 26 : x == prevlbl ? 27 : x == upload ? 28 : x == lblPick ? 29 :
                    x == procPick ? 30 : x == pickbtn ? 31 : x == winbtn ? 32 : x == recbtn ? 33 :
-                   x == lblWin ? 34 : x == body ? 2 : x == &win ? 1 : 0;
+                   x == lblWin ? 34 : x == dlg ? 35 : x == dclosebtn ? 36 :
+                   x == dfn ? 38 : x == dft ? 39 : x == dapp ? 40 : x == dweb ? 41 :
+                   x == menu ? 43 : x == sbar ? 44 : x == body ? 2 : x == &win ? 1 : 0;
         };
         std::function<void (QWidget *)> walk = [&](QWidget *w) {
             QVector<QWidget *> kids;
             for (QObject *co : w->children()) {
                 QWidget *cw = qobject_cast<QWidget *>(co);
-                if (cw && appw.contains(cw)) kids.append(cw);
+                if (cw && appw.contains(cw) && !cw->isHidden()) kids.append(cw);
             }
             for (int i = 0; i < kids.size(); ++i) {
                 QWidget *c = kids[i];
@@ -1306,14 +1412,16 @@ int main(int argc, char **argv) {
                     c->y() + c->height() > w->height()) {
                     ++badw;
                     std::printf("VIOL bounds parent=%d child=%d %d,%d %dx%d in %dx%d\n",
-                        w == &win ? 1 : w == body ? 2 : w == ctl ? 3 : 4,
+                        w == &win ? 1 : w == body ? 2 : w == ctl ? 3 : w == dlg ? 5 : 4,
                         c == head ? 10 : c == board ? 11 : c == ctl ? 12 : c == edit ? 13 :
                         c == layers ? 14 : c == stat ? 15 : c == laylbl ? 16 : c == spinl ? 17 :
                         c == addbtn ? 18 : c == setbtn ? 19 : c == delbtn ? 20 : c == savebtn ? 21 :
                         c == undobtn ? 22 : c == depbtn ? 23 : c == renbtn ? 24 : c == copybtn ? 25 :
                         c == prevbtn ? 26 : c == prevlbl ? 27 : c == upload ? 28 : c == lblPick ? 29 :
                         c == procPick ? 30 : c == pickbtn ? 31 : c == winbtn ? 32 : c == recbtn ? 33 :
-                        c == lblWin ? 34 : c == body ? 2 : 0,
+                        c == lblWin ? 34 : c == dlg ? 35 : c == dclosebtn ? 36 :
+                        c == dfn ? 38 : c == dft ? 39 : c == dapp ? 40 : c == dweb ? 41 :
+                        c == menu ? 43 : c == sbar ? 44 : c == body ? 2 : 0,
                         c->x(), c->y(), c->width(), c->height(), w->width(), w->height());
                 }
                 for (int j = i + 1; j < kids.size(); ++j) {
