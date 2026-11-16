@@ -1003,7 +1003,7 @@ int main(int argc, char **argv) {
     vlay->addWidget(head);
     MapView *board = new MapView(body);
     board->m_ = pm;
-    board->setMinimumSize(QSize(480, 140));   // min height fits small windows too
+    board->setMinimumSize(QSize(480, 118));   // min height fits small windows too
     // Vendor left column: process list selects the view (radio list);
     // board sits right of it in one row — real layout, no coordinates.
     QWidget *mid = new QWidget(body);
@@ -1078,6 +1078,12 @@ int main(int argc, char **argv) {
     macroSel->setObjectName("macroSel"); macroSel->setMinimum(1); macroSel->setValue(1);
     QPushButton *macrobtn = new QPushButton(QStringLiteral("Macro +"), dlg);
     macrobtn->setObjectName("macro");
+    QLabel *brLabel = new QLabel(dlg);
+    brLabel->setWordWrap(true);
+    brLabel->setText(QStringLiteral("Browser:"));
+    QComboBox *browserPick = new QComboBox(dlg);
+    browserPick->setObjectName("browserPick"); browserPick->setMinimumSize(120, 20);
+    dlg->setMaximumHeight(220);
     spinl->setMinimum(1);
     spinl->setValue(1);
     dgrid->addWidget(laylbl, 0, 0); dgrid->addWidget(spinl, 0, 1);
@@ -1090,6 +1096,7 @@ int main(int argc, char **argv) {
     dgrid->addWidget(dapp, 3, 2); dgrid->addWidget(dweb, 3, 3);
     dgrid->addWidget(cbBtf, 4, 0); dgrid->addWidget(cbRep, 4, 1); dgrid->addWidget(cbSlw, 4, 2);
     dgrid->addWidget(macroW, 5, 0, 1, 2); dgrid->addWidget(macroSel, 5, 2); dgrid->addWidget(macrobtn, 5, 3);
+    dgrid->addWidget(brLabel, 6, 0); dgrid->addWidget(browserPick, 6, 1, 1, 2);
     static const QStringList gMacros{QStringLiteral("ESC"), QStringLiteral("TAB"), QStringLiteral("N1"), QStringLiteral("N2"),
                                      QStringLiteral("N3"), QStringLiteral("DELAY"), QStringLiteral("POS"), QStringLiteral("POSKEY")};
     { QStringList disp; for (const QString &m : gMacros) disp << QStringLiteral("{%1}").arg(m);
@@ -1109,12 +1116,11 @@ int main(int argc, char **argv) {
                 || l.contains(QStringLiteral("konqueror"))) gBrows << n;
         }
     }
+        browserPick->clear(); browserPick->addItems(gBrows);
     QListWidget *progW = new QListWidget(ctl);
     progW->setObjectName("progW");
     QSpinBox *progSel = new QSpinBox(ctl);
     progSel->setObjectName("progSel"); progSel->setMinimum(1); progSel->setValue(1);
-    QLabel *brLabel = new QLabel(ctl);
-    brLabel->setObjectName("brLabel");
     QPushButton *appbtn = new QPushButton(QStringLiteral("App +"), ctl);
     appbtn->setObjectName("appbtn");
     QPushButton *webbtn = new QPushButton(QStringLiteral("Web +"), ctl);
@@ -1139,8 +1145,7 @@ int main(int argc, char **argv) {
     templbtn->setObjectName("templbtn");
     progW->addItems(gProgs);
     progSel->setMaximum(qMax(1, gProgs.size()));
-    brLabel->setWordWrap(true);
-    brLabel->setText(gBrows.join(QStringLiteral(", ")));
+
     dlg->hide();                                   // openDlg shows it
     vwin.addWidget(sbar);                          // status line at the bottom
     QPushButton *undobtn = new QPushButton(QStringLiteral("Undo"), ctl);
@@ -1184,7 +1189,6 @@ int main(int argc, char **argv) {
     grid->addWidget(restoreBtn, 7, 4);
     grid->addWidget(progW, 8, 0, 1, 2); grid->addWidget(progSel, 8, 3);
     grid->addWidget(appbtn, 8, 4); grid->addWidget(webbtn, 8, 5);
-    grid->addWidget(brLabel, 9, 3, 1, 2);
     grid->addWidget(swA, 10, 3); grid->addWidget(swB, 10, 4);
     grid->addWidget(swN, 11, 0); grid->addWidget(swapbtn, 11, 1);
     grid->addWidget(recentW, 12, 0, 1, 2); grid->addWidget(recentSel, 12, 3); grid->addWidget(recentbtn, 12, 4);
@@ -1994,6 +1998,8 @@ int main(int argc, char **argv) {
                 std::printf("clicktest FAIL: template not applied ('%s')\n", v.toUtf8().constData()); ++gfail;
             }
         }
+        // Browser combo lives in the dialog now (vendor web panel).
+        if (browserPick->count() < 1) { std::printf("clicktest FAIL: browser list empty\n"); ++gfail; }
         // DIALOG gate: vendor entry = double-click on a key. openDlg must show it;
         // Close must hide it again. Target = first cell center (board size varies
         // with layout, so a fixed pixel is not guaranteed to be on the board).
