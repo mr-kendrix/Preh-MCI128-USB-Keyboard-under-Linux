@@ -274,7 +274,7 @@ static void paint_grid(QPainter &pt, const Model &m, const QSize &board) {
         if (!c.anchor) continue; // right half of a wide cap shares the painted rect
         const Map *mp = find_map_c(m.pm, c.poskey);
         const bool is_sel = (m.sel == c.poskey);
-        QColor fill(0xe6, 0xe7, 0xea);
+        QColor fill(0xc2, 0xc6, 0xcc);   // vendor grey: no POS key here at all
         for (const Cell &cc : m.cells)
             if (cc.poskey == c.poskey + 1 && cc.rc == c.rc) { fill = QColor(0xc8, 0xd8, 0xe2); break; }
         if (mp && !mp->layers.isEmpty()) {
@@ -285,9 +285,11 @@ static void paint_grid(QPainter &pt, const Model &m, const QSize &board) {
                 (sel_layer(l, m.procSel) ? for_sel : for_other) = true;
             if (for_sel) fill = QColor(0x9a, 0xc8, 0x9e);
             else if (for_other) fill = QColor(0xb4, 0xbc, 0xc8);
-            else fill = QColor(0xe6, 0xe7, 0xea);
+            else fill = QColor(0xe6, 0xe7, 0xea);   // vendor light: key exists, no function
+        } else if (mp) {
+            fill = QColor(0xe6, 0xe7, 0xea);        // poskey present, no layers
         }
-        if (is_sel) fill = QColor(0xff, 0x8a, 0x3d);
+        if (is_sel) fill = QColor(0xff, 0xe0, 0x66);   // vendor yellow = selected key
         pt.setBrush(fill);
         pt.setPen(QColor(0x6a, 0x6f, 0x78));
         pt.drawRoundedRect(c.rc, 4, 4);
@@ -308,7 +310,7 @@ static void paint_grid(QPainter &pt, const Model &m, const QSize &board) {
                             QStringLiteral("x%1").arg(mp->layers.size()));
         }
         if (is_sel) {
-            pt.setPen(QPen(QColor(0xc0, 0x50, 0x18), 2));
+            pt.setPen(QPen(QColor(0xa8, 0x8a, 0x00), 2));   // vendor yellow outline
             pt.setBrush(Qt::NoBrush);
             pt.drawRoundedRect(c.rc.adjusted(-2, -2, 2, 2), 6, 6);
         }
