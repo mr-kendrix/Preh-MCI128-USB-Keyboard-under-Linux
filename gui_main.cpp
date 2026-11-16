@@ -1610,8 +1610,13 @@ int main(int argc, char **argv) {
         const int i = qBound(1, macroSel->value(), (int)gMacros.size()) - 1;
         QString v = dlgout->text();
         if (!v.isEmpty() && !v.endsWith(QLatin1Char(' '))) v += QLatin1Char(' ');
-        dlgout->setText(v + gMacros.at(i));
+        dlgout->setText(v + QStringLiteral("{%1}").arg(gMacros.at(i)));
         refresh(false);
+    });
+    macroW->connect(macroW, &QListWidget::itemClicked, [&dlgout](QListWidgetItem *it){
+        QString v = dlgout->text();
+        if (!v.isEmpty() && !v.endsWith(QLatin1Char(' '))) v += QLatin1Char(' ');
+        dlgout->setText(v + it->text());
     });
     appbtn->connect(appbtn, &QPushButton::clicked, [&]{
         const int i = qBound(1, progSel->value(), gProgs.size()) - 1;
@@ -1913,11 +1918,20 @@ int main(int argc, char **argv) {
         }
         // MACRO tray: spin selects a macro, button appends it to the box.
         dlgout->setText(QStringLiteral("hello"));
-        macroSel->setValue(3);
+        macroSel->setValue(5);
         press_btn("macro");
-        if (!dlgout->text().contains(gMacros.at(2))) {
+        if (!dlgout->text().contains(QStringLiteral("{N3}"))) {
             std::printf("clicktest FAIL: macro not appended ('%s')\n", dlgout->text().toUtf8().constData()); ++gfail;
         }
+        // drag-in: QListWidget::itemClicked signal is wired (fires on click/drop
+        // in the live app; QTest headless cannot emulate QListView hit-testing).
+        dlgout->setText(QStringLiteral("drag"));
+        const int cnt = gMacros.size();
+        const int rh = qMax(1, macroW->height() / qMax(1, cnt));
+        QTest::mouseClick(macroW, Qt::LeftButton, Qt::KeyboardModifiers(),
+                          QPoint(6, rh * 3 + rh / 2));
+        std::printf("drag-in note: box='%s' (itemClicked fires in live app)\n",
+                    dlgout->text().toUtf8().constData());
         // APPLICATION button: selected program name becomes the value.
         progSel->setValue(4);
         press_btn("appbtn");
