@@ -101,6 +101,7 @@ struct Model {
     QVector<Cell> cells;      // board-local geometry
     QPoint dbg;               // last click point (debug)
     QString procSel;            // process view selection ("" = Always)
+    Pmap templ;               // template file (vendor: open as template)
 };
 
 // physical truth (user 2026-11-06): 110 caps in 128 slots
@@ -1132,6 +1133,10 @@ int main(int argc, char **argv) {
     recentSel->setObjectName("recentSel"); recentSel->setMinimum(1); recentSel->setValue(1);
     QPushButton *recentbtn = new QPushButton(QStringLiteral("Open recent"), ctl);
     recentbtn->setObjectName("recent");
+    QSpinBox *templSel = new QSpinBox(ctl);
+    templSel->setObjectName("templSel"); templSel->setMinimum(1); templSel->setMaximum(1);
+    QPushButton *templbtn = new QPushButton(QStringLiteral("Use template"), ctl);
+    templbtn->setObjectName("templbtn");
     progW->addItems(gProgs);
     progSel->setMaximum(qMax(1, gProgs.size()));
     brLabel->setWordWrap(true);
@@ -1183,6 +1188,7 @@ int main(int argc, char **argv) {
     grid->addWidget(swA, 10, 3); grid->addWidget(swB, 10, 4);
     grid->addWidget(swN, 11, 0); grid->addWidget(swapbtn, 11, 1);
     grid->addWidget(recentW, 12, 0, 1, 2); grid->addWidget(recentSel, 12, 3); grid->addWidget(recentbtn, 12, 4);
+    grid->addWidget(templbtn, 13, 0); grid->addWidget(templSel, 13, 1);
     grid->addWidget(stat, 5, 0, 1, 3);
     grid->addWidget(prevlbl, 6, 0, 1, 2);
     grid->addWidget(layers, 10, 0, 1, 3);
@@ -1640,6 +1646,27 @@ int main(int argc, char **argv) {
         save_note = QStringLiteral("opened recent ") + QString::number(i + 1);
     };
     recentW->addItems(gRecent); recentSel->setMaximum(qMax(1, gRecent.size()));
+    const auto do_open_template = [&save_note, pm, templSel]{
+        if (gRecent.isEmpty()) { save_note = QStringLiteral("template: list empty"); return; }
+        const int i = qBound(1, templSel->value(), gRecent.size()) - 1;
+        QFile rf(gRecent.at(i));
+        if (!rf.open(QIODevice::ReadOnly)) { save_note = QStringLiteral("template: unreadable"); return; }
+        pm->templ = parse_pmap(QString::fromUtf8(rf.readAll()));
+        rf.close();
+    };
+    const auto do_use_template = [&save_note, &refresh, pm]{
+        Map tmap;
+        for (const Map &tm : pm->templ.maps) if (tm.poskey == pm->sel) { tmap = tm; break; }
+        if (tmap.layers.isEmpty() || pm->sel < 0) { save_note = QStringLiteral("template: no map for sel"); return; }
+        const int ix = [pm]{ for (int j = 0; j < pm->pm.maps.size(); ++j) if (pm->pm.maps[j].poskey == pm->sel) return j; return -1; }();
+        if (ix >= 0) pm->pm.maps[ix].layers = tmap.layers;
+        else pm->pm.maps << Map{pm->sel, tmap.layers};
+        refresh(false);
+        save_note = QStringLiteral("template applied to sel");
+    };
+
+    templbtn->connect(templbtn, &QPushButton::clicked, [&]{ do_use_template(); });
+    mk_item(sm, QStringLiteral("Open as template"), [&]{ do_open_template(); refresh(false); });
     recentbtn->connect(recentbtn, &QPushButton::clicked, [&]{ do_open_recent(); });
     mk_item(fm, QStringLiteral("Open recent"), [&]{ do_open_recent(); });
     mk_item(fm, QStringLiteral("Recent files"), [&]{
@@ -1950,6 +1977,21 @@ int main(int argc, char **argv) {
                 || !save_note.startsWith(QStringLiteral("opened recent 2"))) {
                 std::printf("clicktest FAIL: open recent broken (n=%d path=%s)\n", before_n, pm->path.toUtf8().constData());
                 ++gfail;
+            }
+        }
+        // TEMPLATE: mark sel layer, load template (recent 1 = original file),
+        // 'Use template' restores the template layers over the selected key.
+        dlgout->setText(QStringLiteral("SEEDVAL"));
+        spinl->setValue(1);
+        press_btn("set");
+        do_open_template();
+        if (!pm->templ.maps.isEmpty()) pm->sel = pm->templ.maps.first().poskey;
+        press_btn("templbtn");
+        {
+            const Map *mp = find_map_c(pm->pm, pm->sel);
+            const QString v = (mp && !mp->layers.isEmpty()) ? mp->layers[0].value : QString();
+            if (v == QStringLiteral("SEEDVAL") || v.isEmpty() || !save_note.startsWith(QStringLiteral("template applied"))) {
+                std::printf("clicktest FAIL: template not applied ('%s')\n", v.toUtf8().constData()); ++gfail;
             }
         }
         // DIALOG gate: vendor entry = double-click on a key. openDlg must show it;
