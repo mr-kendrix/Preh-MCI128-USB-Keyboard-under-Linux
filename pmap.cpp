@@ -104,6 +104,30 @@ Pmap parse_pmap(const QString &xml) {
             p.maps.append(m);
         }
     }
+    // <Key> sections: original geometry (POSKey + ParentPosKey + X/Y/Width/Height)
+    g_geom.clear();
+    QRegularExpression keyRe("<Key>(.*?)</Key>",
+                             QRegularExpression::DotMatchesEverythingOption);
+    {
+        auto numf = [&](const QString &blk, const QString &tag) -> int {
+            QRegularExpression r("<" + tag + ">(.*?)</" + tag + ">",
+                                 QRegularExpression::DotMatchesEverythingOption);
+            const QRegularExpressionMatch m = r.match(blk);
+            if (!m.isValid()) return 0;
+            return unhex_local(m.captured(1).trimmed()).trimmed().toInt();
+        };
+        QRegularExpressionMatchIterator kit = keyRe.globalMatch(xml);
+        while (kit.hasNext()) {
+            const QString blk = kit.next().captured(1);
+            const int pk = numf(blk, "PosKey");
+            if (pk <= 0) continue;
+            KeyGeom kg;
+            kg.x = numf(blk, "X"); kg.y = numf(blk, "Y");
+            kg.w = numf(blk, "Width"); kg.h = numf(blk, "Height");
+            kg.parent = numf(blk, "ParentPosKey");
+            if (kg.w > 0 && kg.h > 0) g_geom.insert(pk, kg);
+        }
+    }
     return p;
 }
 

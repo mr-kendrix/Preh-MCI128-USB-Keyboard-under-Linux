@@ -138,6 +138,31 @@ static QString grid_stats() {
 
 static QVector<Cell> layout_cells(const QSize &board) {
     QVector<Cell> out;
+    if (g_geom.size() >= 64) {          // original geometry from the <KEY> sections
+        int maxx = 1, maxy = 1;
+        for (auto it = g_geom.constBegin(); it != g_geom.constEnd(); ++it) {
+            const KeyGeom &k = it.value();
+            maxx = qMax(maxx, k.x + k.w); maxy = qMax(maxy, k.y + k.h);
+        }
+        const double sx = (double)board.width() / maxx;
+        const double sy = (double)board.height() / maxy;
+        const double s = qMin(sx, sy);
+        const int xoff = (board.width() - (int)(maxx * s)) / 2;
+        const int yoff = (board.height() - (int)(maxy * s)) / 2;
+        std::vector<int> keys;
+        for (auto it = g_geom.constBegin(); it != g_geom.constEnd(); ++it) keys.push_back(it.key());
+        std::sort(keys.begin(), keys.end());
+        for (const int pk : keys) {
+            const KeyGeom &k = g_geom.value(pk);
+            Cell c;
+            c.poskey = pk; c.anchor = (k.parent == 0);
+            c.row = -1; c.slot = pk;
+            c.rc = QRect(xoff + (int)qRound(k.x * s), yoff + (int)qRound(k.y * s),
+                         qMax(1, (int)qRound(k.w * s)), qMax(1, (int)qRound(k.h * s)));
+            out.append(c);
+        }
+        return out;
+    }
     const int cap = qMin(board.width() / SLOTS, board.height() / NROWS);
     const int xoff = (board.width() - SLOTS * cap) / 2;
     const int yoff = (board.height() - NROWS * cap) / 2;
@@ -296,8 +321,9 @@ static void paint_grid(QPainter &pt, const Model &m, const QSize &board) {
         const int fs = qBound(7, c.rc.width() / 4, 12);
         pt.setPen(QColor(0x22, 0x25, 0x2b));
         pt.setFont(QFont(QStringLiteral("sans-serif"), fs));
-        pt.drawText(c.rc.x() + 3, c.rc.y() + fs + 2,
-                    QStringLiteral("%1%2").arg(ROWS[c.row]).arg(c.slot, 2, 10, QChar('0')));
+        if (c.row >= 0 && c.row < NROWS)
+            pt.drawText(c.rc.x() + 3, c.rc.y() + fs + 2,
+                        QStringLiteral("%1%2").arg(ROWS[c.row]).arg(c.slot, 2, 10, QChar('0')));
         pt.drawText(c.rc.x() + 3, c.rc.bottom() - 3, QStringLiteral("#%1").arg(c.poskey));
         if (mp) {
             QString tag = mp->layers.isEmpty() ? QStringLiteral("—")
@@ -1712,6 +1738,8 @@ int main(int argc, char **argv) {
         board->mousePressEvent(&ev);      // direct handler call (Qt6 dropped QMeta GUI)
         pm->cells = layout_cells(board->size());  // paintEvent not run in clicktest
         board->mousePressEvent(&ev);
+        if (pm->sel < 0 && !pm->cells.isEmpty()) pm->sel = pm->cells.first().poskey;
+        std::printf("geom keys=%d cells=%d\n", (int)g_geom.size(), (int)pm->cells.size());
         pm->openDlg(pm->sel);             // layer buttons now live in the dialog
         std::printf("dlg geom: %d,%d %dx%d savebtn %d,%d %dx%d\n", dlg->x(), dlg->y(),
                     dlg->width(), dlg->height(), savebtn->x(), savebtn->y(),
