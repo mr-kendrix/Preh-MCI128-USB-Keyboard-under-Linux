@@ -673,7 +673,8 @@ static int gate_click(Model &m, const QStringList &cells, const QString &setv,
 
 static QByteArray make_label_pdf_geom(const QVector<std::pair<int, QString>> &rows,
                                       const QVector<std::pair<int, QString>> &rows_types,
-                                      const QHash<int, QString> &print_texts)
+                                      const QHash<int, QString> &print_texts,
+                                      const QHash<int, QString> &font_descs)
 {
     // one A4 page: rect per POSKey at the pmap's own <Key> geometry + label inside
     const QChar L('<'), G('>');
@@ -722,7 +723,14 @@ static QByteArray make_label_pdf_geom(const QVector<std::pair<int, QString>> &ro
         }
         if (lbl.isEmpty()) continue;
         const double x = 22 + k.x * s, y = 842 - 20 - (k.y + k.h) * s + 2;
-        const double fpt = qBound(4.0, k.fsize > 0 ? k.fsize * s : 7.0, 14.0);
+        double fpt = k.fsize > 0 ? k.fsize * s : 7.0;
+        if (font_descs.contains(it.key())) {
+            const QString fd = font_descs.value(it.key());
+            QRegularExpression nRe(QStringLiteral("[^0-9]*([0-9][0-9.]*)pt"));
+            if (auto nm = nRe.match(fd); nm.isValid())
+                fpt = nm.captured(1).toDouble() / 100.0 * s;   // vendor MAP font
+        }
+        fpt = qBound(4.0, fpt, 24.0);
         int c = k.fore;
         if (c < 0) c = 0;                                  // default black
         const double cr = ((c >> 16) & 0xFF) / 255.0, cg = ((c >> 8) & 0xFF) / 255.0, cb = (c & 0xFF) / 255.0;
@@ -1913,11 +1921,13 @@ int main(int argc, char **argv) {
         pf.write(make_label_pdf(rows)); pf.close();
         const QString tgt2 = (pm->path.isEmpty() ? out : pm->path) + QStringLiteral(".geom.pdf");
         if (!g_geom.isEmpty()) {
-            QHash<int, QString> texts;
-            for (const Map &mp : pm->pm.maps)
-                if (!mp.print_text.isEmpty()) texts.insert(mp.poskey, mp.print_text);
-            QFile pf2(tgt2);
-            if (pf2.open(QIODevice::WriteOnly)) { pf2.write(make_label_pdf_geom(rows, rt, texts)); pf2.close(); }
+           QHash<int, QString> texts, fonts;
+           for (const Map &mp : pm->pm.maps) {
+               if (!mp.print_text.isEmpty()) texts.insert(mp.poskey, mp.print_text);
+               if (!mp.fontdesc.isEmpty()) fonts.insert(mp.poskey, mp.fontdesc);
+           }
+           QFile pf2(tgt2);
+           if (pf2.open(QIODevice::WriteOnly)) { pf2.write(make_label_pdf_geom(rows, rt, texts, fonts)); pf2.close(); }
         }
         save_note = QStringLiteral("exported %1 labels -> %2").arg(rows.size()).arg(tgt);
     };
@@ -2283,10 +2293,12 @@ int main(int argc, char **argv) {
                 const QByteArray pdfb = make_label_pdf(rows);
                 QFile fw(tgt); if (fw.open(QIODevice::WriteOnly)) { fw.write(pdfb); fw.close(); }
                 const QByteArray gb = [&]{
-                    QHash<int, QString> texts;
-                    for (const Map &mp : fresh.maps)
+                    QHash<int, QString> texts, fonts;
+                    for (const Map &mp : fresh.maps) {
                         if (!mp.print_text.isEmpty()) texts.insert(mp.poskey, mp.print_text);
-                    return make_label_pdf_geom(rows, rt, texts);
+                        if (!mp.fontdesc.isEmpty()) fonts.insert(mp.poskey, mp.fontdesc);
+                    }
+                    return make_label_pdf_geom(rows, rt, texts, fonts);
                 }();
                 const QString gt2 = g_origpath + QStringLiteral(".geom.pdf");
                 QFile gw(gt2); if (gw.open(QIODevice::WriteOnly)) { gw.write(gb); gw.close(); }

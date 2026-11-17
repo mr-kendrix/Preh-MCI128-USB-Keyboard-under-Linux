@@ -73,6 +73,10 @@ Pmap parse_pmap(const QString &xml) {
                     return v.toInt();
                 };
                 m.fore = colr("ForeColor"); m.back = colr("BackColor");
+                QRegularExpression foRe("<Font>([^<]*)</Font>",
+                                        QRegularExpression::DotMatchesEverythingOption);
+                if (auto fm2 = foRe.match(body); fm2.isValid())
+                    m.fontdesc = unhex_local(fm2.captured(1).trimmed()).trimmed();
             }
             {
                 QRegularExpressionMatchIterator lt = layerRe.globalMatch(body);
@@ -187,6 +191,8 @@ QString serialize_pmap(const Pmap &p) {
     for (const Map &m : p.maps) {
         x += "<MAP><POSKey>" + to_hex_cp1252(QString::number(m.poskey)) + "</POSKey>";
         x += "<Text>" + to_hex_cp1252(m.print_text) + "</Text>";
+        if (!m.fontdesc.isEmpty())
+            x += "<Font>" + to_hex_cp1252(m.fontdesc) + "</Font>";
         if (m.fore != -2)
             x += "<ForeColor>" + to_hex_cp1252(QString::number(m.fore)) + "</ForeColor>";
         if (m.back != -2)
