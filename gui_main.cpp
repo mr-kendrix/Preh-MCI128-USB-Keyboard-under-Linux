@@ -671,7 +671,8 @@ static int gate_click(Model &m, const QStringList &cells, const QString &setv,
     return 0;
 }
 
-static QByteArray make_label_pdf_geom(const QVector<std::pair<int, QString>> &rows)
+static QByteArray make_label_pdf_geom(const QVector<std::pair<int, QString>> &rows,
+                                      const QVector<std::pair<int, QString>> &rows_types)
 {
     // one A4 page: rect per POSKey at the pmap's own <Key> geometry + label inside
     const QChar L('<'), G('>');
@@ -690,13 +691,18 @@ static QByteArray make_label_pdf_geom(const QVector<std::pair<int, QString>> &ro
     QString body;
     body += QStringLiteral("0.25 w\n");
     QHash<int, QString> hasv;
-    for (const auto &r : rows) hasv.insert(r.first, r.second);
+    QHash<int, QString> hast;
+    for (const auto &r : rows) { hasv.insert(r.first, r.second); }
+    for (const auto &r : rows_types) { hast.insert(r.first, r.second); }
     for (auto it = g_geom.constBegin(); it != g_geom.constEnd(); ++it) {
         const KeyGeom &k = it.value();
         const double x = 20 + k.x * s, y = 842 - 20 - (k.y + k.h) * s;   // flip Y
-        const bool lit = hasv.contains(it.key()) && hasv.value(it.key()) != QLatin1String("-");
-        const QString col = lit ? QStringLiteral("0.60 0.78 0.62")     // green: has function
-                                : QStringLiteral("0.90 0.91 0.92");    // light: poskey only
+        const bool has = hasv.contains(it.key()) && hasv.value(it.key()) != QLatin1String("-");
+        const QString ty = hast.value(it.key());
+        const bool web = (ty == QStringLiteral("WEBSITE") || ty == QStringLiteral("APPL"));
+        const QString col = !has ? QStringLiteral("0.90 0.91 0.92")                                   // light
+                          : web ? QStringLiteral("0.71 0.74 0.78")                                   // blue-grey
+                                : QStringLiteral("0.60 0.78 0.62");                                  // green
         body += col + QStringLiteral(" rg\n")
               + QStringLiteral("%1 %2 %3 %4 re f S\n")
                     .arg(QString::number(x, 'f', 1)).arg(QString::number(y, 'f', 1))
@@ -1870,17 +1876,23 @@ int main(int argc, char **argv) {
         refresh(false);
     });
     auto do_export_pdf = [&save_note, &out, pm]{
-        QVector<std::pair<int, QString>> rows;
-        QMap<int, QString> vals;
+        QMap<int, QString> vals, types;
         for (const Map &mp : pm->pm.maps)
-            if (!vals.contains(mp.poskey))
+            if (!vals.contains(mp.poskey)) {
                 vals.insert(mp.poskey, mp.layers.isEmpty() ? QStringLiteral("-") : mp.layers.first().value);
+                types.insert(mp.poskey, mp.layers.isEmpty() ? QString() : mp.layers.first().type);
+            }
+        QVector<std::pair<int, QString>> rows, rt;
         if (!g_geom.isEmpty())
-            for (auto it = g_geom.cbegin(); it != g_geom.cend(); ++it)
+            for (auto it = g_geom.cbegin(); it != g_geom.cend(); ++it) {
                 rows << std::make_pair(it.key(), vals.value(it.key(), QStringLiteral("-")));
+                rt << std::make_pair(it.key(), types.value(it.key()));
+            }
         else
-            for (const Map &mp : pm->pm.maps)
+            for (const Map &mp : pm->pm.maps) {
                 rows << std::make_pair(mp.poskey, vals.value(mp.poskey));
+                rt << std::make_pair(mp.poskey, types.value(mp.poskey));
+            }
         if (rows.isEmpty()) { save_note = QStringLiteral("export: no keys"); return; }
         const QString tgt = (pm->path.isEmpty() ? out : pm->path) + QStringLiteral(".labels.pdf");
         QFile pf(tgt);
@@ -1889,7 +1901,7 @@ int main(int argc, char **argv) {
         const QString tgt2 = (pm->path.isEmpty() ? out : pm->path) + QStringLiteral(".geom.pdf");
         if (!g_geom.isEmpty()) {
             QFile pf2(tgt2);
-            if (pf2.open(QIODevice::WriteOnly)) { pf2.write(make_label_pdf_geom(rows)); pf2.close(); }
+            if (pf2.open(QIODevice::WriteOnly)) { pf2.write(make_label_pdf_geom(rows, rt)); pf2.close(); }
         }
         save_note = QStringLiteral("exported %1 labels -> %2").arg(rows.size()).arg(tgt);
     };
@@ -2239,18 +2251,22 @@ int main(int argc, char **argv) {
             std::printf("gate orig0=%s exists=%d size=%lld\n", orig0.toUtf8().constData(),
                         (int)QFile::exists(orig0), (long long)QFileInfo(orig0).size());
             if (rf.open(QIODevice::ReadOnly)) { fresh = parse_pmap(QString::fromLatin1(rf.readAll())); rf.close(); }
-            QVector<std::pair<int, QString>> rows;
-            for (const Map &mp : fresh.maps)
+            QVector<std::pair<int, QString>> rows, rt;
+            for (const Map &mp : fresh.maps) {
                 rows << std::make_pair(mp.poskey, mp.layers.isEmpty() ? QString() : mp.layers.first().value);
+                rt << std::make_pair(mp.poskey, mp.layers.isEmpty() ? QString() : mp.layers.first().type);
+            }
             for (int dup = 0; dup < 3 && rows.size() < 150; ++dup)
-                for (int i = 0, n = (int)rows.size(); i < n && rows.size() < 150; ++i)
+                for (int i = 0, n = (int)rows.size(); i < n && rows.size() < 150; ++i) {
                     rows << std::make_pair(rows[i].first + 1000, rows[i].second);   // pagination filler
+                    rt << std::make_pair(rt[i].first + 1000, rt[i].second);
+                }
             const QString tgt = g_origpath + QStringLiteral(".labels.pdf");
             QFile wf(tgt);
             if (rows.size() > 40) {
                 const QByteArray pdfb = make_label_pdf(rows);
                 QFile fw(tgt); if (fw.open(QIODevice::WriteOnly)) { fw.write(pdfb); fw.close(); }
-                const QByteArray gb = make_label_pdf_geom(rows);
+                const QByteArray gb = make_label_pdf_geom(rows, rt);
                 const QString gt2 = g_origpath + QStringLiteral(".geom.pdf");
                 QFile gw(gt2); if (gw.open(QIODevice::WriteOnly)) { gw.write(gb); gw.close(); }
                 std::printf("geom pdf bytes=%d\n", (int)gb.size());
