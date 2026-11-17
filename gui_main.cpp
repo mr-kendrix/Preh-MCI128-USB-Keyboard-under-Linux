@@ -1447,6 +1447,20 @@ int main(int argc, char **argv) {
     QHBoxLayout *hrow = new QHBoxLayout(mid);
     QWidget *scol = new QWidget(mid);   // keyboard pic + "Process:" list + hint (vendor §1)
     QVBoxLayout *vcol = new QVBoxLayout(scol);
+    QLabel *logoLbl = new QLabel(scol); logoLbl->setObjectName("logoLbl");
+    {
+        QImage img(200, 34, QImage::Format_ARGB32); img.fill(QColor(0,0,0,0));
+        QPainter pt(&img);
+        pt.setBrush(QColor(0x4f, 0x7d, 0x96)); pt.setPen(QPen(QColor(0x2f,0x4c,0x5f), 1));
+        pt.drawRoundedRect(QRect(4, 6, 26, 22), 5, 5);          // mini keyboard badge
+        pt.setBrush(QColor(0xe6, 0xe7, 0xea)); pt.setPen(QPen(QColor(0x2f,0x4c,0x5f), 0));
+        for (int r = 0; r < 2; ++r) for (int c = 0; c < 4; ++c)
+            pt.drawRoundedRect(QRect(8 + c*5, 10 + r*7, 4, 5), 1, 1);
+        pt.setBrush(QColor(0xff,0xe0,0x66));
+        pt.drawRoundedRect(QRect(8+2*5, 10+7, 4, 5), 1, 1);
+        pt.end();
+        logoLbl->setPixmap(QPixmap::fromImage(img));
+    }
     QLabel *kpic = new QLabel(scol); kpic->setObjectName("kpic");
     {
         QImage img(220, 130, QImage::Format_ARGB32); img.fill(0);
@@ -1476,7 +1490,7 @@ int main(int argc, char **argv) {
                                         " QListView::item:selected{background-color:#ffe066; color:#1f1f1f;}"));
     QLabel *shint = new QLabel(QStringLiteral("Double-click a key to edit it."), scol);
     shint->setWordWrap(true);
-    vcol->addWidget(kpic, 2); vcol->addWidget(phead); vcol->addWidget(procW, 3); vcol->addWidget(shint);
+    vcol->addWidget(logoLbl, 2); vcol->addWidget(kpic, 3); vcol->addWidget(phead); vcol->addWidget(procW, 3); vcol->addWidget(shint);
     hrow->addWidget(scol, 1);
     QScrollArea *scr = new QScrollArea(nullptr);
     scr->setObjectName("scroll");
@@ -3002,7 +3016,7 @@ int main(int argc, char **argv) {
             winbtn, recbtn, lblWin, dlg, dclosebtn, dfn, dft, dapp, dweb, menu, sbar,
             mid, procW, renprocBtn, delprocBtn, statusline, cbBtf, cbRep, cbSlw,
             knewdlg, sdlg, knq, knalways, knproc, procFld, klistbtn, knextbtn,
-            kpic, phead, shint, wHead, winW, scr,
+            kpic, phead, shint, wHead, winW, scr, logoLbl,
             shdr, cbDetect, cbStart, cbMin, cbOpen, dfLbl, dfCb, debtn, enbtn };
         QWidget *saboteur = nullptr;
         if (getenv("PKT_LAYOUT_SABOTAGE")) {
@@ -3034,7 +3048,7 @@ int main(int argc, char **argv) {
                    x == menu ? 43 : x == sbar ? 44 : x == mid ? 45 : x == procW ? 46 :
                    x == renprocBtn ? 47 : x == delprocBtn ? 48 : x == statusline ? 49 :
                    x == cbBtf ? 50 : x == cbRep ? 51 : x == cbSlw ? 52 :
-                   x == scr ? 73 : x == knewdlg ? 53 : x == sdlg ? 54 : x == knq ? 55 : x == knalways ? 56 :
+                   x == scr ? 73 : x == logoLbl ? 75 : x == knewdlg ? 53 : x == sdlg ? 54 : x == knq ? 55 : x == knalways ? 56 :
                    x == knproc ? 57 : x == procFld ? 58 : x == klistbtn ? 59 : x == knextbtn ? 60 :
                    x == shdr ? 61 : x == cbDetect ? 62 : x == cbStart ? 63 : x == cbMin ? 64 :
                    x == cbOpen ? 65 : x == dfLbl ? 66 : x == dfCb ? 67 : x == debtn ? 68 : x == enbtn ? 69 :
