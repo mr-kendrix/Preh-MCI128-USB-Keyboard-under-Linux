@@ -709,12 +709,22 @@ static QByteArray make_label_pdf_geom(const QVector<std::pair<int, QString>> &ro
                     .arg(QString::number(k.w * s, 'f', 1)).arg(QString::number(k.h * s, 'f', 1));
     }
     body += QStringLiteral("BT\n/F0 7 Tf\n");
-    for (const auto &r : rows) {
-        const auto it = g_geom.find(r.first);
-        if (it == g_geom.end()) continue;
+    for (auto it = g_geom.cbegin(); it != g_geom.cend(); ++it) {
         const KeyGeom &k = it.value();
+        QString lbl = k.text;
+        if (lbl.isEmpty()) {
+            const auto rv = hasv.find(it.key());
+            if (rv != hasv.end() && rv.value() != QLatin1String("-"))
+                lbl = QStringLiteral("%1: %2").arg(it.key()).arg(rv.value());
+        }
+        if (lbl.isEmpty()) continue;
         const double x = 22 + k.x * s, y = 842 - 20 - (k.y + k.h) * s + 2;
-        const QString lbl = QStringLiteral("%1: %2").arg(r.first).arg(r.second);
+        const double fpt = qBound(4.0, k.fsize > 0 ? k.fsize * s : 7.0, 14.0);
+        int c = k.fore;
+        if (c < 0) c = 0;                                  // default black
+        const double cr = ((c >> 16) & 0xFF) / 255.0, cg = ((c >> 8) & 0xFF) / 255.0, cb = (c & 0xFF) / 255.0;
+        body += QStringLiteral("%1 %2 %3 rg\n").arg(cr, 0, 'f', 2).arg(cg, 0, 'f', 2).arg(cb, 0, 'f', 2);
+        body += QStringLiteral("/F0 %1 Tf\n").arg(QString::number(fpt, 'f', 1));
         body += QStringLiteral("%1 %2 Td(")
                     .arg(QString::number(x, 'f', 1)).arg(QString::number(y, 'f', 1))
                     + esc(lbl) + QStringLiteral(") Tj\n");

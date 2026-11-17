@@ -125,6 +125,31 @@ Pmap parse_pmap(const QString &xml) {
             kg.x = numf(blk, "X"); kg.y = numf(blk, "Y");
             kg.w = numf(blk, "Width"); kg.h = numf(blk, "Height");
             kg.parent = numf(blk, "ParentPosKey");
+            {   // <Print><Font><Text>hex</Text><Font>hex "Arial, 4800pt"</Font>
+                //                       <MarginLeft/><MarginTop/><BackColor/><ForeColor/>
+                QRegularExpression tRe("<Text>(.*?)</Text>",
+                                       QRegularExpression::DotMatchesEverythingOption);
+                if (auto tm = tRe.match(blk); tm.isValid())
+                    kg.text = unhex_local(tm.captured(1).trimmed()).trimmed();
+                QRegularExpression fRe("<Font>([^<]*)</Font>",
+                                       QRegularExpression::DotMatchesEverythingOption);
+                if (auto fm = fRe.match(blk); fm.isValid()) {
+                    const QString fs = unhex_local(fm.captured(1).trimmed());
+                    QRegularExpression nRe(QStringLiteral("[^0-9]*([0-9]+)pt"));
+                    if (auto nm = nRe.match(fs); nm.isValid())
+                        kg.fsize = nm.captured(1).toDouble() / 100.0;   // "4800pt" -> 48 pt
+                }
+                auto col = [&](const QString &tag) -> int {
+                    QRegularExpression r("<" + tag + ">([^<]*)</" + tag + ">",
+                                         QRegularExpression::DotMatchesEverythingOption);
+                    const QRegularExpressionMatch m = r.match(blk);
+                    if (!m.isValid() || m.captured(1).trimmed().isEmpty()) return -1;
+                    const QString v = unhex_local(m.captured(1).trimmed()).trimmed();
+                    if (v == QLatin1String("-1")) return -1;            // vendor: default
+                    return v.toInt();                                    // signed int color
+                };
+                kg.fore = col("ForeColor"); kg.back = col("BackColor");
+            }
             if (kg.w > 0 && kg.h > 0) g_geom.insert(pk, kg);
         }
     }
