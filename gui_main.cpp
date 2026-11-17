@@ -696,6 +696,31 @@ static int gate_shot(Model &m, const QString &file) {
 static QMenu *g_ctxmenu = nullptr;
 static int g_ctx_count = 0;
 static std::function<void()> g_ctx_edit, g_ctx_copy, g_ctx_paste, g_ctx_del;
+// vector-drawn icons (no font glyphs, crisp at any DPI, headless-safe)
+static QIcon mkicon(const char *kind) {
+    QPixmap im(24, 24);
+    im.fill(QColor(0, 0, 0, 0));
+    QPainter pt(&im);
+    pt.setRenderHint(QPainter::Antialiasing);
+    pt.setPen(QPen(QColor(0x33, 0x38, 0x40), 2));
+    const QString k = QString::fromLatin1(kind);
+    if (k == "plus") {
+        pt.drawLine(QPointF(12, 4), QPointF(12, 20)); pt.drawLine(QPointF(4, 12), QPointF(20, 12));
+    } else if (k == "trash") {
+        pt.drawRect(QRect(8, 8, 8, 13));             // body
+        pt.drawLine(QPointF(6, 6), QPointF(18, 6));  // lid
+        pt.drawLine(QPointF(10, 4), QPointF(14, 4)); // handle
+    } else if (k == "pencil") {
+        pt.drawLine(QPointF(6, 18), QPointF(18, 6));
+        pt.drawLine(QPointF(5, 19), QPointF(9, 15)); pt.drawLine(QPointF(15, 9), QPointF(19, 5));
+    } else if (k == "copy") {
+        pt.drawRect(QRect(4, 3, 9, 9));              // back sheet
+        pt.drawRect(QRect(10, 11, 9, 9));            // front sheet
+    }
+    pt.end();
+    QIcon icon; icon.addPixmap(QPixmap(im)); return icon;
+}
+
 class MapView : public QWidget {
 public:
     Model *m_ = nullptr;
@@ -1103,12 +1128,16 @@ int main(int argc, char **argv) {
     QLabel *laylbl = new QLabel(QStringLiteral("Layer #"), dlg);
     QSpinBox *spinl = new QSpinBox(dlg);
     QPushButton *addbtn = new QPushButton(QStringLiteral("+ Layer"), dlg);
+    addbtn->setIcon(mkicon("plus"));
     QPushButton *setbtn = new QPushButton(QStringLiteral("Set"), dlg);
-    QPushButton *delbtn = new QPushButton(QStringLiteral("\U0001F5B9 Delete"), dlg);
+    QPushButton *delbtn = new QPushButton(QStringLiteral("Delete"), dlg);
+    delbtn->setIcon(mkicon("trash"));
     QPushButton *savebtn = new QPushButton(QStringLiteral("Save key"), dlg);
     QPushButton *depbtn = new QPushButton(QStringLiteral("Set Dep"), dlg);
-    QPushButton *renbtn = new QPushButton(QStringLiteral("\u270E Rename"), dlg);
-    QPushButton *copybtn = new QPushButton(QStringLiteral("\u29C9 Copy"), dlg);
+    QPushButton *renbtn = new QPushButton(QStringLiteral("Rename"), dlg);
+    renbtn->setIcon(mkicon("pencil"));
+    QPushButton *copybtn = new QPushButton(QStringLiteral("Copy"), dlg);
+    copybtn->setIcon(mkicon("copy"));
     QPushButton *dclosebtn = new QPushButton(QStringLiteral("Close"), dlg);
     dclosebtn->setObjectName("close");
     QRadioButton *dfn = new QRadioButton(dlg);
