@@ -671,6 +671,81 @@ static int gate_click(Model &m, const QStringList &cells, const QString &setv,
     return 0;
 }
 
+// ------- Helvetica width table + label fit: SAME table for fit AND draw -------
+struct Fit { double pt = 0; QVector<QString> lines; bool truncated = false;
+             double wmax = 0, hmax = 0; };
+static const QHash<int, int> &helv_w()
+{
+    static const QHash<int, int> t = {
+        {32,278},{33,278},{34,355},{35,556},{36,556},{37,889},{38,667},{39,191},
+        {40,333},{41,333},{42,389},{43,584},{44,278},{45,333},{46,278},{47,278},
+        {48,556},{49,556},{50,556},{51,556},{52,556},{53,556},{53,556},{54,556},{55,556},{56,556},{57,556},
+        {58,278},{59,278},{60,584},{61,584},{62,584},{63,556},{64,1015},
+        {65,667},{66,667},{67,722},{68,722},{69,667},{70,611},{71,778},{72,722},
+        {73,278},{74,500},{75,667},{76,278},{77,833},{78,722},{79,778},{80,667},
+        {81,778},{82,722},{83,667},{84,611},{85,667},{86,667},{87,944},{88,667},
+        {89,667},{90,611},
+        {91,278},{92,278},{93,278},{94,469},{95,556},{96,333},
+        {97,556},{98,556},{99,556},{100,556},{101,556},{102,278},{103,556},{104,556},
+        {105,278},{106,278},{107,556},{108,278},{109,833},{110,556},{111,556},{112,556},
+        {113,556},{114,333},{115,500},{116,278},{117,556},{118,556},{119,722},{120,556},
+        {121,556},{122,500},{123,334},{124,260},{125,334},{126,584},
+        {0xA0,278},{0xC4,778},{0xD6,778},{0xDC,778},{0xDF,556},{0xE4,556},{0xF6,556},{0xFC,556},
+        {0x80,556},{0x85,1000},{0x91,222},{0x92,222},{0x93,333},{0x94,333},{0x96,556},{0x97,1000}};
+    return t;
+}
+static double text_w(const QString &s, double fpt)
+{
+    const QHash<int, int> &t = helv_w();
+    double w = 0;
+    for (const QChar c : s) w += t.value(c.unicode(), 556);
+    return w / 1000.0 * fpt;
+}
+static Fit fit_label(const QString &text, double kw, double kh, double start_pt)
+{
+    // keep the caption's own line breaks; shrink from start_pt in 0.25 steps (never grow);
+    // wrap at spaces when still too wide; floor 5 pt -> ellipsis truncate
+    const double pad = 2.0, avail_w = qMax(4.0, kw - 2 * pad), avail_h = qMax(4.0, kh - 2 * pad);
+    QVector<QString> base;
+    for (const QString &ln : text.split(QRegularExpression(QStringLiteral("[\\r\\n]+"))))
+        if (!ln.trimmed().isEmpty()) base << ln.trimmed();
+    if (base.isEmpty()) return {};
+    auto wrap = [&](double fpt) {
+        QVector<QString> out;
+        for (const QString &ln : base) {
+            QString cur;
+            for (const QString &wd : ln.split(QLatin1Char(' '))) {
+                const QString cand = cur.isEmpty() ? wd : cur + QLatin1Char(' ') + wd;
+                if (text_w(cand, fpt) <= avail_w || cur.isEmpty()) cur = cand;
+                else { if (!cur.isEmpty()) out << cur; cur = wd; }
+            }
+            out << cur;
+        }
+        double wmax = 0;
+        for (const QString &l : out) wmax = qMax(wmax, text_w(l, fpt));
+        return std::pair{out, wmax};
+    };
+    for (double fpt = start_pt; fpt >= 5.0; fpt -= 0.25) {
+        auto [out, wmax] = wrap(fpt);
+        const double hmax = out.size() * fpt * 1.2;
+        if (wmax <= avail_w && hmax <= avail_h) return {fpt, out, false, wmax, hmax};
+    }
+    const double fpt = 5.0;
+    auto [out, wmax0] = wrap(fpt);
+    bool trunc = false;
+    for (QString &l : out)
+        while (text_w(l, fpt) > avail_w && l.size() > 1) {
+            if (!l.endsWith(QChar(0x85))) l += QChar(0x85);
+            const bool e = l.endsWith(QChar(0x85));
+            l = l.left(qMax(1, l.size() - (e ? 2 : 1)));
+            trunc = true;
+        }
+    while (out.size() * fpt * 1.2 > avail_h && out.size() > 1) { out.removeLast(); trunc = true; }
+    double wmax = 0;
+    for (const QString &l : out) wmax = qMax(wmax, text_w(l, fpt));
+    return {fpt, out, trunc, wmax, out.size() * fpt * 1.2};
+}
+
 static QByteArray make_label_pdf_geom(const QVector<std::pair<int, QString>> &rows,
                                       const QVector<std::pair<int, QString>> &rows_types,
                                       const QHash<int, QString> &print_texts,
@@ -710,7 +785,7 @@ static QByteArray make_label_pdf_geom(const QVector<std::pair<int, QString>> &ro
                     .arg(QString::number(x, 'f', 1)).arg(QString::number(y, 'f', 1))
                     .arg(QString::number(k.w * s, 'f', 1)).arg(QString::number(k.h * s, 'f', 1));
     }
-    body += QStringLiteral("BT\n/F0 7 Tf\n");
+    auto n1 = [](double v) { return QString::number(v, 'f', 1); };
     for (auto it = g_geom.cbegin(); it != g_geom.cend(); ++it) {
         const KeyGeom &k = it.value();
         QString lbl = k.text;
@@ -722,34 +797,45 @@ static QByteArray make_label_pdf_geom(const QVector<std::pair<int, QString>> &ro
                 lbl = QStringLiteral("%1: %2").arg(it.key()).arg(rv.value());
         }
         if (lbl.isEmpty()) continue;
-        const double x = 22 + k.x * s, y = 842 - 20 - (k.y + k.h) * s + 2;
-        double fpt = k.fsize > 0 ? k.fsize * s : 7.0;
+        const double kw = k.w * s, kh = k.h * s;
+        double start = 12.0;
         if (font_descs.contains(it.key())) {
-            const QString fd = font_descs.value(it.key());
             QRegularExpression nRe(QStringLiteral("[^0-9]*([0-9][0-9.]*)pt"));
-            if (auto nm = nRe.match(fd); nm.isValid())
-                fpt = nm.captured(1).toDouble() / 100.0 * s;   // vendor MAP font
-        }
-        fpt = qBound(6.0, fpt, 24.0);   // readable floor: board-space pt x s is too small
+            if (auto nm = nRe.match(font_descs.value(it.key())); nm.isValid())
+                start = nm.captured(1).toDouble() / 100.0 * s;
+        } else if (k.fsize > 0) start = k.fsize * s;
+        const Fit f = fit_label(lbl, kw, kh, qBound(5.0, start, 40.0));
+        if (f.lines.isEmpty()) continue;
+        const double x0 = 20 + k.x * s, y0 = 842 - 20 - (k.y + k.h) * s;
         int c = k.fore;
-        if (c < 0) c = 0;                                  // default black
-        const double cr = ((c >> 16) & 0xFF) / 255.0, cg = ((c >> 8) & 0xFF) / 255.0, cb = (c & 0xFF) / 255.0;
-        body += QStringLiteral("%1 %2 %3 rg\n").arg(cr, 0, 'f', 2).arg(cg, 0, 'f', 2).arg(cb, 0, 'f', 2);
-        body += QStringLiteral("/F0 %1 Tf\n").arg(QString::number(fpt, 'f', 1));
-        body += QStringLiteral("%1 %2 Td(")
-                    .arg(QString::number(x, 'f', 1)).arg(QString::number(y, 'f', 1))
-                    + esc(lbl) + QStringLiteral(") Tj\n");
+        if (c < 0) c = 0;
+        body += QStringLiteral("%1 %2 %3 rg\n")
+                    .arg(n1(((c >> 16) & 0xFF) / 255.0)).arg(n1(((c >> 8) & 0xFF) / 255.0)).arg(n1((c & 0xFF) / 255.0));
+        const double cx = x0 + kw / 2.0;
+        double ty = y0 + (kh - f.hmax) / 2.0 + f.pt * 0.8;
+        for (const QString &line : f.lines) {
+            const double w = text_w(line, f.pt);
+            body += QStringLiteral("BT /F0 %1 Tf %2 %3 Td(")
+                        .arg(n1(f.pt)).arg(n1(cx - w / 2.0)).arg(n1(ty))
+                        + esc(line) + QStringLiteral(") Tj ET\n");
+            ty -= f.pt * 1.2;
+        }
     }
-    body += QStringLiteral("ET\n");
-    const QByteArray c = body.toUtf8();
+    const QByteArray c = body.toLatin1();
     QByteArray pdf("%PDF-1.4\n");
     QVector<int> off(6, 0);
     auto put = [&](int n, const QString &st) { off[n] = pdf.size(); pdf += QStringLiteral("%1 0 obj\n").arg(n).toUtf8(); pdf += st.toUtf8(); pdf += QByteArrayLiteral("\nendobj\n"); };
     put(1, dict(QStringLiteral("/Pages 2 0 R ")));
     put(2, dict(QStringLiteral("/Type /Pages /Kids [3 0 R] /Count 1 ")));
     put(3, dict(QStringLiteral("/Type /Page /Parent 2 0 R /Resources ") + dict(QStringLiteral("/Font ") + dict(QStringLiteral("/F0 5 0 R ")) + QStringLiteral(" ")) + QStringLiteral(" /MediaBox [0 0 595 842] /Contents 4 0 R ")));
-    put(4, dict(QStringLiteral("/Length ") + QString::number(c.size()) + QStringLiteral(" "))
-            + QStringLiteral("stream\n") + QString::fromLatin1(c) + QStringLiteral("\nendstream"));
+    {   // content stream RAW (latin1 bytes, never toUtf8)
+        off[4] = pdf.size();
+        pdf += QByteArrayLiteral("4 0 obj\n");
+        pdf += (dict(QStringLiteral("/Length ") + QString::number(c.size()) + QStringLiteral(" "))
+                + QStringLiteral("stream\n")).toLatin1();
+        pdf += c;
+        pdf += QByteArrayLiteral("\nendstream\nendobj\n");
+    }
     put(5, dict(QStringLiteral("/Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding ")));
     QString xref = QStringLiteral("xref\n0 5\n0000000000 65535 f \n");
     for (int n = 1; n <= 5; ++n) xref += QStringLiteral("%1 00000 n \n").arg(off[n], 10, 10, QLatin1Char('0'));
@@ -2292,17 +2378,49 @@ int main(int argc, char **argv) {
             if (rows.size() > 40) {
                 const QByteArray pdfb = make_label_pdf(rows);
                 QFile fw(tgt); if (fw.open(QIODevice::WriteOnly)) { fw.write(pdfb); fw.close(); }
-                const QByteArray gb = [&]{
-                    QHash<int, QString> texts, fonts;
-                    for (const Map &mp : fresh.maps) {
-                        if (!mp.print_text.isEmpty()) texts.insert(mp.poskey, mp.print_text);
-                        if (!mp.fontdesc.isEmpty()) fonts.insert(mp.poskey, mp.fontdesc);
-                    }
-                    return make_label_pdf_geom(rows, rt, texts, fonts);
-                }();
+                QHash<int, QString> texts, fonts;
+                for (const Map &mp : fresh.maps) {
+                    if (!mp.print_text.isEmpty()) texts.insert(mp.poskey, mp.print_text);
+                    if (!mp.fontdesc.isEmpty()) fonts.insert(mp.poskey, mp.fontdesc);
+                }
+                const QByteArray gb = make_label_pdf_geom(rows, rt, texts, fonts);
                 const QString gt2 = g_origpath + QStringLiteral(".geom.pdf");
                 QFile gw(gt2); if (gw.open(QIODevice::WriteOnly)) { gw.write(gb); gw.close(); }
                 std::printf("geom pdf bytes=%d\n", (int)gb.size());
+                {   // fit gate: SAME width table, boxes must stay inside key rects
+                    int mx = 1, my = 1;
+                    for (auto it = g_geom.cbegin(); it != g_geom.cend(); ++it) {
+                        const KeyGeom &kg = it.value();
+                        mx = qMax(mx, kg.x + kg.w); my = qMax(my, kg.y + kg.h);
+                    }
+                    const double s2 = qMin((595.0 - 40) / mx, (842.0 - 40) / my);
+                    int lbl_n = 0, trunc_n = 0, fails_n = 0;
+                    for (auto it = g_geom.cbegin(); it != g_geom.cend(); ++it) {
+                        const KeyGeom &kg = it.value();
+                        QString lbl = kg.text;
+                        if (lbl.isEmpty() && texts.contains(it.key())) lbl = texts.value(it.key());
+                        if (lbl.isEmpty()) continue;
+                        double start = 12.0;
+                        if (fonts.contains(it.key())) {
+                            QRegularExpression nRe(QStringLiteral("[^0-9]*([0-9][0-9.]*)pt"));
+                            if (auto nm = nRe.match(fonts.value(it.key())); nm.isValid())
+                                start = nm.captured(1).toDouble() / 100.0 * s2;
+                        } else if (kg.fsize > 0) start = kg.fsize * s2;
+                        const Fit f = fit_label(lbl, kg.w * s2, kg.h * s2, qBound(5.0, start, 40.0));
+                        if (f.lines.isEmpty()) continue;
+                        ++lbl_n; if (f.truncated) ++trunc_n;
+                        // every drawn line box must sit inside the key rect
+                        const double kw = kg.w * s2, kh = kg.h * s2;
+                        double ty = (kh - f.hmax) / 2.0 + f.pt * 0.8;
+                        for (const QString &line : f.lines) {
+                            const double w = text_w(line, f.pt);
+                            if (w > kw || ty + f.pt * 0.25 > kh || ty - f.pt < -0.5) ++fails_n;
+                            ty -= f.pt * 1.2;
+                        }
+                    }
+                    std::printf("fit gate: labels=%d truncated=%d boxfails=%d\n", lbl_n, trunc_n, fails_n);
+                    if (fails_n) { std::printf("clicktest FAIL: fit %d\n", fails_n); ++gfail; }
+                }
             }
             std::printf("final export maps=%d rows=%d\n", (int)fresh.maps.size(), (int)rows.size());
             if (!wf.open(QIODevice::ReadOnly)) { std::printf("clicktest FAIL: final pdf missing\n"); ++gfail; }
