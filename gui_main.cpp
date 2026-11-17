@@ -2928,6 +2928,8 @@ int main(int argc, char **argv) {
             for (const auto &s : shots) {
                 win.resize(s.w, s.h);
                 if (getenv("PKT_OPEN_DIALOG") && pm->sel > 0) pm->openDlg(pm->sel);
+                if (getenv("PKT_SHOW_WIN")) { dproc->setGeometry(QRect(6, 6, qMax(360, s.w / 2), 320)); dproc->show(); }
+                if (getenv("PKT_SHOW_SETTINGS")) { sdlg->setGeometry(QRect(6, 6, qMax(360, s.w - 12), 280)); sdlg->show(); }
                 if (getenv("PKT_SHOT_SUB")) {   // show the three sub-windows too
                     if (restoreW->count() > 0) rdlg->show();
                     std::printf("subwin restore=%d proc=%d\n", restoreW->count(), (int)(procPick->count()));
