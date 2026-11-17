@@ -38,7 +38,9 @@ bool value_script(const Rule &r, const Layer &l, QVector<QPair<int, int>> &seq, 
 
 // active window title via QProcess xdotool; '<unknown-window>' if absent/failing
 QString active_window();
-
+// all open windows: {title, pid} via kdotool search + getwindowname/getwindowpid;
+// empty when the compositor probe fails. Vendor popup: window titles per process.
+QList<QPair<QString,int>> list_windows(int limit = 30);
 // the sentinel string active_window() returns when no window can be observed
 QString unknown_window();
 

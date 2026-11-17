@@ -906,6 +906,27 @@ QString active_window() {
     return k_unknown;
 }
 
+QList<QPair<QString,int>> list_windows(int limit) {
+    QList<QPair<QString,int>> out;
+    QString idsS;
+    if (!run_probe(QStringLiteral("kdotool"),
+                   {QStringLiteral("search"), QStringLiteral(".*"), QStringLiteral("-l"), QStringLiteral("0")},
+                   idsS, true))
+        return out;
+    const QStringList ids = idsS.split('\n');
+    for (const QString &id : ids) {
+        if (id.trimmed().isEmpty()) continue;
+        if (out.size() >= limit) break;
+        QString name, pidS;
+        if (!run_probe(QStringLiteral("kdotool"), {QStringLiteral("getwindowname"), id}, name)) continue;
+        run_probe(QStringLiteral("kdotool"), {QStringLiteral("getwindowpid"), id}, pidS);
+        name = name.trimmed();
+        const int pid = pidS.trimmed().toInt();
+        if (!name.isEmpty() && pid > 0) out << QPair<QString,int>{name, pid};
+    }
+    return out;
+}
+
 QString active_process() {
     // getactivewindow getwindowpid -> /proc/PID/comm (vendor <Dependency> = process name).
     // Rules should name the PROCESS, not only a title: the process comes from the

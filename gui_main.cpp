@@ -1679,11 +1679,16 @@ int main(int argc, char **argv) {
     QPushButton *recbtn = new QPushButton(QStringLiteral("Reconnect"), dproc);   // manual link retry
     recbtn->setObjectName("reconnect");
     QLabel *lblWin = new QLabel(QStringLiteral("fenster: —"), dproc);   // countdown/probe readout
+    QLabel *wHead = new QLabel(QStringLiteral("Open windows:"), dproc);
+    wHead->setObjectName("wHead");
+    QListWidget *winW = new QListWidget(dproc); winW->setObjectName("winlist");
+    winW->setMinimumSize(150, 24);
     int win_secs = 0;                                    // >0 = countdown running
     QString g_winTitle, g_winProc;   // last --active-window probe (shown in stat)
     pgrid->addWidget(lblPick, 0, 0); pgrid->addWidget(procPick, 0, 1);
     pgrid->addWidget(pickbtn, 1, 0); pgrid->addWidget(winbtn, 1, 1);
     pgrid->addWidget(lblWin, 2, 0); pgrid->addWidget(recbtn, 2, 1);
+    pgrid->addWidget(wHead, 3, 0); pgrid->addWidget(winW, 3, 1, 1, 2);
     // preview + proc rename/delete: key dialog owns them (vendor)
     QPushButton *prevbtn = new QPushButton(QStringLiteral("Preview"), dlg);
     QLabel *prevlbl = new QLabel(dlg);
@@ -1891,6 +1896,19 @@ int main(int argc, char **argv) {
         }
         g_winTitle = wname; g_winProc = wproc;
         lblWin->setText(QStringLiteral("fenster '%1' proc '%2'").arg(wname).arg(wproc));
+        winW->clear();
+        {
+            QStringList rows;
+            for (const auto &wp : pktm::list_windows(20)) {
+                QString comm;
+                QFile cf(QStringLiteral("/proc/%1/comm").arg(wp.second));
+                if (cf.open(QIODevice::ReadOnly)) { comm = cf.readAll().trimmed(); cf.close(); }
+                rows << QStringLiteral("%1 — %2").arg(wp.first).arg(comm.isEmpty() ? QString::number(wp.second) : comm);
+            }
+            if (rows.isEmpty() && !wname.isEmpty())
+                rows << QStringLiteral("%1 — %2").arg(wname).arg(wproc.isEmpty() ? QStringLiteral("?") : wproc);
+            winW->addItems(rows);
+        }
         if (!wproc.isEmpty()) {
             int idx = -1;
             for (int i = 0; i < procPick->count(); ++i)
@@ -2478,6 +2496,8 @@ int main(int argc, char **argv) {
         if (win_secs <= 0) { std::printf("clicktest FAIL: countdown not started\n"); ++gfail; }
         win_secs = 0;                       // stop countdown; probe below is direct
         win_probe();
+        if (winW->count() < 1) { std::printf("clicktest FAIL: window list empty\n"); ++gfail; }
+        std::printf("clicktest winlist rows=%d\n", (int)winW->count());
         if (g_winProc != QStringLiteral("pkteditor")) {
             std::printf("clicktest FAIL: probe proc wrong (got '%s')\n", g_winProc.toUtf8().constData());
             ++gfail;
