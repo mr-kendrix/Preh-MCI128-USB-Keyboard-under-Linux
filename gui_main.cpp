@@ -1056,17 +1056,10 @@ int main(int argc, char **argv) {
     sbar->setObjectName("status");
     QLabel *statusline = new QLabel(sbar);
     sbar->addWidget(statusline);
-    QWidget *ctl = new QWidget(body);          // control area: one grid, no coords
+    QWidget *ctl = new QWidget(body);          // left column: process list only (vendor)
     QGridLayout *grid = new QGridLayout(ctl);
     grid->setSpacing(8);
     vlay->addWidget(ctl);
-    QLineEdit *edit = new QLineEdit(ctl);
-    edit->setPlaceholderText(QStringLiteral("MACRO"));
-    grid->addWidget(edit, 0, 0, 1, 2);
-    QLabel *layers = new QLabel(ctl);
-    layers->setWordWrap(true);
-    QLabel *stat = new QLabel(ctl);
-    stat->setWordWrap(true);
     // Per-key dialog (vendor): opens on double-click (openDlg), holds layer ops,
     // radios + own Save. Hidden = no space in layout; layout pass reflows.
     QWidget *dlg = new QWidget(&win);
@@ -1074,6 +1067,15 @@ int main(int argc, char **argv) {
     vwin.addWidget(dlg);
     QGridLayout *dgrid = new QGridLayout(dlg);
     dgrid->setSpacing(4);
+    // vendor key dialog owns the input line, the layer readout and the status text
+    QLineEdit *edit = new QLineEdit(dlg);
+    edit->setPlaceholderText(QStringLiteral("MACRO"));
+    QLabel *layers = new QLabel(dlg);
+    layers->setWordWrap(true);
+    QLabel *stat = new QLabel(sbar);
+    stat->setWordWrap(true);
+    stat->setMaximumSize(300, 240);   // statusbar must never push siblings away
+    sbar->addWidget(stat);
     QLabel *laylbl = new QLabel(QStringLiteral("Layer #"), dlg);
     QSpinBox *spinl = new QSpinBox(dlg);
     QPushButton *addbtn = new QPushButton(QStringLiteral("+ Layer"), dlg);
@@ -1145,88 +1147,100 @@ int main(int argc, char **argv) {
         }
     }
         browserPick->clear(); browserPick->addItems(gBrows);
-    QListWidget *progW = new QListWidget(ctl);
+    QListWidget *progW = new QListWidget(ctl);   // vendor left column: processes only
     progW->setObjectName("progW");
+    progW->setMinimumSize(140, 24);
     QSpinBox *progSel = new QSpinBox(ctl);
     progSel->setObjectName("progSel"); progSel->setMinimum(1); progSel->setValue(1);
-    QPushButton *appbtn = new QPushButton(QStringLiteral("App +"), ctl);
+    progSel->setMaximum(1);
+    QPushButton *appbtn = new QPushButton(QStringLiteral("App +"), dlg);
     appbtn->setObjectName("appbtn");
-    QPushButton *webbtn = new QPushButton(QStringLiteral("Web +"), ctl);
+    QPushButton *webbtn = new QPushButton(QStringLiteral("Web +"), dlg);
     webbtn->setObjectName("webbtn");
-    QSpinBox *swA = new QSpinBox(ctl);
+    // Swap keys: small own window opened from the Edit menu (vendor screens)
+    QWidget *swdlg = new QWidget(&win);
+    swdlg->setObjectName("swapdlg");
+    vwin.addWidget(swdlg);
+    swdlg->hide();
+    QGridLayout *swgrid = new QGridLayout(swdlg);
+    QSpinBox *swA = new QSpinBox(swdlg);
     swA->setObjectName("swA"); swA->setMinimum(1); swA->setMaximum(1024); swA->setValue(1);
-    QSpinBox *swB = new QSpinBox(ctl);
+    QSpinBox *swB = new QSpinBox(swdlg);
     swB->setObjectName("swB"); swB->setMinimum(1); swB->setMaximum(1024); swB->setValue(65);
-    QSpinBox *swN = new QSpinBox(ctl);
+    QSpinBox *swN = new QSpinBox(swdlg);
     swN->setObjectName("swN"); swN->setMinimum(1); swN->setMaximum(256); swN->setValue(1);
-    QPushButton *swapbtn = new QPushButton(QStringLiteral("Swap keys"), ctl);
+    QPushButton *swapbtn = new QPushButton(QStringLiteral("Swap keys"), swdlg);
     swapbtn->setObjectName("swap");
-    QListWidget *recentW = new QListWidget(ctl);
-    recentW->setObjectName("recentW");
-    QSpinBox *recentSel = new QSpinBox(ctl);
+    swgrid->addWidget(swapbtn, 0, 0); swgrid->addWidget(swA, 0, 1);
+    swgrid->addWidget(swB, 0, 2); swgrid->addWidget(swN, 0, 3);
+    // recent/template state spins are invisible drivers now (menu items trigger them)
+    QSpinBox *recentSel = new QSpinBox(nullptr);
     recentSel->setObjectName("recentSel"); recentSel->setMinimum(1); recentSel->setValue(1);
-    QPushButton *recentbtn = new QPushButton(QStringLiteral("Open recent"), ctl);
-    recentbtn->setObjectName("recent");
-    QSpinBox *templSel = new QSpinBox(ctl);
+    QSpinBox *templSel = new QSpinBox(nullptr);
     templSel->setObjectName("templSel"); templSel->setMinimum(1); templSel->setMaximum(1);
-    QPushButton *templbtn = new QPushButton(QStringLiteral("Use template"), ctl);
-    templbtn->setObjectName("templbtn");
     progW->addItems(gProgs);
     progSel->setMaximum(qMax(1, gProgs.size()));
 
     dlg->hide();                                   // openDlg shows it
     vwin.addWidget(sbar);                          // status line at the bottom
-    QPushButton *undobtn = new QPushButton(QStringLiteral("Undo"), ctl);
-    grid->addWidget(undobtn, 1, 0);
-    QPushButton *prevbtn = new QPushButton(QStringLiteral("Preview"), ctl);
-    grid->addWidget(prevbtn, 2, 3);
-    QPushButton *renprocBtn = new QPushButton(QStringLiteral("Rename proc"), ctl);
-    QPushButton *delprocBtn = new QPushButton(QStringLiteral("Delete proc"), ctl);
-    grid->addWidget(renprocBtn, 1, 4);
-    grid->addWidget(delprocBtn, 2, 4);
-    QLabel *prevlbl = new QLabel(ctl);
-    prevlbl->setWordWrap(true);
-    // LB5: button + QProgressDialog + mapped errors, one mount (upload.h)
-    UploadPanel *upload = new UploadPanel(ctl, &pm->pm, mwx,
+    // --- vendor main grid: only the process list above stays in ctl ----------
+    // Restore: its own window under the Edit menu (vendor 'Restore' screen)
+    QWidget *rdlg = new QWidget(&win);
+    rdlg->setObjectName("rdlg");
+    vwin.addWidget(rdlg);
+    rdlg->hide();
+    QGridLayout *rgrid = new QGridLayout(rdlg);
+    QListWidget *restoreW = new QListWidget(rdlg);
+    restoreW->setObjectName("restoreW");
+    QSpinBox *restoreSel = new QSpinBox(rdlg);
+    restoreSel->setObjectName("restoreSel"); restoreSel->setMinimum(1); restoreSel->setValue(1);
+    QPushButton *restoreBtn = new QPushButton(QStringLiteral("Restore"), rdlg);
+    restoreBtn->setObjectName("restore");
+    QPushButton *rcloseBtn = new QPushButton(QStringLiteral("Close"), rdlg);
+    rcloseBtn->setObjectName("rclose");
+    rgrid->addWidget(restoreW, 0, 0, 2, 2); rgrid->addWidget(restoreSel, 0, 2);
+    rgrid->addWidget(restoreBtn, 0, 3); rgrid->addWidget(rcloseBtn, 1, 3);
+    grid->addWidget(progW, 0, 0, 1, 2); grid->addWidget(progSel, 0, 2);
+    // upload progress lives in the status bar (vendor: job shown bottom)
+    UploadPanel *upload = new UploadPanel(sbar, &pm->pm, mwx,
                                           up_arm || getenv("PKT_UPLOAD_ARM") != nullptr);
-    QLabel *lblPick = new QLabel(ctl);          // process-picker readout
-    QComboBox *procPick = new QComboBox(ctl);   // PROCESS PICKER (GUI Plan Phase 1)
+    upload->setFixedSize(QSize(260, 64));
+    sbar->addWidget(upload);
+    // process picker: the small '+' window with running procs + active window
+    QWidget *dproc = new QWidget(&win);
+    dproc->setObjectName("dproc");
+    vwin.addWidget(dproc);
+    dproc->hide();
+    QGridLayout *pgrid = new QGridLayout(dproc);
+    QLabel *lblPick = new QLabel(dproc);          // process-picker readout
+    QComboBox *procPick = new QComboBox(dproc);   // PROCESS PICKER (GUI Plan Phase 1)
     procPick->setObjectName("procpick");
-    QPushButton *pickbtn = new QPushButton(QStringLiteral("Use Picked Proc"), ctl);
+    QPushButton *pickbtn = new QPushButton(QStringLiteral("Use Picked Proc"), dproc);
     pickbtn->setObjectName("pick");
-    QPushButton *winbtn = new QPushButton(QStringLiteral("Aktive Fenster (3s)"), ctl);
-    QPushButton *recbtn = new QPushButton(QStringLiteral("Reconnect"), ctl);   // manual link retry
-    recbtn->setObjectName("reconnect");
+    QPushButton *winbtn = new QPushButton(QStringLiteral("Aktive Fenster (3s)"), dproc);
     winbtn->setObjectName("win3");
-    QLabel *lblWin = new QLabel(QStringLiteral("fenster: —"), ctl);   // countdown/probe readout
+    QPushButton *recbtn = new QPushButton(QStringLiteral("Reconnect"), dproc);   // manual link retry
+    recbtn->setObjectName("reconnect");
+    QLabel *lblWin = new QLabel(QStringLiteral("fenster: —"), dproc);   // countdown/probe readout
     int win_secs = 0;                                    // >0 = countdown running
     QString g_winTitle, g_winProc;   // last --active-window probe (shown in stat)
-    upload->setFixedSize(QSize(260, 64));
-    grid->addWidget(upload, 3, 4);
-    grid->addWidget(procPick, 0, 4, 1, 1);
-    grid->addWidget(winbtn, 3, 0); grid->addWidget(recbtn, 3, 1); grid->addWidget(pickbtn, 3, 2);
-    grid->addWidget(lblWin, 4, 0); grid->addWidget(lblPick, 4, 1);
-    // Restore dialog (vendor: list of saved states): backups from the tool dir.
-    QListWidget *restoreW = new QListWidget(ctl);
-    restoreW->setObjectName("restoreW");
-    QSpinBox *restoreSel = new QSpinBox(ctl);
-    restoreSel->setObjectName("restoreSel"); restoreSel->setMinimum(1); restoreSel->setValue(1);
-    QPushButton *restoreBtn = new QPushButton(QStringLiteral("Restore"), ctl);
-    restoreBtn->setObjectName("restore");
-    grid->addWidget(restoreW, 7, 0, 2, 2); grid->addWidget(restoreSel, 7, 3);
-    grid->addWidget(restoreBtn, 7, 4);
-    grid->addWidget(progW, 8, 0, 1, 2); grid->addWidget(progSel, 8, 3);
-    grid->addWidget(appbtn, 8, 4); grid->addWidget(webbtn, 8, 5);
-    grid->addWidget(swA, 10, 3); grid->addWidget(swB, 10, 4);
-    grid->addWidget(swN, 11, 0); grid->addWidget(swapbtn, 11, 1);
-    grid->addWidget(recentW, 12, 0, 1, 2); grid->addWidget(recentSel, 12, 3); grid->addWidget(recentbtn, 12, 4);
-    grid->addWidget(templbtn, 13, 0); grid->addWidget(templSel, 13, 1);
-    grid->addWidget(stat, 5, 0, 1, 3);
-    grid->addWidget(prevlbl, 6, 0, 1, 2);
-    grid->addWidget(layers, 10, 0, 1, 3);
+    pgrid->addWidget(lblPick, 0, 0); pgrid->addWidget(procPick, 0, 1);
+    pgrid->addWidget(pickbtn, 1, 0); pgrid->addWidget(winbtn, 1, 1);
+    pgrid->addWidget(lblWin, 2, 0); pgrid->addWidget(recbtn, 2, 1);
+    // preview + proc rename/delete: key dialog owns them (vendor)
+    QPushButton *prevbtn = new QPushButton(QStringLiteral("Preview"), dlg);
+    QLabel *prevlbl = new QLabel(dlg);
+    prevlbl->setWordWrap(true);
+    QPushButton *renprocBtn = new QPushButton(QStringLiteral("Rename proc"), dlg);
+    QPushButton *delprocBtn = new QPushButton(QStringLiteral("Delete proc"), dlg);
+    dgrid->addWidget(appbtn, 8, 0); dgrid->addWidget(webbtn, 8, 1);
+    dgrid->addWidget(renprocBtn, 9, 0); dgrid->addWidget(delprocBtn, 9, 1);
+    dgrid->addWidget(prevbtn, 10, 0); dgrid->addWidget(prevlbl, 10, 1, 1, 2);
+    dgrid->addWidget(edit, 0, 4);
+    dgrid->addWidget(layers, 7, 0, 1, 3);
     addbtn->setObjectName("add"); setbtn->setObjectName("set"); delbtn->setObjectName("del");
     depbtn->setObjectName("dep"); renbtn->setObjectName("ren"); copybtn->setObjectName("copy");
-    savebtn->setObjectName("save"); undobtn->setObjectName("undo");
+    savebtn->setObjectName("save");
     prevbtn->setObjectName("preview");
 
     // live board: pressed POSKeys get a green ring (calib maps scancode->POSKey)
@@ -1479,8 +1493,7 @@ int main(int argc, char **argv) {
         }
         refresh(true);
     };
-    undobtn->connect(undobtn, &QPushButton::clicked, [&]{ do_undo(); });
-
+    // Undo via the Edit menu (do_undo); no leftover button
     refresh(false);
     pm->notify = [&]() { refresh(false); };
     poll.start();
@@ -1682,7 +1695,8 @@ int main(int argc, char **argv) {
         refresh(false);
         save_note = QStringLiteral("opened recent ") + QString::number(i + 1);
     };
-    recentW->addItems(gRecent); recentSel->setMaximum(qMax(1, gRecent.size()));
+    // recent list: File-menu items only, the spin caps at the list size
+    recentSel->setMaximum(qMax(1, gRecent.size()));
     const auto do_open_template = [&save_note, pm, templSel]{
         if (gRecent.isEmpty()) { save_note = QStringLiteral("template: list empty"); return; }
         const int i = qBound(1, templSel->value(), gRecent.size()) - 1;
@@ -1702,13 +1716,13 @@ int main(int argc, char **argv) {
         save_note = QStringLiteral("template applied to sel");
     };
 
-    templbtn->connect(templbtn, &QPushButton::clicked, [&]{ do_use_template(); });
-    mk_item(sm, QStringLiteral("Open as template"), [&]{ do_open_template(); refresh(false); });
-    recentbtn->connect(recentbtn, &QPushButton::clicked, [&]{ do_open_recent(); });
+    // template/recent/restore actions live in the menus (vendor screen set)
+    mk_item(em, QStringLiteral("Open template"), [&]{ do_open_template(); refresh(false); });
     mk_item(fm, QStringLiteral("Open recent"), [&]{ do_open_recent(); });
-    mk_item(fm, QStringLiteral("Recent files"), [&]{
-        recentW->clear(); recentW->addItems(gRecent); refresh(false);
-    });
+    for (int ri = 0; ri < qMin(5, (int)gRecent.size()); ++ri)
+        mk_item(fm, QStringLiteral("Open %1").arg(gRecent[ri]),
+                [&, ri]{ recentSel->setValue(ri + 1); do_open_recent(); refresh(false); });
+    mk_item(em, QStringLiteral("Restore"), [&]{ do_restore(); });
     mk_item(em, QStringLiteral("Swap keys"), [&]{ do_swap_keys(); });
     webbtn->connect(webbtn, &QPushButton::clicked, [&]{
         set_layer_type(pm->pm, pm->sel, spinl->value(), QStringLiteral("WEBSITE"));
@@ -2020,7 +2034,7 @@ int main(int argc, char **argv) {
         {
             recentSel->setValue(2);
             const int before_n = gRecent.size();
-            press_btn("recent");
+            do_open_recent();
             if (before_n < 2 || !pm->path.contains(QStringLiteral("pkt_prev_seed"))
                 || !save_note.startsWith(QStringLiteral("opened recent 2"))) {
                 std::printf("clicktest FAIL: open recent broken (n=%d path=%s)\n", before_n, pm->path.toUtf8().constData());
@@ -2034,7 +2048,7 @@ int main(int argc, char **argv) {
         press_btn("set");
         do_open_template();
         if (!pm->templ.maps.isEmpty()) pm->sel = pm->templ.maps.first().poskey;
-        press_btn("templbtn");
+        do_use_template();
         {
             const Map *mp = find_map_c(pm->pm, pm->sel);
             const QString v = (mp && !mp->layers.isEmpty()) ? mp->layers[0].value : QString();
@@ -2067,7 +2081,7 @@ int main(int argc, char **argv) {
         // arrow, scrollbars, button internals) sit at private coords and would
         // report thousands of false hits.
         QSet<const QWidget *> appw{ body, head, board, ctl, edit, layers,
-            stat, spinl, laylbl, addbtn, setbtn, delbtn, savebtn, undobtn, depbtn,
+            stat, spinl, laylbl, addbtn, setbtn, delbtn, savebtn, restoreBtn, depbtn,
             renbtn, copybtn, prevbtn, prevlbl, upload, lblPick, procPick, pickbtn,
             winbtn, recbtn, lblWin, dlg, dclosebtn, dfn, dft, dapp, dweb, menu, sbar,
             mid, procW, renprocBtn, delprocBtn, statusline, cbBtf, cbRep, cbSlw };
@@ -2091,7 +2105,7 @@ int main(int argc, char **argv) {
             return x == head ? 10 : x == board ? 11 : x == ctl ? 12 : x == edit ? 13 :
                    x == layers ? 14 : x == stat ? 15 : x == laylbl ? 16 : x == spinl ? 17 :
                    x == addbtn ? 18 : x == setbtn ? 19 : x == delbtn ? 20 : x == savebtn ? 21 :
-                   x == undobtn ? 22 : x == depbtn ? 23 : x == renbtn ? 24 : x == copybtn ? 25 :
+                   x == restoreBtn ? 22 : x == depbtn ? 23 : x == renbtn ? 24 : x == copybtn ? 25 :
                    x == prevbtn ? 26 : x == prevlbl ? 27 : x == upload ? 28 : x == lblPick ? 29 :
                    x == procPick ? 30 : x == pickbtn ? 31 : x == winbtn ? 32 : x == recbtn ? 33 :
                    x == lblWin ? 34 : x == dlg ? 35 : x == dclosebtn ? 36 :
@@ -2118,7 +2132,7 @@ int main(int argc, char **argv) {
                         c == head ? 10 : c == board ? 11 : c == ctl ? 12 : c == edit ? 13 :
                         c == layers ? 14 : c == stat ? 15 : c == laylbl ? 16 : c == spinl ? 17 :
                         c == addbtn ? 18 : c == setbtn ? 19 : c == delbtn ? 20 : c == savebtn ? 21 :
-                        c == undobtn ? 22 : c == depbtn ? 23 : c == renbtn ? 24 : c == copybtn ? 25 :
+                        c == restoreBtn ? 22 : c == depbtn ? 23 : c == renbtn ? 24 : c == copybtn ? 25 :
                         c == prevbtn ? 26 : c == prevlbl ? 27 : c == upload ? 28 : c == lblPick ? 29 :
                         c == procPick ? 30 : c == pickbtn ? 31 : c == winbtn ? 32 : c == recbtn ? 33 :
                         c == lblWin ? 34 : c == dlg ? 35 : c == dclosebtn ? 36 :
