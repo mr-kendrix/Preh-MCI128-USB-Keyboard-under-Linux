@@ -2133,6 +2133,11 @@ int main(int argc, char **argv) {
             for (const auto &s : shots) {
                 win.resize(s.w, s.h);
                 if (getenv("PKT_OPEN_DIALOG") && pm->sel > 0) pm->openDlg(pm->sel);
+                if (getenv("PKT_SHOT_SUB")) {   // show the three sub-windows too
+                    if (restoreW->count() > 0) rdlg->show();
+                    swdlg->show();
+                    if (procPick->count() > 1) dproc->show();
+                }
                 win.show();
                 std::printf("shot dbg dlg %dx%d vis=%d\n", dlg->width(), dlg->height(), (int)dlg->isVisible());
                 const QPixmap px = win.grab();
