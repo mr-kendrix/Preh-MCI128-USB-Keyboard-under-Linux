@@ -2112,6 +2112,21 @@ int main(int argc, char **argv) {
             if (!dlg_open) { std::printf("clicktest FAIL: Enter did not open dialog\n"); ++gfail; }
             close_dialog();
         }
+        if (getenv("PKT_SHOT3")) {   // render the whole window at 3 sizes
+            struct Shot { const char *f; int w, h; } shots[]
+                = {{"/tmp/pkt_shot_full.png", 1440, 810},
+                   {"/tmp/pkt_shot_90.png", 1152, 648},
+                   {"/tmp/pkt_shot_small.png", 1024, 600}};
+            for (const auto &s : shots) {
+                win.resize(s.w, s.h);
+                win.show();
+                const QPixmap px = win.grab();
+                if (px.isNull() || !px.save(s.f))
+                    std::printf("FAIL shot %s\n", s.f);
+                else
+                    std::printf("shot %s %dx%d\n", s.f, s.w, s.h);
+            }
+        }
         return gfail;
     }
     // PKT_LAYOUT_CHECK child: resize, verify tree invariants, exit with bad count.
