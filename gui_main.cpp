@@ -2055,13 +2055,16 @@ int main(int argc, char **argv) {
     cbMin->setAccessibleName(QStringLiteral("Minimize after autostart"));
     cbOpen->setAccessibleName(QStringLiteral("Open last file after autostart"));
     QLabel *dfLbl = new QLabel(QStringLiteral("Date format:"), sdlg);
-    QLineEdit *dfFld = new QLineEdit(sdlg); dfFld->setObjectName("dateFmt");
-    dfFld->setText(pm->st.datefmt);
+    QComboBox *dfCb = new QComboBox(sdlg); dfCb->setObjectName("dateFmt");
+    dfCb->addItems({QStringLiteral("DD.MM.YYYY"), QStringLiteral("MM/DD/YYYY"), QStringLiteral("YYYY-MM-DD")});
+    { int di = 0; for (int i = 0; i < dfCb->count(); ++i) if (dfCb->itemText(i) == pm->st.datefmt) di = i;
+      dfCb->setCurrentIndex(di); }
+    dfLbl->setText(QStringLiteral("Date format: %1").arg(pm->st.datefmt));
     QPushButton *debtn = new QPushButton(QStringLiteral("Deutsch"), sdlg); debtn->setObjectName("langDe");
     QPushButton *enbtn = new QPushButton(QStringLiteral("English"), sdlg); enbtn->setObjectName("langEn");
     slay->addWidget(shdr);
     slay->addWidget(cbDetect); slay->addWidget(cbStart); slay->addWidget(cbMin); slay->addWidget(cbOpen);
-    slay->addWidget(dfLbl); slay->addWidget(dfFld); slay->addWidget(debtn); slay->addWidget(enbtn);
+    slay->addWidget(dfLbl); slay->addWidget(dfCb); slay->addWidget(debtn); slay->addWidget(enbtn);
     auto f_showsettings = [&]{ sdlg->show();
         sdlg->setGeometry(QRect(6, 6, qMax(360, win.width() - 12), 280)); };
     auto save_set = [&]{
@@ -2080,6 +2083,7 @@ int main(int argc, char **argv) {
         sf.write(t.toUtf8());
         sf.close();
     };
+    auto f_setdate = [&](int i){ pm->st.datefmt = dfCb->itemText(i); dfCb->setCurrentIndex(i); dfLbl->setText(QStringLiteral("Date format: %1").arg(pm->st.datefmt)); save_set(); };
     auto f_lang = [&](int l){ pm->st.lang = l; save_set(); };
     debtn->connect(debtn, &QPushButton::clicked, [&]{ f_lang(1); });
     enbtn->connect(enbtn, &QPushButton::clicked, [&]{ f_lang(0); });
@@ -2147,12 +2151,10 @@ int main(int argc, char **argv) {
     mk_item(sm, QStringLiteral("Process list"), do_proc_list);
     mk_item(sm, QStringLiteral("Settings..."), [&]{ f_showsettings(); });
     // vendor Modules tab: add/remove modules, only offered when hardware has them
-    mk_item(mm, QStringLiteral("Add module (MSR)"), [&]{
-        if (!pm->st.modules.contains("MSR")) pm->st.modules << QStringLiteral("MSR");
-        std::printf("module add MSR ok=%d\n", pm->st.modules.size()); });
-    mk_item(mm, QStringLiteral("Remove module (MSR)"), [&]{
-        pm->st.modules.removeAll(QStringLiteral("MSR"));
-        std::printf("module remove MSR ok=%d\n", pm->st.modules.size()); });
+    auto do_add_mod = [&]{ if (!pm->st.modules.contains("MSR")) pm->st.modules << QStringLiteral("MSR"); save_set(); std::printf("modules: MSR added (n=%d)\n", (int)pm->st.modules.size()); };
+    auto do_del_mod = [&]{ pm->st.modules.removeAll(QStringLiteral("MSR")); save_set(); std::printf("modules: MSR removed (n=%d)\n", (int)pm->st.modules.size()); };
+    mk_item(mm, QStringLiteral("Add module (MSR)"), [&]{ do_add_mod(); });
+    mk_item(mm, QStringLiteral("Remove module (MSR)"), [&]{ do_del_mod(); });
     mk_item(hm, QStringLiteral("About"), do_about);
     mk_item(hm, QStringLiteral("Check for update"), [&]{ std::printf("update check: offline (no net gate)\n"); });
     renprocBtn->connect(renprocBtn, &QPushButton::clicked, [&]{ do_rename_proc(); refresh(false); });
@@ -2343,6 +2345,10 @@ int main(int argc, char **argv) {
     add_rib(2, "rib_pdf", "doc",    [&]{ do_export_pdf(); });
     add_rib(2, "rib_templ", "pencil", [&]{ do_open_template(); });
     add_rib(2, "rib_restore", "list", [&]{ do_restore(); });
+    add_rib(3, "rib_modadd", "plus", [&]{ do_add_mod(); });
+    add_rib(3, "rib_moddel", "trash", [&]{ do_del_mod(); });
+    add_rib(4, "rib_settings", "gear", [&]{ f_showsettings(); });
+    add_rib(5, "rib_about", "doc", [&]{ do_about(); });
 
     if (mode == "clicktest") {
         if (!QFile::copy(pm->path, pm->path + QStringLiteral(".orig0")))
@@ -2759,6 +2765,17 @@ int main(int argc, char **argv) {
             if (pm->st.lang != 0) { std::printf("clicktest FAIL: language switch broken\n"); ++gfail; }
             std::printf("settings gate ok detect=%d lang=%d\n", (int)pm->st.autodetect, pm->st.lang);
         }
+        // ribbon tabs 3-5: Modules add/remove, Settings gear, Help about + date dropdown
+        {
+            tabSel->setValue(3);
+            if (ribgrp[2]->isHidden()) { std::printf("clicktest FAIL: Modules ribbon group hidden\n"); ++gfail; }
+            do_add_mod();
+            if (!pm->st.modules.contains("MSR")) { std::printf("clicktest FAIL: module add broken\n"); ++gfail; }
+            f_setdate(2);
+            if (pm->st.datefmt != QStringLiteral("YYYY-MM-DD")) { std::printf("clicktest FAIL: date dropdown not wired\n"); ++gfail; }
+            std::printf("ribbon tabs ok: mod=%d date=%s\n", (int)pm->st.modules.contains("MSR"), pm->st.datefmt.toUtf8().constData());
+            tabSel->setValue(1);
+        }
         // final full-file export: re-parse the pmap on disk (all 128 maps) -> multi-page
         {
             static const QString g_origpath = path;   // argv pmap before any 'open recent'
@@ -2895,7 +2912,7 @@ int main(int argc, char **argv) {
             winbtn, recbtn, lblWin, dlg, dclosebtn, dfn, dft, dapp, dweb, menu, sbar,
             mid, procW, renprocBtn, delprocBtn, statusline, cbBtf, cbRep, cbSlw,
             knewdlg, sdlg, knq, knalways, knproc, procFld, klistbtn, knextbtn,
-            shdr, cbDetect, cbStart, cbMin, cbOpen, dfLbl, dfFld, debtn, enbtn };
+            shdr, cbDetect, cbStart, cbMin, cbOpen, dfLbl, dfCb, debtn, enbtn };
         QWidget *saboteur = nullptr;
         if (getenv("PKT_LAYOUT_SABOTAGE")) {
             // A fixed-coordinate placement with NO layout parent: exactly what
@@ -2928,7 +2945,7 @@ int main(int argc, char **argv) {
                    x == knewdlg ? 53 : x == sdlg ? 54 : x == knq ? 55 : x == knalways ? 56 :
                    x == knproc ? 57 : x == procFld ? 58 : x == klistbtn ? 59 : x == knextbtn ? 60 :
                    x == shdr ? 61 : x == cbDetect ? 62 : x == cbStart ? 63 : x == cbMin ? 64 :
-                   x == cbOpen ? 65 : x == dfLbl ? 66 : x == dfFld ? 67 : x == debtn ? 68 : x == enbtn ? 69 :
+                   x == cbOpen ? 65 : x == dfLbl ? 66 : x == dfCb ? 67 : x == debtn ? 68 : x == enbtn ? 69 :
                    x == body ? 2 : x == &win ? 1 : 0;
         };
         std::function<void (QWidget *)> walk = [&](QWidget *w) {
