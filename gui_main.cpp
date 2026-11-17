@@ -671,6 +671,62 @@ static int gate_click(Model &m, const QStringList &cells, const QString &setv,
     return 0;
 }
 
+static QByteArray make_label_pdf_geom(const QVector<std::pair<int, QString>> &rows)
+{
+    // one A4 page: rect per POSKey at the pmap's own <Key> geometry + label inside
+    const QChar L('<'), G('>');
+    auto dict = [&](const QString &inner){ QString s; s += L; s += L; s += inner; s += G; s += G; return s; };
+    auto esc = [](const QString &s) {
+        QString r;
+        for (const QChar c : s) { if (c == QLatin1Char('(') || c == QLatin1Char(')') || c == QLatin1Char('\\')) r += QLatin1Char('\\'); r += c; }
+        return r;
+    };
+    int maxx = 1, maxy = 1;
+    for (auto it = g_geom.constBegin(); it != g_geom.constEnd(); ++it) {
+        const KeyGeom &k = it.value();
+        maxx = qMax(maxx, k.x + k.w); maxy = qMax(maxy, k.y + k.h);
+    }
+    const double s = qMin((595.0 - 40) / maxx, (842.0 - 40) / maxy);
+    QString body;
+    body += QStringLiteral("0 0 0 rg\n0.25 w\n");
+    for (auto it = g_geom.constBegin(); it != g_geom.constEnd(); ++it) {
+        const KeyGeom &k = it.value();
+        const double x = 20 + k.x * s, y = 842 - 20 - (k.y + k.h) * s;   // flip Y
+        body += QStringLiteral("%1 %2 %3 %4 re S\n")
+                    .arg(QString::number(x, 'f', 1)).arg(QString::number(y, 'f', 1))
+                    .arg(QString::number(k.w * s, 'f', 1)).arg(QString::number(k.h * s, 'f', 1));
+    }
+    body += QStringLiteral("BT\n/F0 7 Tf\n");
+    for (const auto &r : rows) {
+        const auto it = g_geom.find(r.first);
+        if (it == g_geom.end()) continue;
+        const KeyGeom &k = it.value();
+        const double x = 22 + k.x * s, y = 842 - 20 - (k.y + k.h) * s + 2;
+        const QString lbl = QStringLiteral("%1: %2").arg(r.first).arg(r.second);
+        body += QStringLiteral("%1 %2 Td(")
+                    .arg(QString::number(x, 'f', 1)).arg(QString::number(y, 'f', 1))
+                    + esc(lbl) + QStringLiteral(") Tj\n");
+    }
+    body += QStringLiteral("ET\n");
+    const QByteArray c = body.toUtf8();
+    QByteArray pdf("%PDF-1.4\n");
+    QVector<int> off(6, 0);
+    auto put = [&](int n, const QString &st) { off[n] = pdf.size(); pdf += QStringLiteral("%1 0 obj\n").arg(n).toUtf8(); pdf += st.toUtf8(); pdf += QByteArrayLiteral("\nendobj\n"); };
+    put(1, dict(QStringLiteral("/Pages 2 0 R ")));
+    put(2, dict(QStringLiteral("/Type /Pages /Kids [3 0 R] /Count 1 ")));
+    put(3, dict(QStringLiteral("/Type /Page /Parent 2 0 R /Resources ") + dict(QStringLiteral("/Font ") + dict(QStringLiteral("/F0 5 0 R ")) + QStringLiteral(" ")) + QStringLiteral(" /MediaBox [0 0 595 842] /Contents 4 0 R ")));
+    put(4, dict(QStringLiteral("/Length ") + QString::number(c.size()) + QStringLiteral(" "))
+            + QStringLiteral("stream\n") + QString::fromLatin1(c) + QStringLiteral("\nendstream"));
+    put(5, dict(QStringLiteral("/Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding ")));
+    QString xref = QStringLiteral("xref\n0 5\n0000000000 65535 f \n");
+    for (int n = 1; n <= 5; ++n) xref += QStringLiteral("%1 00000 n \n").arg(off[n], 10, 10, QLatin1Char('0'));
+    const int xpos = pdf.size();
+    pdf += xref.toUtf8();
+    pdf += (QStringLiteral("trailer\n") + dict(QStringLiteral("/Root 1 0 R /Size 5"))
+            + QStringLiteral("\nstartxref\n") + QString::number(xpos) + QStringLiteral("\n%%EOF\n")).toUtf8();
+    return pdf;
+}
+
 static int gate_shot(Model &m, const QString &file) {
     const QSize board(1024, 512);
     m.cells = layout_cells(board);
@@ -2176,6 +2232,10 @@ int main(int argc, char **argv) {
             if (rows.size() > 40) {
                 const QByteArray pdfb = make_label_pdf(rows);
                 QFile fw(tgt); if (fw.open(QIODevice::WriteOnly)) { fw.write(pdfb); fw.close(); }
+                const QByteArray gb = make_label_pdf_geom(rows);
+                const QString gt2 = g_origpath + QStringLiteral(".geom.pdf");
+                QFile gw(gt2); if (gw.open(QIODevice::WriteOnly)) { gw.write(gb); gw.close(); }
+                std::printf("geom pdf bytes=%d\n", (int)gb.size());
             }
             std::printf("final export maps=%d rows=%d\n", (int)fresh.maps.size(), (int)rows.size());
             if (!wf.open(QIODevice::ReadOnly)) { std::printf("clicktest FAIL: final pdf missing\n"); ++gfail; }
