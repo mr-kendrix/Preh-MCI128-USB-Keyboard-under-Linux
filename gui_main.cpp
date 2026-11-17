@@ -978,6 +978,21 @@ static QMenu *g_ctxmenu = nullptr;
 static int g_ctx_count = 0;
 static std::function<void()> g_ctx_edit, g_ctx_copy, g_ctx_paste, g_ctx_del;
 // vector-drawn icons (no font glyphs, crisp at any DPI, headless-safe)
+static QIcon make_app_icon() {
+    QImage img(64, 64, QImage::Format_ARGB32);
+    img.fill(QColor(0, 0, 0, 0));
+    QPainter pt(&img);
+    pt.setBrush(QColor(0x4f, 0x7d, 0x96)); pt.setPen(QPen(QColor(0x2f, 0x4c, 0x5f), 2));
+    pt.drawRoundedRect(QRect(6, 14, 52, 40), 6, 6);
+    pt.setBrush(QColor(0xe6, 0xe7, 0xea)); pt.setPen(QPen(QColor(0x2f, 0x4c, 0x5f), 1));
+    for (int r = 0; r < 3; ++r)
+        for (int c = 0; c < 8; ++c)
+            pt.drawRoundedRect(QRect(10 + c * 6, 20 + r * 9, 5, 7), 1.5, 1.5);
+    pt.setBrush(QColor(0xff, 0xe0, 0x66));
+    pt.drawRoundedRect(QRect(46, 38, 5, 7), 1.5, 1.5);
+    pt.end();
+    return QIcon(QPixmap::fromImage(img));
+}
 static QIcon mkicon(const char *kind) {
     QPixmap im(24, 24);
     im.fill(QColor(0, 0, 0, 0));
@@ -1379,6 +1394,7 @@ int main(int argc, char **argv) {
         int nargs = 3;
         char *offs[] = {argv[0], (char *)"--platform", (char *)"offscreen"};
         QApplication app(nargs, offs);
+        app.setWindowIcon(make_app_icon());
         return gate_shot(m, shot);
     }
     if (mode == "click" || !cells.isEmpty())
@@ -1399,6 +1415,7 @@ int main(int argc, char **argv) {
         cargv[cargc] = nullptr;
     }
     QApplication app(cargc, cargv);
+    app.setWindowIcon(make_app_icon());
     Model *pm = &m;
     if (pm->sel < 0) pm->sel = 1;   // default A01 (bottom-left cap)
 
