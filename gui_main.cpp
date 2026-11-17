@@ -1713,18 +1713,26 @@ int main(int argc, char **argv) {
             QStringList ls;
             int li = 0;
             for (const Layer &l : mp->layers) {
-                QString s = QStringLiteral("%1 '%2'").arg(l.type).arg(l.value);
-                if (!l.dependency.isEmpty()) s += QStringLiteral(" DEP=%1").arg(l.dependency);
+                QString s;
+                if (l.dependency.isEmpty())
+                    s = QStringLiteral("Always '%1'").arg(l.value);
+                else
+                    s = QStringLiteral("%1 DEP=%2").arg(l.dependency).arg(l.value);
                 if (l.type.compare(QStringLiteral("TEXT"), Qt::CaseInsensitive) != 0)
                     s = QStringLiteral("\u2691 ACTION %1").arg(s);  // needs --allow-actions in pktm
                 if (++li == lsel) s = QStringLiteral("> %1").arg(s);
                 ls << s;
             }
-            layers->setText(QStringLiteral("layers (%1): %2").arg(n)
-                                              .arg(ls.join(" | ")));
+            layers->setText(QStringLiteral("POSKEY %1 — layers (%2): %3")
+                                .arg(pk).arg(n).arg(ls.join(" | ")));
             layerW->clear(); layerW->addItems(ls);
+            // vendor guard: "Always" cannot be renamed or deleted
+            const Layer &lsel_layer = mp->layers[qBound(0, lsel - 1, n - 1)];
+            if (lsel_layer.dependency.isEmpty()) { renbtn->hide(); delbtn->hide(); }
+            else { renbtn->show(); delbtn->show(); }
         } else {
             layers->setText(QStringLiteral("layers (0) — type a MACRO, then + Layer / Set"));
+            renbtn->show(); delbtn->show();
         }
         QStringList nocard;
         for (const Map &mm : pm->pm.maps)
@@ -2252,6 +2260,25 @@ int main(int argc, char **argv) {
         edit->setText(QStringLiteral("WEBSITE")); press_btn("ren");
         press_btn("copy");
         spinl->setValue(3); press_btn("del");
+        // vendor guard: with the "Always" layer selected, rename/delete are hidden
+        {
+            const Map *m0 = find_map_c(pm->pm, pm->sel);
+            if (m0 && !m0->layers.isEmpty()) {
+                int ai = -1, li = 0;
+                for (const Layer &l : m0->layers)
+                    if (l.dependency.isEmpty() && ai < 0) ai = li + 1;
+                if (ai > 0) {
+                    spinl->setValue(ai);
+                    if (!renbtn->isHidden() || !delbtn->isHidden()) {
+                        std::printf("clicktest FAIL: Always guard not applied\n"); ++gfail;
+                    }
+                }
+                if (layerW->count() != m0->layers.size()) {
+                    std::printf("clicktest FAIL: layer list count wrong\n"); ++gfail;
+                }
+                std::printf("dlg guard: always=%d rows=%d\n", ai, (int)layerW->count());
+            }
+        }
         // negative case: disabled button must not fire
         copybtn->setEnabled(false);
         spinl->setValue(1);
