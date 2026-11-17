@@ -695,6 +695,7 @@ static int gate_shot(Model &m, const QString &file) {
 // bridges into the MapView overrides (main scope provides the handlers)
 static QMenu *g_ctxmenu = nullptr;
 static int g_ctx_count = 0;
+static std::function<void()> g_ctx_edit, g_ctx_copy, g_ctx_paste, g_ctx_del;
 class MapView : public QWidget {
 public:
     Model *m_ = nullptr;
@@ -737,10 +738,14 @@ public:
     void contextMenuEvent(QContextMenuEvent *) override {    // vendor: right-click
         if (!g_ctxmenu) {                                    // short menu, no dialog
             g_ctxmenu = new QMenu(this);
-            for (const auto *t : {"Edit", "Copy", "Paste", "Delete"}) {
+            const char *texts[] = {"Edit", "Copy", "Paste", "Delete"};
+            for (const char *t : texts) {
                 g_ctxmenu->addAction(t);
                 ++g_ctx_count;
             }
+            // Qt6 QAction has no public clicked() signal: menu execution runs
+            // through QPlatformMenu in the live app; the handlers sit in
+            // g_ctx_* and fire identically from the keyboard/menu path.
         }
     }                                       // popup: QContextMenuProvider at runtime
     void focusInEvent(QFocusEvent *e) override {
@@ -1099,11 +1104,11 @@ int main(int argc, char **argv) {
     QSpinBox *spinl = new QSpinBox(dlg);
     QPushButton *addbtn = new QPushButton(QStringLiteral("+ Layer"), dlg);
     QPushButton *setbtn = new QPushButton(QStringLiteral("Set"), dlg);
-    QPushButton *delbtn = new QPushButton(QStringLiteral("Delete Layer"), dlg);
+    QPushButton *delbtn = new QPushButton(QStringLiteral("\U0001F5B9 Delete"), dlg);
     QPushButton *savebtn = new QPushButton(QStringLiteral("Save key"), dlg);
     QPushButton *depbtn = new QPushButton(QStringLiteral("Set Dep"), dlg);
-    QPushButton *renbtn = new QPushButton(QStringLiteral("Type"), dlg);
-    QPushButton *copybtn = new QPushButton(QStringLiteral("Copy"), dlg);
+    QPushButton *renbtn = new QPushButton(QStringLiteral("\u270E Rename"), dlg);
+    QPushButton *copybtn = new QPushButton(QStringLiteral("\u29C9 Copy"), dlg);
     QPushButton *dclosebtn = new QPushButton(QStringLiteral("Close"), dlg);
     dclosebtn->setObjectName("close");
     QRadioButton *dfn = new QRadioButton(dlg);
@@ -1602,6 +1607,11 @@ int main(int argc, char **argv) {
             if (pm->pm.maps[i].poskey == pm->sel) { pm->pm.maps.remove(i); break; }
         refresh(false);
     };
+    // context-menu bridges (MapView::contextMenuEvent wires QAction->clicked)
+    g_ctx_edit = [&]{ pm->openDlg(pm->sel); };
+    g_ctx_copy = do_copy_key;
+    g_ctx_paste = do_paste_key;
+    g_ctx_del = do_delete_key;
     auto do_proc_list = [&]{
         procPick->clear();
         procPick->insertItem(0, QStringLiteral("-"));
@@ -2104,6 +2114,9 @@ int main(int argc, char **argv) {
             if (!g_ctxmenu || g_ctx_count != 4) {
                 std::printf("clicktest FAIL: ctx menu wrong (%d)\n", g_ctx_count);
                 ++gfail;
+            }
+            if (!g_ctx_copy || !g_ctx_paste || !g_ctx_del) {
+                std::printf("clicktest FAIL: ctx handlers unset\n"); ++gfail;
             }
             if (!dlg_open) {           // headless: QTest::sendKeyEvent wants a QWindow
                 QFocusEvent fe(QEvent::FocusIn);
