@@ -2074,7 +2074,7 @@ int main(int argc, char **argv) {
         knewdlg->hide();
         open_dialog(pm->sel);
     };
-    klistbtn->connect(klistbtn, &QPushButton::clicked, [&]{ dproc->show(); });
+    klistbtn->connect(klistbtn, &QPushButton::clicked, [&]{ dproc->setGeometry(QRect(6, 6, qMax(360, win.width() / 2), 320)); dproc->show(); });
     knextbtn->connect(knextbtn, &QPushButton::clicked, [&]{ f_knnext(); });
     // ---- vendor Settings window (§2): 4 checkboxes + date format + language ----
     QWidget *sdlg = new QWidget(&win);
@@ -2956,7 +2956,7 @@ int main(int argc, char **argv) {
             winbtn, recbtn, lblWin, dlg, dclosebtn, dfn, dft, dapp, dweb, menu, sbar,
             mid, procW, renprocBtn, delprocBtn, statusline, cbBtf, cbRep, cbSlw,
             knewdlg, sdlg, knq, knalways, knproc, procFld, klistbtn, knextbtn,
-            kpic, phead, shint,
+            kpic, phead, shint, wHead, winW,
             shdr, cbDetect, cbStart, cbMin, cbOpen, dfLbl, dfCb, debtn, enbtn };
         QWidget *saboteur = nullptr;
         if (getenv("PKT_LAYOUT_SABOTAGE")) {
@@ -2973,6 +2973,7 @@ int main(int argc, char **argv) {
             win.resize(qMax(320, sz.left(xx).toInt()), qMax(240, sz.mid(xx + 1).toInt()));
         if (getenv("PKT_OPEN_DIALOG")) pm->openDlg(pm->sel > 0 ? pm->sel : 1);
         if (getenv("PKT_SHOW_SETTINGS")) f_showsettings();
+        if (getenv("PKT_SHOW_WIN")) { dproc->setGeometry(QRect(6, 6, qMax(360, win.width() / 2), 320)); dproc->show(); }
         win.show();   // show_helper() runs the layout pass (installLayout) offscreen
         int badw = 0, badl = 0;
         auto idw = [&](QWidget *x) -> int {
