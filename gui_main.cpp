@@ -672,7 +672,8 @@ static int gate_click(Model &m, const QStringList &cells, const QString &setv,
 }
 
 static QByteArray make_label_pdf_geom(const QVector<std::pair<int, QString>> &rows,
-                                      const QVector<std::pair<int, QString>> &rows_types)
+                                      const QVector<std::pair<int, QString>> &rows_types,
+                                      const QHash<int, QString> &print_texts)
 {
     // one A4 page: rect per POSKey at the pmap's own <Key> geometry + label inside
     const QChar L('<'), G('>');
@@ -712,6 +713,8 @@ static QByteArray make_label_pdf_geom(const QVector<std::pair<int, QString>> &ro
     for (auto it = g_geom.cbegin(); it != g_geom.cend(); ++it) {
         const KeyGeom &k = it.value();
         QString lbl = k.text;
+        if (lbl.isEmpty() && print_texts.contains(it.key()))
+            lbl = print_texts.value(it.key());
         if (lbl.isEmpty()) {
             const auto rv = hasv.find(it.key());
             if (rv != hasv.end() && rv.value() != QLatin1String("-"))
@@ -1832,7 +1835,7 @@ int main(int argc, char **argv) {
             if (ia >= 0) tmp = pm->pm.maps[ia].layers;
             if (ia >= 0) pm->pm.maps[ia].layers = (ib >= 0) ? pm->pm.maps[ib].layers : QVector<Layer>();
             if (ib >= 0) pm->pm.maps[ib].layers = tmp;
-            else if (!tmp.isEmpty()) pm->pm.maps << Map{pb, tmp};
+            else if (!tmp.isEmpty()) { Map nm; nm.poskey = pb; nm.layers = tmp; pm->pm.maps << nm; }
         }
         refresh(false);
         save_note = QStringLiteral("swapped %1 keys (A=%2 B=%3)").arg(n).arg(a).arg(b);
@@ -1866,7 +1869,7 @@ int main(int argc, char **argv) {
         if (tmap.layers.isEmpty() || pm->sel < 0) { save_note = QStringLiteral("template: no map for sel"); return; }
         const int ix = [pm]{ for (int j = 0; j < pm->pm.maps.size(); ++j) if (pm->pm.maps[j].poskey == pm->sel) return j; return -1; }();
         if (ix >= 0) pm->pm.maps[ix].layers = tmap.layers;
-        else pm->pm.maps << Map{pm->sel, tmap.layers};
+        else { Map nm; nm.poskey = pm->sel; nm.layers = tmap.layers; pm->pm.maps << nm; }
         refresh(false);
         save_note = QStringLiteral("template applied to sel");
     };
@@ -1910,8 +1913,11 @@ int main(int argc, char **argv) {
         pf.write(make_label_pdf(rows)); pf.close();
         const QString tgt2 = (pm->path.isEmpty() ? out : pm->path) + QStringLiteral(".geom.pdf");
         if (!g_geom.isEmpty()) {
+            QHash<int, QString> texts;
+            for (const Map &mp : pm->pm.maps)
+                if (!mp.print_text.isEmpty()) texts.insert(mp.poskey, mp.print_text);
             QFile pf2(tgt2);
-            if (pf2.open(QIODevice::WriteOnly)) { pf2.write(make_label_pdf_geom(rows, rt)); pf2.close(); }
+            if (pf2.open(QIODevice::WriteOnly)) { pf2.write(make_label_pdf_geom(rows, rt, texts)); pf2.close(); }
         }
         save_note = QStringLiteral("exported %1 labels -> %2").arg(rows.size()).arg(tgt);
     };
@@ -2276,7 +2282,12 @@ int main(int argc, char **argv) {
             if (rows.size() > 40) {
                 const QByteArray pdfb = make_label_pdf(rows);
                 QFile fw(tgt); if (fw.open(QIODevice::WriteOnly)) { fw.write(pdfb); fw.close(); }
-                const QByteArray gb = make_label_pdf_geom(rows, rt);
+                const QByteArray gb = [&]{
+                    QHash<int, QString> texts;
+                    for (const Map &mp : fresh.maps)
+                        if (!mp.print_text.isEmpty()) texts.insert(mp.poskey, mp.print_text);
+                    return make_label_pdf_geom(rows, rt, texts);
+                }();
                 const QString gt2 = g_origpath + QStringLiteral(".geom.pdf");
                 QFile gw(gt2); if (gw.open(QIODevice::WriteOnly)) { gw.write(gb); gw.close(); }
                 std::printf("geom pdf bytes=%d\n", (int)gb.size());

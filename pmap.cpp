@@ -59,6 +59,21 @@ Pmap parse_pmap(const QString &xml) {
                     m.poskey = digits.toInt();
                 }
             }
+            {   // vendor print label + colors at MAP level
+                QRegularExpression txtRe("<Text>(.*?)</Text>",
+                                         QRegularExpression::DotMatchesEverythingOption);
+                if (auto tm = txtRe.match(body); tm.isValid())
+                    m.print_text = unhex_local(tm.captured(1).trimmed()).trimmed();
+                auto colr = [&](const QString &tag) -> int {
+                    QRegularExpression r("<" + tag + ">([^<]*)</" + tag + ">",
+                                         QRegularExpression::DotMatchesEverythingOption);
+                    const QRegularExpressionMatch cm = r.match(body);
+                    if (!cm.isValid() || cm.captured(1).trimmed().isEmpty()) return -2;
+                    const QString v = unhex_local(cm.captured(1).trimmed()).trimmed();
+                    return v.toInt();
+                };
+                m.fore = colr("ForeColor"); m.back = colr("BackColor");
+            }
             {
                 QRegularExpressionMatchIterator lt = layerRe.globalMatch(body);
                 while (lt.hasNext()) {
@@ -171,6 +186,11 @@ QString serialize_pmap(const Pmap &p) {
     QString x = "<POSKeyMapper><MAPPING>";
     for (const Map &m : p.maps) {
         x += "<MAP><POSKey>" + to_hex_cp1252(QString::number(m.poskey)) + "</POSKey>";
+        x += "<Text>" + to_hex_cp1252(m.print_text) + "</Text>";
+        if (m.fore != -2)
+            x += "<ForeColor>" + to_hex_cp1252(QString::number(m.fore)) + "</ForeColor>";
+        if (m.back != -2)
+            x += "<BackColor>" + to_hex_cp1252(QString::number(m.back)) + "</BackColor>";
         for (const Layer &l : m.layers) {
             x += "<LAYER><Type>" + to_hex_cp1252(l.type)
                + "</Type><Value>" + to_hex_cp1252(l.value) + "</Value>";
