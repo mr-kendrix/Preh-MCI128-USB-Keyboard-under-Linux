@@ -73,6 +73,7 @@
 #include <QSaveFile>
 #include <QDateTime>
 #include <QToolButton>
+#include <QScrollArea>
 #include <QFileInfo>
 #include <QDir>
 #include "upload.h"
@@ -149,6 +150,7 @@ static QString grid_stats() {
     return QStringLiteral("rows=%1 caps=%2 slots=%3").arg(NROWS).arg(caps).arg(NROWS * SLOTS);
 }
 
+static int g_zoom = 100;   // board zoom percent (vendor status bar zoom in/out)
 static QVector<Cell> layout_cells(const QSize &board) {
     QVector<Cell> out;
     if (g_geom.size() >= 64) {          // original geometry from the <KEY> sections
@@ -157,11 +159,12 @@ static QVector<Cell> layout_cells(const QSize &board) {
             const KeyGeom &k = it.value();
             maxx = qMax(maxx, k.x + k.w); maxy = qMax(maxy, k.y + k.h);
         }
-        const double sx = (double)board.width() / maxx;
-        const double sy = (double)board.height() / maxy;
+        const double zf = g_zoom / 100.0;
+        const double sx = (double)board.width() / maxx * zf;
+        const double sy = (double)board.height() / maxy * zf;
         const double s = qMin(sx, sy);
-        const int xoff = (board.width() - (int)(maxx * s)) / 2;
-        const int yoff = (board.height() - (int)(maxy * s)) / 2;
+        const int xoff = qMax(4, (board.width() - (int)(maxx * s)) / 2);
+        const int yoff = qMax(4, (board.height() - (int)(maxy * s)) / 2);
         std::vector<int> keys;
         for (auto it = g_geom.constBegin(); it != g_geom.constEnd(); ++it) keys.push_back(it.key());
         std::sort(keys.begin(), keys.end());
@@ -1458,7 +1461,11 @@ int main(int argc, char **argv) {
     shint->setWordWrap(true);
     vcol->addWidget(kpic, 2); vcol->addWidget(phead); vcol->addWidget(procW, 3); vcol->addWidget(shint);
     hrow->addWidget(scol, 1);
-    hrow->addWidget(board, 4);
+    QScrollArea *scr = new QScrollArea(nullptr);
+    scr->setObjectName("scroll");
+    scr->setWidget(board);            // reduced fork API: setWidget, not setContents
+    scr->setWidgetResizable(false);   // content keeps its (zoomed) size -> scrollbars appear
+    hrow->addWidget(scr, 4);
     vlay->addWidget(mid);
     board->start_heartbeat();
     // Vendor shell (review 2026-11-15): menu bar + status bar (QMenuBar/QStatusBar
@@ -1504,6 +1511,13 @@ int main(int argc, char **argv) {
     zin->setObjectName("zin"); zin->setIcon(mkicon("plus"));
     QLabel *zoomlbl = new QLabel(QStringLiteral("100 %"), sbar);
     sbar->addWidget(zout); sbar->addWidget(zoomlbl); sbar->addWidget(zin);
+    auto upd_zoom = [&]{ zoomlbl->setText(QStringLiteral("%1 %").arg(g_zoom));
+        board->setMinimumWidth(qMax(240, 480 * g_zoom / 100));
+        pm->cells = layout_cells(board->size()); };
+    auto f_zoomout = [&]{ if (g_zoom > 50) { g_zoom -= 25; upd_zoom(); std::printf("zoom=%d\n", g_zoom); } };
+    auto f_zoomin  = [&]{ if (g_zoom < 400) { g_zoom += 25; upd_zoom(); std::printf("zoom=%d\n", g_zoom); } };
+    zout->connect(zout, &QToolButton::clicked, [&]{ f_zoomout(); });
+    zin->connect(zin, &QToolButton::clicked, [&]{ f_zoomin(); });
     QLabel *statusline = new QLabel(sbar);
     sbar->addWidget(statusline);
     QWidget *ctl = new QWidget(body);          // left column: process list only (vendor)
@@ -2817,6 +2831,16 @@ int main(int argc, char **argv) {
             std::printf("ribbon tabs ok: mod=%d date=%s\n", (int)pm->st.modules.contains("MSR"), pm->st.datefmt.toUtf8().constData());
             tabSel->setValue(1);
         }
+        // zoom gate: +/- steps, board min-width and cells follow, back to 100
+        {
+            f_zoomin(); f_zoomin();
+            if (g_zoom != 150) { std::printf("clicktest FAIL: zoom in broken\n"); ++gfail; }
+            f_zoomout();
+            if (g_zoom != 125) { std::printf("clicktest FAIL: zoom out broken\n"); ++gfail; }
+            f_zoomout();
+            if (g_zoom != 100) { std::printf("clicktest FAIL: zoom not back to 100\n"); ++gfail; }
+            std::printf("zoom gate ok\n");
+        }
         // final full-file export: re-parse the pmap on disk (all 128 maps) -> multi-page
         {
             static const QString g_origpath = path;   // argv pmap before any 'open recent'
@@ -2955,7 +2979,7 @@ int main(int argc, char **argv) {
             winbtn, recbtn, lblWin, dlg, dclosebtn, dfn, dft, dapp, dweb, menu, sbar,
             mid, procW, renprocBtn, delprocBtn, statusline, cbBtf, cbRep, cbSlw,
             knewdlg, sdlg, knq, knalways, knproc, procFld, klistbtn, knextbtn,
-            kpic, phead, shint, wHead, winW,
+            kpic, phead, shint, wHead, winW, scr,
             shdr, cbDetect, cbStart, cbMin, cbOpen, dfLbl, dfCb, debtn, enbtn };
         QWidget *saboteur = nullptr;
         if (getenv("PKT_LAYOUT_SABOTAGE")) {
@@ -2987,7 +3011,7 @@ int main(int argc, char **argv) {
                    x == menu ? 43 : x == sbar ? 44 : x == mid ? 45 : x == procW ? 46 :
                    x == renprocBtn ? 47 : x == delprocBtn ? 48 : x == statusline ? 49 :
                    x == cbBtf ? 50 : x == cbRep ? 51 : x == cbSlw ? 52 :
-                   x == knewdlg ? 53 : x == sdlg ? 54 : x == knq ? 55 : x == knalways ? 56 :
+                   x == scr ? 73 : x == knewdlg ? 53 : x == sdlg ? 54 : x == knq ? 55 : x == knalways ? 56 :
                    x == knproc ? 57 : x == procFld ? 58 : x == klistbtn ? 59 : x == knextbtn ? 60 :
                    x == shdr ? 61 : x == cbDetect ? 62 : x == cbStart ? 63 : x == cbMin ? 64 :
                    x == cbOpen ? 65 : x == dfLbl ? 66 : x == dfCb ? 67 : x == debtn ? 68 : x == enbtn ? 69 :
