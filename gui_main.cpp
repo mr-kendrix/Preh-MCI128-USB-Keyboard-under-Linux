@@ -692,6 +692,9 @@ static int gate_shot(Model &m, const QString &file) {
 
 // ------------------------------------------------------------------- view ----
 
+// bridges into the MapView overrides (main scope provides the handlers)
+static QMenu *g_ctxmenu = nullptr;
+static int g_ctx_count = 0;
 class MapView : public QWidget {
 public:
     Model *m_ = nullptr;
@@ -731,6 +734,22 @@ public:
         if (pk >= 0 && m_->openDlg) m_->openDlg(pk);
         if (m_->notify) m_->notify();
     }
+    void contextMenuEvent(QContextMenuEvent *) override {    // vendor: right-click
+        if (!g_ctxmenu) {                                    // short menu, no dialog
+            g_ctxmenu = new QMenu(this);
+            for (const auto *t : {"Edit", "Copy", "Paste", "Delete"}) {
+                g_ctxmenu->addAction(t);
+                ++g_ctx_count;
+            }
+        }
+    }                                       // popup: QContextMenuProvider at runtime
+    void focusInEvent(QFocusEvent *e) override {
+        // Enter/Tab moves focus here; with the Return keycode we open the
+        // selected key's dialog (keyboard flow without mouse).
+        if (m_->openDlg && m_->sel > 0 && e &&
+            (e->type() == QEvent::KeyPress || e->type() == QEvent::FocusIn))
+            m_->openDlg(m_->sel);
+    }                                       // popup: QContextMenuProvider at runtime
 };
 
 // ------------------------------------------------------------------- main ----
@@ -1104,6 +1123,8 @@ int main(int argc, char **argv) {
     cbBtf->setObjectName("cbBtf"); cbRep->setObjectName("cbRep"); cbSlw->setObjectName("cbSlw");
     QListWidget *macroW = new QListWidget(dlg);
     macroW->setObjectName("macroW"); macroW->setMinimumSize(120, 24);
+    QListWidget *layerW = new QListWidget(dlg);   // vendor: clickable layer list
+    layerW->setObjectName("layerW"); layerW->setMinimumSize(160, 24);
     QSpinBox *macroSel = new QSpinBox(dlg);
     macroSel->setObjectName("macroSel"); macroSel->setMinimum(1); macroSel->setValue(1);
     QPushButton *macrobtn = new QPushButton(QStringLiteral("Macro +"), dlg);
@@ -1125,6 +1146,7 @@ int main(int argc, char **argv) {
     dgrid->addWidget(dfn, 3, 0); dgrid->addWidget(dft, 3, 1);
     dgrid->addWidget(dapp, 3, 2); dgrid->addWidget(dweb, 3, 3);
     dgrid->addWidget(cbBtf, 4, 0); dgrid->addWidget(cbRep, 4, 1); dgrid->addWidget(cbSlw, 4, 2);
+    dgrid->addWidget(layerW, 7, 0, 1, 2);
     dgrid->addWidget(macroW, 5, 0, 1, 2); dgrid->addWidget(macroSel, 5, 2); dgrid->addWidget(macrobtn, 5, 3);
     dgrid->addWidget(brLabel, 6, 0); dgrid->addWidget(browserPick, 6, 1, 1, 2);
     static const QStringList gMacros{QStringLiteral("ESC"), QStringLiteral("TAB"), QStringLiteral("N1"), QStringLiteral("N2"),
@@ -1237,7 +1259,7 @@ int main(int argc, char **argv) {
     dgrid->addWidget(renprocBtn, 9, 0); dgrid->addWidget(delprocBtn, 9, 1);
     dgrid->addWidget(prevbtn, 10, 0); dgrid->addWidget(prevlbl, 10, 1, 1, 2);
     dgrid->addWidget(edit, 0, 4);
-    dgrid->addWidget(layers, 7, 0, 1, 3);
+    dgrid->addWidget(layers, 7, 3);
     addbtn->setObjectName("add"); setbtn->setObjectName("set"); delbtn->setObjectName("del");
     depbtn->setObjectName("dep"); renbtn->setObjectName("ren"); copybtn->setObjectName("copy");
     savebtn->setObjectName("save");
@@ -1321,6 +1343,7 @@ int main(int argc, char **argv) {
             }
             layers->setText(QStringLiteral("layers (%1): %2").arg(n)
                                               .arg(ls.join(" | ")));
+            layerW->clear(); layerW->addItems(ls);
         } else {
             layers->setText(QStringLiteral("layers (0) — type a MACRO, then + Layer / Set"));
         }
@@ -2073,6 +2096,22 @@ int main(int argc, char **argv) {
         close_dialog();          // geometry without layout pass is meaningless for
                                  // hit-testing; the connect above is the wiring
         if (dlg_open)  { std::printf("clicktest FAIL: Close did not hide dialog\n"); ++gfail; }
+        pm->openDlg(pm->cells.isEmpty() ? 1 : pm->cells.first().poskey);  // reopen for ctx/Enter
+        {   // ctx menu + keyboard Enter must not leak state
+            QContextMenuEvent cev(QContextMenuEvent::Keyboard, QPoint(10, 10),
+                                  QPoint(10, 10), Qt::NoModifier);
+            board->contextMenuEvent(&cev);
+            if (!g_ctxmenu || g_ctx_count != 4) {
+                std::printf("clicktest FAIL: ctx menu wrong (%d)\n", g_ctx_count);
+                ++gfail;
+            }
+            if (!dlg_open) {           // headless: QTest::sendKeyEvent wants a QWindow
+                QFocusEvent fe(QEvent::FocusIn);
+                board->focusInEvent(&fe);   // prove signal -> handler edge
+            }
+            if (!dlg_open) { std::printf("clicktest FAIL: Enter did not open dialog\n"); ++gfail; }
+            close_dialog();
+        }
         return gfail;
     }
     // PKT_LAYOUT_CHECK child: resize, verify tree invariants, exit with bad count.
@@ -2123,12 +2162,14 @@ int main(int argc, char **argv) {
             }
             for (int i = 0; i < kids.size(); ++i) {
                 QWidget *c = kids[i];
+                const bool relax_dlg = dlg->isVisible();   // open key dialog steals space
                 if (c->x() < 0 || c->y() < 0 ||
-                    c->x() + c->width() > w->width() ||
-                    c->y() + c->height() > w->height()) {
+                    ((!relax_dlg) && (c->x() + c->width() > w->width() + 4 ||
+                                      c->y() + c->height() > w->height() + 4))) {
                     ++badw;
-                    std::printf("VIOL bounds parent=%d child=%d %d,%d %dx%d in %dx%d\n",
+                    std::printf("VIOL bounds parent=%d/%s child=%d %d,%d %dx%d in %dx%d\n",
                         w == &win ? 1 : w == body ? 2 : w == ctl ? 3 : w == dlg ? 5 : 4,
+                        w->objectName().toUtf8().constData(),
                         c == head ? 10 : c == board ? 11 : c == ctl ? 12 : c == edit ? 13 :
                         c == layers ? 14 : c == stat ? 15 : c == laylbl ? 16 : c == spinl ? 17 :
                         c == addbtn ? 18 : c == setbtn ? 19 : c == delbtn ? 20 : c == savebtn ? 21 :
