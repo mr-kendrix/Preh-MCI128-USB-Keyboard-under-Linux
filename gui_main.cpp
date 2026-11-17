@@ -2119,7 +2119,9 @@ int main(int argc, char **argv) {
                    {"/tmp/pkt_shot_small.png", 1024, 600}};
             for (const auto &s : shots) {
                 win.resize(s.w, s.h);
+                if (getenv("PKT_OPEN_DIALOG") && pm->sel > 0) pm->openDlg(pm->sel);
                 win.show();
+                std::printf("shot dbg dlg %dx%d vis=%d\n", dlg->width(), dlg->height(), (int)dlg->isVisible());
                 const QPixmap px = win.grab();
                 if (px.isNull() || !px.save(s.f))
                     std::printf("FAIL shot %s\n", s.f);
