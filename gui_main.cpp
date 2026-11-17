@@ -988,10 +988,23 @@ static QIcon mkicon(const char *kind) {
     } else if (k == "gear") {
         pt.drawEllipse(QPointF(12, 12), 7, 7);
         for (int a = 0; a < 8; ++a) {
-            const double r = 3.14159 * a / 4.0;
+            const double r = 3.14159265 * a / 4.0;
             pt.drawLine(QPointF(12 + 7 * qCos(r), 12 + 7 * qSin(r)),
                         QPointF(12 + 9 * qCos(r), 12 + 9 * qSin(r)));
         }
+        pt.drawEllipse(QPointF(12, 12), 3, 3);
+    } else if (k == "folder") {
+        pt.drawLine(QPointF(3, 8), QPointF(8, 8)); pt.drawLine(QPointF(8, 8), QPointF(8, 6));
+        pt.drawRect(QRect(3, 8, 18, 11));
+    } else if (k == "x") {
+        pt.drawLine(QPointF(5, 5), QPointF(19, 19)); pt.drawLine(QPointF(19, 5), QPointF(5, 19));
+    } else if (k == "list") {
+        pt.drawLine(QPointF(4, 7), QPointF(20, 7));
+        pt.drawLine(QPointF(4, 12), QPointF(20, 12));
+        pt.drawLine(QPointF(4, 17), QPointF(20, 17));
+    } else if (k == "doc") {
+        pt.drawRect(QRect(6, 4, 12, 16));
+        pt.drawLine(QPointF(9, 8), QPointF(15, 8)); pt.drawLine(QPointF(9, 12), QPointF(15, 12));
     }
     pt.end();
     QIcon icon; icon.addPixmap(QPixmap(im)); return icon;
@@ -1408,6 +1421,24 @@ int main(int argc, char **argv) {
     accent->setStyleSheet(QStringLiteral("QWidget{background-color:#b5be98;}"));
     accent->setMinimumHeight(6);
     vwin.insertWidget(1, accent);
+    // vendor ribbon: the icon buttons of the SELECTED tab show on the ribbon
+    QWidget *ribbon = new QWidget(&win);
+    ribbon->setObjectName("ribbon");
+    new QHBoxLayout(ribbon);
+    vwin.insertWidget(2, ribbon);
+    QSpinBox *tabSel = new QSpinBox(ribbon);
+    tabSel->setObjectName("tabSel"); tabSel->setMinimum(1); tabSel->setMaximum(5); tabSel->setValue(1);
+    QWidget *ribgrp[5];
+    for (int t = 0; t < 5; ++t) { ribgrp[t] = new QWidget(ribbon); new QHBoxLayout(ribgrp[t]); }
+    auto ribbon_sync = [tabSel, &ribgrp] {
+        for (int t = 0; t < 5; ++t)
+            (tabSel->value() == t + 1 ? ribgrp[t]->show() : ribgrp[t]->hide());
+    };
+    ribbon_sync();
+    tabSel->connect(tabSel, &QSpinBox::valueChanged, [tabSel, &ribgrp](int) {
+        for (int t = 0; t < 5; ++t)
+            (tabSel->value() == t + 1 ? ribgrp[t]->show() : ribgrp[t]->hide());
+    });
     QStatusBar *sbar = new QStatusBar(&win);
     sbar->setObjectName("status");
     // vendor status bar: zoom-out, "100 %", zoom-in, then the file path
@@ -2149,6 +2180,27 @@ int main(int argc, char **argv) {
 
     mk_item(em, QStringLiteral("Export labels (PDF)"), do_export_pdf);
 
+    // vendor ribbon: icon buttons of the selected tab (File=1, Edit=2, …)
+    auto add_rib = [&](int tab, const char *name, const char *icon, std::function<void()> fn) {
+        QWidget *grp = ribgrp[tab - 1];
+        QToolButton *b = new QToolButton(grp);
+        b->setObjectName(name);
+        b->setIcon(mkicon(icon));
+        b->setToolTip(name);
+        b->connect(b, &QToolButton::clicked, [fn]{ fn(); });
+    };
+    add_rib(1, "rib_new", "plus",  [&]{ do_new(true); });
+    add_rib(1, "rib_open", "folder", [&]{ do_open(); });
+    add_rib(1, "rib_recent", "list", [&]{ do_open_recent(); });
+    add_rib(1, "rib_close", "x",   [&]{ do_new(true); });
+    add_rib(2, "rib_copy", "copy",  [&]{ do_copy_key(); });
+    add_rib(2, "rib_paste", "copy", [&]{ if (g_ctx_paste) g_ctx_paste(); });
+    add_rib(2, "rib_del", "trash",  [&]{ do_delete_key(); });
+    add_rib(2, "rib_swap", "gear",  [&]{ do_swap_keys(); });
+    add_rib(2, "rib_pdf", "doc",    [&]{ do_export_pdf(); });
+    add_rib(2, "rib_templ", "pencil", [&]{ do_open_template(); });
+    add_rib(2, "rib_restore", "list", [&]{ do_restore(); });
+
     if (mode == "clicktest") {
         if (!QFile::copy(pm->path, pm->path + QStringLiteral(".orig0")))
             std::printf("note: orig0 copy failed (file exists?)\n");
@@ -2484,6 +2536,29 @@ int main(int argc, char **argv) {
                                  // hit-testing; the connect above is the wiring
         if (dlg_open)  { std::printf("clicktest FAIL: Close did not hide dialog\n"); ++gfail; }
         pm->openDlg(pm->cells.isEmpty() ? 1 : pm->cells.first().poskey);  // reopen for ctx/Enter
+        // ribbon gate: exactly the selected tab's group visible, buttons present
+        {
+            std::function<QToolButton *(QObject *, const char *)> findt =
+                [&](QObject *w, const char *n) -> QToolButton * {
+                for (auto *k : w->children()) {
+                    if (auto t = qobject_cast<QToolButton *>(k))
+                        if (t->objectName() == QLatin1String(n)) return t;
+                    if (auto r = findt(k, n)) return r;
+                }
+                return nullptr;
+            };
+            if (!findt(&win, "rib_open") || !findt(&win, "rib_pdf")) {
+                std::printf("clicktest FAIL: ribbon buttons missing\n"); ++gfail;
+            }
+            tabSel->setValue(1);
+            std::printf("ribbon dbg: hidden=%d,%d,%d,%d,%d\n",
+                        ribgrp[0]->isHidden(), ribgrp[1]->isHidden(), ribgrp[2]->isHidden(),
+                        ribgrp[3]->isHidden(), ribgrp[4]->isHidden());
+            if (ribgrp[0]->isHidden() || !ribgrp[1]->isHidden()) {
+                std::printf("clicktest FAIL: ribbon tab visibility wrong\n"); ++gfail;
+            }
+            std::printf("ribbon ok: tab=%d groups synced\n", (int)tabSel->value());
+        }
         // final full-file export: re-parse the pmap on disk (all 128 maps) -> multi-page
         {
             static const QString g_origpath = path;   // argv pmap before any 'open recent'
