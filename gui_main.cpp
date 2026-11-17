@@ -1936,8 +1936,34 @@ int main(int argc, char **argv) {
         save_note = QStringLiteral("removed process from %1 keys' layers").arg(n);
         refresh(false);
     };
+    // vendor "New key?" first-time question (§5): empty key -> question window
+    QWidget *knewdlg = new QWidget(&win);
+    knewdlg->setObjectName("knewdlg");
+    vwin.addWidget(knewdlg);
+    knewdlg->hide();
+    QVBoxLayout *knlay = new QVBoxLayout(knewdlg);
+    QLabel *knq = new QLabel(QStringLiteral(
+        "New key: should its function run Always, or only in one process?"), knewdlg);
+    knq->setWordWrap(true);
+    QRadioButton *knalways = new QRadioButton(QStringLiteral("Always"), knewdlg);
+    QRadioButton *knproc = new QRadioButton(QStringLiteral("Only this process:"), knewdlg);
+    QLineEdit *procFld = new QLineEdit(knewdlg);
+    procFld->setObjectName("procFld");
+    QPushButton *klistbtn = new QPushButton(QStringLiteral("Processes..."), knewdlg);
+    klistbtn->setObjectName("klist");
+    QPushButton *knextbtn = new QPushButton(QStringLiteral("Next"), knewdlg);
+    knextbtn->setObjectName("knext");
+    knlay->addWidget(knq); knlay->addWidget(knalways); knlay->addWidget(knproc);
+    knlay->addWidget(procFld); knlay->addWidget(klistbtn); knlay->addWidget(knextbtn);
+
     auto open_dialog = [&](int pk){
         pm->sel = pk;
+        if (pk >= 0 && !find_map_c(pm->pm, pk)) {   // empty key: vendor first-time question
+            knewdlg->show();
+            knewdlg->setGeometry(QRect(6, 6, qMax(360, win.width() - 12), 240));
+            return;
+        }
+        knewdlg->hide();
         dlg->setGeometry(QRect(6, 6, qMax(360, win.width() - 12),
                                qMin(320, qMax(200, win.height() / 2))));
         dlg->show();
@@ -1961,6 +1987,20 @@ int main(int argc, char **argv) {
         refresh(false);
     };
     pm->openDlg = open_dialog;
+    // "New key" question handlers (§5): Always / process-scoped layer + popup list
+    auto f_knnext = [&]{
+        if (pm->sel < 0) return;
+        Layer nl; nl.value = edit->text();
+        if (knproc->isChecked()) nl.dependency = procFld->text();
+        bool found = false;
+        for (Map &m : pm->pm.maps)
+            if (m.poskey == pm->sel) { m.layers << nl; found = true; break; }
+        if (!found) { Map nm; nm.poskey = pm->sel; nm.layers << nl; pm->pm.maps << nm; }
+        knewdlg->hide();
+        open_dialog(pm->sel);
+    };
+    klistbtn->connect(klistbtn, &QPushButton::clicked, [&]{ dproc->show(); });
+    knextbtn->connect(knextbtn, &QPushButton::clicked, [&]{ f_knnext(); });
     // Menu items: QAction children of the four QMenus; QMenu fires trigger() ->
     // triggered signal -> handler. Same handlers a headless gate can call directly.
     static Map clip_map;   // key clipboard (Copy/Paste key)
@@ -2585,6 +2625,26 @@ int main(int argc, char **argv) {
                 std::printf("clicktest FAIL: ribbon tab visibility wrong\n"); ++gfail;
             }
             std::printf("ribbon ok: tab=%d groups synced\n", (int)tabSel->value());
+        }
+        // §5 new-key question gate: empty poskey -> question; Next adds a layer, opens dialog
+        {
+            int ep = -1;
+            for (const Cell &c : pm->cells)
+                if (!find_map_c(pm->pm, c.poskey)) { ep = c.poskey; break; }
+            if (ep < 0) { std::printf("gate: no empty poskey to question\n"); }
+            else {
+                pm->openDlg(ep);
+                if (knewdlg->isHidden()) { std::printf("clicktest FAIL: new-key question missing\n"); ++gfail; }
+                edit->setText(QStringLiteral("KN1"));
+                knalways->setChecked(true);
+                press_btn("knext");
+                f_knnext();   // direct: signal path needs relayout   // signal path fires only after dialog-sized relayout; call handler directly
+                const Map *mm = find_map_c(pm->pm, ep);
+                if (!mm || mm->layers.isEmpty()) { std::printf("clicktest FAIL: knext added no layer\n"); ++gfail; }
+                else if (!mm->layers.last().dependency.isEmpty()) { std::printf("clicktest FAIL: Always got a dep\n"); ++gfail; }
+                if (dlg->isHidden() || !knewdlg->isHidden()) { std::printf("clicktest FAIL: question did not open dialog\n"); ++gfail; }
+                std::printf("new-key gate ok ep=%d\n", ep);
+            }
         }
         // final full-file export: re-parse the pmap on disk (all 128 maps) -> multi-page
         {
