@@ -837,28 +837,30 @@ static QByteArray make_label_pdf(const QVector<std::pair<int, QString>> &rows)
     QByteArray pdf("%PDF-1.4\n");
     QVector<int> off(fontObj + 1, 0);
     auto put = [&](int n, const QString &s) { off[n] = pdf.size(); pdf += QStringLiteral("%1 0 obj\n").arg(n).toUtf8(); pdf += s.toUtf8(); pdf += QByteArrayLiteral("\nendobj\n"); };
-    QString kids; for (int p = 0; p < pages; ++p) kids += QStringLiteral("%1 0 obj ").arg(3 + p);
-    put(1, dict(QStringLiteral("/Pages 2 0 obj ")));
-    put(2, dict(QStringLiteral("/Type /Pages /Kids [") + kids + QStringLiteral("] /Count ") + QString::number(pages) + QStringLiteral(" ")));
-    const QString f0 = dict(QStringLiteral("/F0 ") + QString::number(fontObj) + QStringLiteral(" 0 obj "));
+    QString kids; for (int p = 0; p < pages; ++p) kids += QStringLiteral("%1 0 R ").arg(3 + p);
+    put(1, dict(QStringLiteral("/Pages 2 0 R ")));
+    put(2, dict(QStringLiteral("/Type /Pages /Kids [") + kids.trimmed() + QStringLiteral("] /Count ") + QString::number(pages) + QStringLiteral(" ")));
+    const QString f0 = dict(QStringLiteral("/F0 ") + QString::number(fontObj) + QStringLiteral(" 0 R "));
     const QString res = dict(QStringLiteral("/Font ") + f0 + QStringLiteral(" "));
     for (int p = 0; p < pages; ++p) {
         const int pg = 3 + p, cont = 3 + pages + p;
-        put(pg, dict(QStringLiteral("/Type /Page /Parent 2 0 obj /Resources ") + res
-            + QStringLiteral(" /MediaBox [0 0 595 842] /Contents ") + QString::number(cont) + QStringLiteral(" 0 obj ")));
+        put(pg, dict(QStringLiteral("/Type /Page /Parent 2 0 R /Resources ") + res
+            + QStringLiteral(" /MediaBox [0 0 595 842] /Contents ") + QString::number(cont) + QStringLiteral(" 0 R ")));
         QString body = QStringLiteral("BT\n/F0 9 Tf\n14 TL\n20 790 Td\n");
         for (int i = p * per_page; i < qMin((p + 1) * per_page, rows.size()); ++i)
-            body += esc(QStringLiteral("%1: %2").arg(rows[i].first).arg(rows[i].second)) + QStringLiteral("\nT*\n");
+            body += QStringLiteral("(") + esc(QStringLiteral("%1: %2").arg(rows[i].first).arg(rows[i].second))
+                  + QStringLiteral(") Tj\nT*\n");
         body += QStringLiteral("ET\n");
         const QByteArray c = body.toUtf8();
-        put(cont, dict(QStringLiteral("/Length ") + QString::number(c.size()) + QStringLiteral(" ") + QStringLiteral("stream\n") + QString::fromLatin1(c) + QStringLiteral("\nendstream")));
+        put(cont, dict(QStringLiteral("/Length ") + QString::number(c.size()) + QStringLiteral(" "))
+                + QStringLiteral("stream\n") + QString::fromLatin1(c) + QStringLiteral("\nendstream"));
     }
     put(fontObj, dict(QStringLiteral("/Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding ")));
     QString xref = QStringLiteral("xref\n0 %1\n0000000000 65535 f \n").arg(fontObj);
     for (int n = 1; n <= fontObj; ++n) xref += QStringLiteral("%1 00000 n \n").arg(off[n], 10, 10, QLatin1Char('0'));
     const int xpos = pdf.size();
     pdf += xref.toUtf8();
-    pdf += (QStringLiteral("trailer\n") + dict(QStringLiteral("/Root 1 0 obj"))
+    pdf += (QStringLiteral("trailer\n") + dict(QStringLiteral("/Root 1 0 R /Size ") + QString::number(fontObj))
             + QStringLiteral("\nstartxref\n") + QString::number(xpos) + QStringLiteral("\n%%EOF\n")).toUtf8();
     return pdf;
 }
