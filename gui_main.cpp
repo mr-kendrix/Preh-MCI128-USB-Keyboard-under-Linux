@@ -16,6 +16,7 @@
 
 #include <QApplication>
 #include <functional>
+#include <QtMath>
 #include <QWidget>
 #include <QLabel>
 #include <QPoint>
@@ -70,6 +71,7 @@
 #include "mapper.h"
 #include <QSaveFile>
 #include <QDateTime>
+#include <QToolButton>
 #include <QFileInfo>
 #include <QDir>
 #include "upload.h"
@@ -299,25 +301,25 @@ static void paint_grid(QPainter &pt, const Model &m, const QSize &board) {
         if (!c.anchor) continue; // right half of a wide cap shares the painted rect
         const Map *mp = find_map_c(m.pm, c.poskey);
         const bool is_sel = (m.sel == c.poskey);
-        QColor fill(0xc2, 0xc6, 0xcc);   // vendor grey: no POS key here at all
+        QColor edge(0xc2, 0xc6, 0xcc);   // vendor grey: no POS key here at all
         for (const Cell &cc : m.cells)
-            if (cc.poskey == c.poskey + 1 && cc.rc == c.rc) { fill = QColor(0xc8, 0xd8, 0xe2); break; }
+            if (cc.poskey == c.poskey + 1 && cc.rc == c.rc) { edge = QColor(0xc8, 0xd8, 0xe2); break; }
         if (mp && !mp->layers.isEmpty()) {
             // vendor border semantics: green = function FOR the selected process,
             // blue-grey = only for other processes, light = no function at all.
             bool for_sel = false, for_other = false;
             for (const Layer &l : mp->layers)
                 (sel_layer(l, m.procSel) ? for_sel : for_other) = true;
-            if (for_sel) fill = QColor(0x9a, 0xc8, 0x9e);
-            else if (for_other) fill = QColor(0xb4, 0xbc, 0xc8);
-            else fill = QColor(0xe6, 0xe7, 0xea);   // vendor light: key exists, no function
+            if (for_sel) edge = QColor(0x9a, 0xc8, 0x9e);
+            else if (for_other) edge = QColor(0xb4, 0xbc, 0xc8);
+            else edge = QColor(0xe6, 0xe7, 0xea);   // vendor light: key exists, no function
         } else if (mp) {
-            fill = QColor(0xe6, 0xe7, 0xea);        // poskey present, no layers
+            edge = QColor(0xe6, 0xe7, 0xea);        // poskey present, no layers
         }
-        if (is_sel) fill = QColor(0xff, 0xe0, 0x66);   // vendor yellow = selected key
-        pt.setBrush(fill);
-        pt.setPen(QColor(0x6a, 0x6f, 0x78));
-        pt.drawRoundedRect(c.rc, 4, 4);
+        if (is_sel) edge = QColor(0xff, 0xe0, 0x66);   // vendor yellow = selected key
+        pt.setBrush(QColor(0xff, 0xff, 0xff));         // vendor tile: white square...
+        pt.setPen(QPen(edge, 3));                      // ...thick border carries the state
+        pt.drawRoundedRect(c.rc, 3, 3);
         const int fs = qBound(7, c.rc.width() / 4, 12);
         pt.setPen(QColor(0x22, 0x25, 0x2b));
         pt.setFont(QFont(QStringLiteral("sans-serif"), fs));
@@ -981,6 +983,15 @@ static QIcon mkicon(const char *kind) {
     } else if (k == "copy") {
         pt.drawRect(QRect(4, 3, 9, 9));              // back sheet
         pt.drawRect(QRect(10, 11, 9, 9));            // front sheet
+    } else if (k == "minus") {
+        pt.drawLine(QPointF(4, 12), QPointF(20, 12));
+    } else if (k == "gear") {
+        pt.drawEllipse(QPointF(12, 12), 7, 7);
+        for (int a = 0; a < 8; ++a) {
+            const double r = 3.14159 * a / 4.0;
+            pt.drawLine(QPointF(12 + 7 * qCos(r), 12 + 7 * qSin(r)),
+                        QPointF(12 + 9 * qCos(r), 12 + 9 * qSin(r)));
+        }
     }
     pt.end();
     QIcon icon; icon.addPixmap(QPixmap(im)); return icon;
@@ -1363,12 +1374,21 @@ int main(int argc, char **argv) {
     board->setMinimumSize(QSize(480, 118));   // min height fits small windows too
     // Vendor left column: process list selects the view (radio list);
     // board sits right of it in one row — real layout, no coordinates.
+    // Vendor sidebar (dark): keyboard picture placeholder, "Process:" list, hint
     QWidget *mid = new QWidget(body);
+    mid->setObjectName("sidebar");
+    mid->setStyleSheet(QStringLiteral("QWidget{background-color:#c2c6c6;}"));
     QHBoxLayout *hrow = new QHBoxLayout(mid);
-    QListWidget *procW = new QListWidget(mid);
+    QWidget *scol = new QWidget(mid);   // logo image + Process list + hint
+    QVBoxLayout *vcol = new QVBoxLayout(scol);
+    QLabel *phead = new QLabel(QStringLiteral("Process:"), scol);
+    QListWidget *procW = new QListWidget(scol);
     procW->setObjectName("procview");
     procW->setMinimumWidth(140);
-    hrow->addWidget(procW, 1);
+    QLabel *shint = new QLabel(QStringLiteral("Double-click a key to edit it."), scol);
+    shint->setWordWrap(true);
+    vcol->addWidget(phead); vcol->addWidget(procW, 3); vcol->addWidget(shint);
+    hrow->addWidget(scol, 1);
     hrow->addWidget(board, 4);
     vlay->addWidget(mid);
     board->start_heartbeat();
@@ -1378,11 +1398,25 @@ int main(int argc, char **argv) {
     menu->setObjectName("menu");
     QMenu *fm = menu->addMenu(QStringLiteral("File"));
     QMenu *em = menu->addMenu(QStringLiteral("Edit"));
+    QMenu *mm = menu->addMenu(QStringLiteral("Modules"));
     QMenu *sm = menu->addMenu(QStringLiteral("Settings"));
     QMenu *hm = menu->addMenu(QStringLiteral("Help"));
     vwin.insertWidget(0, menu);            // top of the content column
+    // vendor accent strip under the menu ribbon (#b5be98)
+    QWidget *accent = new QWidget(&win);
+    accent->setObjectName("accent");
+    accent->setStyleSheet(QStringLiteral("QWidget{background-color:#b5be98;}"));
+    accent->setMinimumHeight(6);
+    vwin.insertWidget(1, accent);
     QStatusBar *sbar = new QStatusBar(&win);
     sbar->setObjectName("status");
+    // vendor status bar: zoom-out, "100 %", zoom-in, then the file path
+    QToolButton *zout = new QToolButton(sbar);
+    zout->setObjectName("zout"); zout->setIcon(mkicon("minus"));
+    QToolButton *zin = new QToolButton(sbar);
+    zin->setObjectName("zin"); zin->setIcon(mkicon("plus"));
+    QLabel *zoomlbl = new QLabel(QStringLiteral("100 %"), sbar);
+    sbar->addWidget(zout); sbar->addWidget(zoomlbl); sbar->addWidget(zin);
     QLabel *statusline = new QLabel(sbar);
     sbar->addWidget(statusline);
     QWidget *ctl = new QWidget(body);          // left column: process list only (vendor)
