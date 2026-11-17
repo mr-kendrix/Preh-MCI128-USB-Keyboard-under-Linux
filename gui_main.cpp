@@ -688,11 +688,17 @@ static QByteArray make_label_pdf_geom(const QVector<std::pair<int, QString>> &ro
     }
     const double s = qMin((595.0 - 40) / maxx, (842.0 - 40) / maxy);
     QString body;
-    body += QStringLiteral("0 0 0 rg\n0.25 w\n");
+    body += QStringLiteral("0.25 w\n");
+    QHash<int, QString> hasv;
+    for (const auto &r : rows) hasv.insert(r.first, r.second);
     for (auto it = g_geom.constBegin(); it != g_geom.constEnd(); ++it) {
         const KeyGeom &k = it.value();
         const double x = 20 + k.x * s, y = 842 - 20 - (k.y + k.h) * s;   // flip Y
-        body += QStringLiteral("%1 %2 %3 %4 re S\n")
+        const bool lit = hasv.contains(it.key()) && hasv.value(it.key()) != QLatin1String("-");
+        const QString col = lit ? QStringLiteral("0.60 0.78 0.62")     // green: has function
+                                : QStringLiteral("0.90 0.91 0.92");    // light: poskey only
+        body += col + QStringLiteral(" rg\n")
+              + QStringLiteral("%1 %2 %3 %4 re f S\n")
                     .arg(QString::number(x, 'f', 1)).arg(QString::number(y, 'f', 1))
                     .arg(QString::number(k.w * s, 'f', 1)).arg(QString::number(k.h * s, 'f', 1));
     }
