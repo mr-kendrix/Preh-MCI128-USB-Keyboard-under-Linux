@@ -1817,10 +1817,7 @@ int main(int argc, char **argv) {
             ? QStringLiteral("picker: running processes not listed (no probe)")
             : QStringLiteral("picked: '%1' (n=%2)").arg(cur).arg(procPick->count()));
         stat->setText(s);
-        statusline->setText(QStringLiteral("maps=%1  pressed=%2  grid=%3  fenster='%4'  daemon:%5")
-                                 .arg(pm->pm.maps.size()).arg(pm->pressed.size())
-                                 .arg(nocard.join(QStringLiteral(",")))
-                                 .arg(g_winTitle).arg(g_ipc_status));
+        statusline->setText(pm->path);   // vendor: full path of the open file
         { const QStringList ps = procs_of(pm->pm);   // process view: Always + deps
           procW->clear();
           procW->addItems(ps);
