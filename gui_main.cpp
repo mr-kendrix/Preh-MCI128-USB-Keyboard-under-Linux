@@ -1865,14 +1865,26 @@ int main(int argc, char **argv) {
     });
     auto do_export_pdf = [&save_note, &out, pm]{
         QVector<std::pair<int, QString>> rows;
+        QMap<int, QString> vals;
         for (const Map &mp : pm->pm.maps)
-            rows << std::make_pair(mp.poskey, mp.layers.isEmpty() ? QString() : mp.layers.first().value);
+            if (!vals.contains(mp.poskey))
+                vals.insert(mp.poskey, mp.layers.isEmpty() ? QStringLiteral("-") : mp.layers.first().value);
+        if (!g_geom.isEmpty())
+            for (auto it = g_geom.cbegin(); it != g_geom.cend(); ++it)
+                rows << std::make_pair(it.key(), vals.value(it.key(), QStringLiteral("-")));
+        else
+            for (const Map &mp : pm->pm.maps)
+                rows << std::make_pair(mp.poskey, vals.value(mp.poskey));
         if (rows.isEmpty()) { save_note = QStringLiteral("export: no keys"); return; }
-        const QByteArray pdf = make_label_pdf(rows);
         const QString tgt = (pm->path.isEmpty() ? out : pm->path) + QStringLiteral(".labels.pdf");
         QFile pf(tgt);
         if (!pf.open(QIODevice::WriteOnly)) { save_note = QStringLiteral("export: cannot write"); return; }
-        pf.write(pdf); pf.close();
+        pf.write(make_label_pdf(rows)); pf.close();
+        const QString tgt2 = (pm->path.isEmpty() ? out : pm->path) + QStringLiteral(".geom.pdf");
+        if (!g_geom.isEmpty()) {
+            QFile pf2(tgt2);
+            if (pf2.open(QIODevice::WriteOnly)) { pf2.write(make_label_pdf_geom(rows)); pf2.close(); }
+        }
         save_note = QStringLiteral("exported %1 labels -> %2").arg(rows.size()).arg(tgt);
     };
 
