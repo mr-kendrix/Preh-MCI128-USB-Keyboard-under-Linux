@@ -730,7 +730,7 @@ static QByteArray make_label_pdf_geom(const QVector<std::pair<int, QString>> &ro
             if (auto nm = nRe.match(fd); nm.isValid())
                 fpt = nm.captured(1).toDouble() / 100.0 * s;   // vendor MAP font
         }
-        fpt = qBound(4.0, fpt, 24.0);
+        fpt = qBound(6.0, fpt, 24.0);   // readable floor: board-space pt x s is too small
         int c = k.fore;
         if (c < 0) c = 0;                                  // default black
         const double cr = ((c >> 16) & 0xFF) / 255.0, cg = ((c >> 8) & 0xFF) / 255.0, cb = (c & 0xFF) / 255.0;
