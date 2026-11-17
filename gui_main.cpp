@@ -764,8 +764,10 @@ public:
         if (!g_ctxmenu) {                                    // short menu, no dialog
             g_ctxmenu = new QMenu(this);
             const char *texts[] = {"Edit", "Copy", "Paste", "Delete"};
-            for (const char *t : texts) {
-                g_ctxmenu->addAction(t);
+            const char *icons[] = {"pencil", "copy", "plus", "trash"};
+            for (int k = 0; k < 4; ++k) {
+                QAction *a = new QAction(mkicon(icons[k]), texts[k], g_ctxmenu);
+                g_ctxmenu->addAction(a);
                 ++g_ctx_count;
             }
             // Qt6 QAction has no public clicked() signal: menu execution runs
