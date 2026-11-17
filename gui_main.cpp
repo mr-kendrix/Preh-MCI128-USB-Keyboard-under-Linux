@@ -746,6 +746,96 @@ static Fit fit_label(const QString &text, double kw, double kh, double start_pt)
     return {fpt, out, trunc, wmax, out.size() * fpt * 1.2};
 }
 
+// Vendor-style label sheet: cut-out cells sorted by key size, tiled on A4 pages
+static QByteArray make_cut_sheet(const QHash<int, QString> &texts,
+                                 const QHash<int, QString> &fonts)
+{
+    if (g_geom.isEmpty()) return {};
+    QVector<int> keys;
+    for (auto it = g_geom.cbegin(); it != g_geom.cend(); ++it) keys << it.key();
+    std::sort(keys.begin(), keys.end(), [](int a, int b) {   // sorted by key size
+        const KeyGeom &ka = g_geom.value(a), &kb = g_geom.value(b);
+        return ka.w * ka.h != kb.w * kb.h ? ka.w * ka.h > kb.w * kb.h
+                                          : ka.w > kb.w;
+    });
+    auto n1 = [](double v) { return QString::number(v, 'f', 1); };
+    auto esc = [](const QString &s) {
+        QString r;
+        for (const QChar c : s) { if (c == QLatin1Char('(') || c == QLatin1Char(')') || c == QLatin1Char('\\')) r += QLatin1Char('\\'); r += c; }
+        return r;
+    };
+    const double pw = 595.0, ph = 842.0, m = 20.0, gap = 3.0;
+    QVector<QByteArray> pagesStreams;
+    QString body;
+    double cx = m, cy = m, rowH = 0;
+    int cells = 0;
+    auto flushPage = [&]() { pagesStreams << body.toLatin1(); body.clear(); cx = m; cy = m; rowH = 0; };
+    for (int pk : keys) {
+        const KeyGeom &k = g_geom.value(pk);
+        const double kw = qMax(24.0, k.w * 0.0022), kh = qMax(12.0, k.h * 0.0022); // board units (17000 = ~17 mm) -> pt
+        QString lbl = k.text;
+        if (lbl.isEmpty()) lbl = texts.value(pk);
+        if (lbl.isEmpty()) lbl = QStringLiteral("%1").arg(pk);
+        if (cx + kw > pw - m) { cx = m; cy += rowH + gap; rowH = 0; }
+        if (cy + kh > ph - m) flushPage();
+        const double cellw = kw + 6, cellh = kh + 6;   // cut margin
+        body += QStringLiteral("0.4 w %1 %2 %3 %4 re S\n")
+                    .arg(n1(cx)).arg(n1(cy)).arg(n1(cellw)).arg(n1(cellh));
+        const Fit f = fit_label(lbl, cellw, cellh, 14.0);
+        if (!f.lines.isEmpty()) {
+            body += QStringLiteral("0 0 0 rg\n");
+            const double ccx = cx + cellw / 2.0;
+            double ty = cy + (cellh - f.hmax) / 2.0 + f.pt * 0.15;
+            for (const QString &line : f.lines) {
+                const double w = text_w(line, f.pt);
+                body += QStringLiteral("BT /F0 %1 Tf %2 %3 Td(")
+                            .arg(n1(f.pt)).arg(n1(ccx - w / 2.0)).arg(n1(ty))
+                            + esc(line) + QStringLiteral(") Tj ET\n");
+                ty -= f.pt * 1.2;
+            }
+        }
+        cx += cellw + gap; rowH = qMax(rowH, cellh);
+        ++cells;
+    }
+    flushPage();
+    const int P = pagesStreams.size();
+    if (!P) return {};
+    // objects: 1 catalog, 2 pages, 3 font, page objs 4..3+P, streams 4+P..3+2P
+    const int nObj = 3 + 2 * P;
+    QByteArray pdf("%PDF-1.4\n");
+    QVector<int> off(nObj + 1, 0);
+    auto put = [&](int n, const QString &st) {
+        off[n] = pdf.size();
+        pdf += QStringLiteral("%1 0 obj\n").arg(n).toUtf8();
+        pdf += st.toUtf8();
+        pdf += QByteArrayLiteral("\nendobj\n");
+    };
+    put(1, QStringLiteral("<< /Pages 2 0 R >>"));
+    QString kids;
+    for (int i = 0; i < P; ++i) kids += QStringLiteral("%1 0 R ").arg(4 + i);
+    put(2, QStringLiteral("<< /Type /Pages /Kids [") + kids + QStringLiteral("] /Count ") + QString::number(P) + QStringLiteral(" >>"));
+    put(3, QStringLiteral("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>"));
+    for (int i = 0; i < P; ++i)
+        put(4 + i, QStringLiteral("<< /Type /Page /Parent 2 0 R /Resources << /Font << /F0 3 0 R >> >> /MediaBox [0 0 595 842] /Contents ")
+            + QString::number(4 + P + i) + QStringLiteral(" 0 R >>"));
+    for (int i = 0; i < P; ++i) {
+        const int obj = 4 + P + i;
+        const QByteArray c = pagesStreams[i];
+        off[obj] = pdf.size();
+        pdf += QStringLiteral("%1 0 obj\n").arg(obj).toUtf8();
+        pdf += QStringLiteral("<< /Length %1 >>\nstream\n").arg(c.size()).toUtf8();
+        pdf += c;
+        pdf += QByteArrayLiteral("\nendstream\nendobj\n");
+    }
+    QString xref = QStringLiteral("xref\n0 %1\n0000000000 65535 f \n").arg(nObj + 1);
+    for (int n = 1; n <= nObj; ++n) xref += QStringLiteral("%1 00000 n \n").arg(off[n], 10, 10, QLatin1Char('0'));
+    const int xpos = pdf.size();
+    pdf += xref.toUtf8();
+    pdf += (QStringLiteral("trailer\n<< /Root 1 0 R /Size ") + QString::number(nObj + 1) +
+            QStringLiteral(" >>\nstartxref\n") + QString::number(xpos) + QStringLiteral("\n%%EOF\n")).toUtf8();
+    return pdf;
+}
+
 static QByteArray make_label_pdf_geom(const QVector<std::pair<int, QString>> &rows,
                                       const QVector<std::pair<int, QString>> &rows_types,
                                       const QHash<int, QString> &print_texts,
@@ -2014,6 +2104,11 @@ int main(int argc, char **argv) {
            }
            QFile pf2(tgt2);
            if (pf2.open(QIODevice::WriteOnly)) { pf2.write(make_label_pdf_geom(rows, rt, texts, fonts)); pf2.close(); }
+           const QString tgt3 = (pm->path.isEmpty() ? out : pm->path) + QStringLiteral(".cut.pdf");
+           if (!g_geom.isEmpty()) {
+               QFile pf3(tgt3);
+               if (pf3.open(QIODevice::WriteOnly)) { pf3.write(make_cut_sheet(texts, fonts)); pf3.close(); }
+           }
         }
         save_note = QStringLiteral("exported %1 labels -> %2").arg(rows.size()).arg(tgt);
     };
@@ -2387,6 +2482,12 @@ int main(int argc, char **argv) {
                 const QString gt2 = g_origpath + QStringLiteral(".geom.pdf");
                 QFile gw(gt2); if (gw.open(QIODevice::WriteOnly)) { gw.write(gb); gw.close(); }
                 std::printf("geom pdf bytes=%d\n", (int)gb.size());
+                {
+                    const QByteArray cut = make_cut_sheet(texts, fonts);
+                    const QString cutp = g_origpath + QStringLiteral(".cut.pdf");
+                    QFile wc(cutp); if (wc.open(QIODevice::WriteOnly)) { wc.write(cut); wc.close(); }
+                    std::printf("cut pdf bytes=%d\n", (int)cut.size());
+                }
                 {   // fit gate: SAME width table, boxes must stay inside key rects
                     int mx = 1, my = 1;
                     for (auto it = g_geom.cbegin(); it != g_geom.cend(); ++it) {
