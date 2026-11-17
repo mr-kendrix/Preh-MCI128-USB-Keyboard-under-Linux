@@ -2959,6 +2959,7 @@ int main(int argc, char **argv) {
             close_dialog();
         }
         if (getenv("PKT_SHOT3")) {   // render the whole window at 3 sizes
+            if (getenv("PKT_ICON")) { const QPixmap px = make_app_icon().pixmap(64); px.save(QStringLiteral("/tmp/pkt_icon.png")); std::printf("icon saved\n"); }
             if (getenv("PKT_ZOOM")) { g_zoom = QString(getenv("PKT_ZOOM")).toInt(); upd_zoom(); }
             struct Shot { const char *f; int w, h; } shots[]
                 = {{"/tmp/pkt_shot_full.png", 1440, 810},
