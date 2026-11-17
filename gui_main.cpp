@@ -2396,18 +2396,22 @@ int main(int argc, char **argv) {
     mk_item(em, QStringLiteral("Export labels (PDF)"), do_export_pdf);
 
     // vendor ribbon: icon buttons of the selected tab (File=1, Edit=2, …)
-    auto add_rib = [&](int tab, const char *name, const char *icon, std::function<void()> fn) {
+    auto add_rib = [&](int tab, const char *name, const char *icon, std::function<void()> fn) -> QToolButton * {
         QWidget *grp = ribgrp[tab - 1];
         QToolButton *b = new QToolButton(grp);
         b->setObjectName(name);
         b->setIcon(mkicon(icon));
         b->setToolTip(name);
         b->connect(b, &QToolButton::clicked, [fn]{ fn(); });
+        return b;
     };
     add_rib(1, "rib_new", "plus",  [&]{ do_new(true); });
     add_rib(1, "rib_open", "folder", [&]{ do_open(); });
     add_rib(1, "rib_recent", "list", [&]{ do_open_recent(); });
-    add_rib(1, "rib_close", "x",   [&]{ do_new(true); });
+    if (QToolButton *rc = add_rib(1, "rib_close", "x", [&]{ do_new(true); })) {
+        if (pm->path.isEmpty()) rc->setEnabled(false);   // vendor: Close greyed with no file
+    }
+    add_rib(1, "rib_exit", "x",   [&]{ do_quit(); });
     add_rib(2, "rib_copy", "copy",  [&]{ do_copy_key(); });
     add_rib(2, "rib_paste", "copy", [&]{ if (g_ctx_paste) g_ctx_paste(); });
     add_rib(2, "rib_del", "trash",  [&]{ do_delete_key(); });
