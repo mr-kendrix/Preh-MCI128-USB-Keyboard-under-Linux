@@ -2135,6 +2135,7 @@ int main(int argc, char **argv) {
                 if (getenv("PKT_OPEN_DIALOG") && pm->sel > 0) pm->openDlg(pm->sel);
                 if (getenv("PKT_SHOT_SUB")) {   // show the three sub-windows too
                     if (restoreW->count() > 0) rdlg->show();
+                    std::printf("subwin restore=%d proc=%d\n", restoreW->count(), (int)(procPick->count()));
                     swdlg->show();
                     if (procPick->count() > 1) dproc->show();
                 }
