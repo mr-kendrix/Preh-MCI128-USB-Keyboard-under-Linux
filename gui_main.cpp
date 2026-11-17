@@ -1423,17 +1423,40 @@ int main(int argc, char **argv) {
     // Vendor sidebar (dark): keyboard picture placeholder, "Process:" list, hint
     QWidget *mid = new QWidget(body);
     mid->setObjectName("sidebar");
-    mid->setStyleSheet(QStringLiteral("QWidget{background-color:#c2c6c6;}"));
+    mid->setStyleSheet(QStringLiteral("QWidget{background-color:#3c3c3c;} QLabel{background-color:transparent; color:#e8e8e8;}"));
     QHBoxLayout *hrow = new QHBoxLayout(mid);
-    QWidget *scol = new QWidget(mid);   // logo image + Process list + hint
+    QWidget *scol = new QWidget(mid);   // keyboard pic + "Process:" list + hint (vendor §1)
     QVBoxLayout *vcol = new QVBoxLayout(scol);
+    QLabel *kpic = new QLabel(scol); kpic->setObjectName("kpic");
+    {
+        QImage img(220, 130, QImage::Format_ARGB32); img.fill(0);
+        QPainter pt(&img);
+        pt.setBrush(QColor(0xe6, 0xe7, 0xea)); pt.setPen(QColor(0x9a, 0xa0, 0xa8));
+        if (!g_geom.isEmpty()) {
+            int mx = 1, my = 1;
+            for (auto it = g_geom.begin(); it != g_geom.end(); ++it) {
+                const KeyGeom &k = it.value();
+                mx = qMax(mx, k.x + k.w); my = qMax(my, k.y + k.h);
+            }
+            const double s = qMin(200.0 / mx, 104.0 / my);
+            for (auto it = g_geom.begin(); it != g_geom.end(); ++it) {
+                const KeyGeom &k = it.value();
+                pt.drawRoundedRect(QRectF(10 + k.x * s, 12 + (my - k.y - k.h) * s,
+                                          qMax(2.0, k.w * s - 1.5), qMax(2.0, k.h * s - 1.5)), 2, 2);
+            }
+        }
+        pt.end();
+        kpic->setPixmap(QPixmap::fromImage(img));
+    }
     QLabel *phead = new QLabel(QStringLiteral("Process:"), scol);
     QListWidget *procW = new QListWidget(scol);
     procW->setObjectName("procview");
     procW->setMinimumWidth(140);
+    procW->setStyleSheet(QStringLiteral("QListView{background-color:#3c3c3c; color:#e8e8e8;}"
+                                        " QListView::item:selected{background-color:#ffe066; color:#1f1f1f;}"));
     QLabel *shint = new QLabel(QStringLiteral("Double-click a key to edit it."), scol);
     shint->setWordWrap(true);
-    vcol->addWidget(phead); vcol->addWidget(procW, 3); vcol->addWidget(shint);
+    vcol->addWidget(kpic, 2); vcol->addWidget(phead); vcol->addWidget(procW, 3); vcol->addWidget(shint);
     hrow->addWidget(scol, 1);
     hrow->addWidget(board, 4);
     vlay->addWidget(mid);
@@ -1448,10 +1471,10 @@ int main(int argc, char **argv) {
     QMenu *sm = menu->addMenu(QStringLiteral("Settings"));
     QMenu *hm = menu->addMenu(QStringLiteral("Help"));
     vwin.insertWidget(0, menu);            // top of the content column
-    // vendor accent strip under the menu ribbon (#b5be98)
+    // vendor accent strip under the menu ribbon (#4f7d96, spec 2026-11-17)
     QWidget *accent = new QWidget(&win);
     accent->setObjectName("accent");
-    accent->setStyleSheet(QStringLiteral("QWidget{background-color:#b5be98;}"));
+    accent->setStyleSheet(QStringLiteral("QWidget{background-color:#4f7d96;}"));
     accent->setMinimumHeight(6);
     vwin.insertWidget(1, accent);
     // vendor ribbon: the icon buttons of the SELECTED tab show on the ribbon
@@ -1796,6 +1819,7 @@ int main(int argc, char **argv) {
         { const QStringList ps = procs_of(pm->pm);   // process view: Always + deps
           procW->clear();
           procW->addItems(ps);
+          { const int pi = ps.indexOf(pm->procSel); if (pi >= 0) procW->setCurrentRow(pi); else procW->setCurrentRow(-1); }
         }
         { // restore list: newest-first backups from the tool dir
           std::error_code ec;
@@ -2912,6 +2936,7 @@ int main(int argc, char **argv) {
             winbtn, recbtn, lblWin, dlg, dclosebtn, dfn, dft, dapp, dweb, menu, sbar,
             mid, procW, renprocBtn, delprocBtn, statusline, cbBtf, cbRep, cbSlw,
             knewdlg, sdlg, knq, knalways, knproc, procFld, klistbtn, knextbtn,
+            kpic, phead, shint,
             shdr, cbDetect, cbStart, cbMin, cbOpen, dfLbl, dfCb, debtn, enbtn };
         QWidget *saboteur = nullptr;
         if (getenv("PKT_LAYOUT_SABOTAGE")) {
@@ -2946,7 +2971,7 @@ int main(int argc, char **argv) {
                    x == knproc ? 57 : x == procFld ? 58 : x == klistbtn ? 59 : x == knextbtn ? 60 :
                    x == shdr ? 61 : x == cbDetect ? 62 : x == cbStart ? 63 : x == cbMin ? 64 :
                    x == cbOpen ? 65 : x == dfLbl ? 66 : x == dfCb ? 67 : x == debtn ? 68 : x == enbtn ? 69 :
-                   x == body ? 2 : x == &win ? 1 : 0;
+                   x == kpic ? 70 : x == phead ? 71 : x == shint ? 72 : x == body ? 2 : x == &win ? 1 : 0;
         };
         std::function<void (QWidget *)> walk = [&](QWidget *w) {
             QVector<QWidget *> kids;
