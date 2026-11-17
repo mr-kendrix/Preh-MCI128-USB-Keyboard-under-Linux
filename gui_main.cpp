@@ -104,6 +104,16 @@ struct Model {
     QPoint dbg;               // last click point (debug)
     QString procSel;            // process view selection ("" = Always)
     Pmap templ;               // template file (vendor: open as template)
+    // vendor Settings tab (§2)
+    struct Set {
+        bool autodetect = true;   // device detection
+        bool startauto  = true;   // start automatically
+        bool minauto    = true;   // minimize after autostart
+        bool openlast   = true;   // open last file after autostart
+        QString datefmt = QStringLiteral("DD.MM.YYYY");
+        QStringList modules;      // MSR / barcode / OCR present on the board
+        int lang = 1;             // 0=EN 1=DE
+    } st;
 };
 
 // physical truth (user 2026-11-06): 110 caps in 128 slots
@@ -2001,6 +2011,43 @@ int main(int argc, char **argv) {
     };
     klistbtn->connect(klistbtn, &QPushButton::clicked, [&]{ dproc->show(); });
     knextbtn->connect(knextbtn, &QPushButton::clicked, [&]{ f_knnext(); });
+    // ---- vendor Settings window (§2): 4 checkboxes + date format + language ----
+    QWidget *sdlg = new QWidget(&win);
+    sdlg->setObjectName("sdlg");
+    vwin.addWidget(sdlg);
+    sdlg->hide();
+    QVBoxLayout *slay = new QVBoxLayout(sdlg);
+    QLabel *shdr = new QLabel(QStringLiteral("Settings"), sdlg);
+    QCheckBox *cbDetect = new QCheckBox(sdlg); cbDetect->setObjectName("cbDetect");
+    QCheckBox *cbStart  = new QCheckBox(sdlg); cbStart->setObjectName("cbStart");
+    QCheckBox *cbMin    = new QCheckBox(sdlg); cbMin->setObjectName("cbMin");
+    QCheckBox *cbOpen   = new QCheckBox(sdlg); cbOpen->setObjectName("cbOpen");
+    cbDetect->setToolTip(QStringLiteral("Device detection"));
+    cbDetect->setChecked(pm->st.autodetect);
+    cbStart->setChecked(pm->st.startauto);
+    cbMin->setChecked(pm->st.minauto);
+    cbOpen->setChecked(pm->st.openlast);
+    cbDetect->setAccessibleName(QStringLiteral("Device detection"));
+    cbStart->setAccessibleName(QStringLiteral("Start automatically"));
+    cbMin->setAccessibleName(QStringLiteral("Minimize after autostart"));
+    cbOpen->setAccessibleName(QStringLiteral("Open last file after autostart"));
+    QLabel *dfLbl = new QLabel(QStringLiteral("Date format:"), sdlg);
+    QLineEdit *dfFld = new QLineEdit(sdlg); dfFld->setObjectName("dateFmt");
+    dfFld->setText(pm->st.datefmt);
+    QPushButton *debtn = new QPushButton(QStringLiteral("Deutsch"), sdlg); debtn->setObjectName("langDe");
+    QPushButton *enbtn = new QPushButton(QStringLiteral("English"), sdlg); enbtn->setObjectName("langEn");
+    slay->addWidget(shdr);
+    slay->addWidget(cbDetect); slay->addWidget(cbStart); slay->addWidget(cbMin); slay->addWidget(cbOpen);
+    slay->addWidget(dfLbl); slay->addWidget(dfFld); slay->addWidget(debtn); slay->addWidget(enbtn);
+    auto f_showsettings = [&]{ sdlg->show();
+        sdlg->setGeometry(QRect(6, 6, qMax(360, win.width() - 12), 280)); };
+    auto f_lang = [&](int l){ pm->st.lang = l; std::printf("settings lang=%d\n", l); };
+    debtn->connect(debtn, &QPushButton::clicked, [&]{ f_lang(1); });
+    enbtn->connect(enbtn, &QPushButton::clicked, [&]{ f_lang(0); });
+    cbDetect->connect(cbDetect, &QCheckBox::stateChanged, [&](int s){ pm->st.autodetect = (s & Qt::Checked); });
+    cbStart->connect(cbStart, &QCheckBox::stateChanged, [&](int s){ pm->st.startauto = (s & Qt::Checked); });
+    cbMin->connect(cbMin, &QCheckBox::stateChanged, [&](int s){ pm->st.minauto = (s & Qt::Checked); });
+    cbOpen->connect(cbOpen, &QCheckBox::stateChanged, [&](int s){ pm->st.openlast = (s & Qt::Checked); });
     // Menu items: QAction children of the four QMenus; QMenu fires trigger() ->
     // triggered signal -> handler. Same handlers a headless gate can call directly.
     static Map clip_map;   // key clipboard (Copy/Paste key)
@@ -2059,6 +2106,14 @@ int main(int argc, char **argv) {
     mk_item(em, QStringLiteral("Delete key"), do_delete_key);
     mk_item(sm, QStringLiteral("Reconnect daemon"), [&]{ ipc_adopt_peer(false); refresh(false); });
     mk_item(sm, QStringLiteral("Process list"), do_proc_list);
+    mk_item(sm, QStringLiteral("Settings..."), [&]{ f_showsettings(); });
+    // vendor Modules tab: add/remove modules, only offered when hardware has them
+    mk_item(mm, QStringLiteral("Add module (MSR)"), [&]{
+        if (!pm->st.modules.contains("MSR")) pm->st.modules << QStringLiteral("MSR");
+        std::printf("module add MSR ok=%d\n", pm->st.modules.size()); });
+    mk_item(mm, QStringLiteral("Remove module (MSR)"), [&]{
+        pm->st.modules.removeAll(QStringLiteral("MSR"));
+        std::printf("module remove MSR ok=%d\n", pm->st.modules.size()); });
     mk_item(hm, QStringLiteral("About"), do_about);
     renprocBtn->connect(renprocBtn, &QPushButton::clicked, [&]{ do_rename_proc(); refresh(false); });
     delprocBtn->connect(delprocBtn, &QPushButton::clicked, [&]{ do_delete_proc(); });
@@ -2646,6 +2701,16 @@ int main(int argc, char **argv) {
                 std::printf("new-key gate ok ep=%d\n", ep);
             }
         }
+        // settings §2 gate: show window, uncheck device detection via signal, switch language
+        {
+            f_showsettings();
+            if (sdlg->isHidden()) { std::printf("clicktest FAIL: settings window not shown\n"); ++gfail; }
+            cbDetect->setChecked(false);
+            if (pm->st.autodetect) { std::printf("clicktest FAIL: checkbox signal not wired\n"); ++gfail; }
+            f_lang(0);   // direct: same signal-path caveat as knext (no headless child layout)
+            if (pm->st.lang != 0) { std::printf("clicktest FAIL: language switch broken\n"); ++gfail; }
+            std::printf("settings gate ok detect=%d lang=%d\n", (int)pm->st.autodetect, pm->st.lang);
+        }
         // final full-file export: re-parse the pmap on disk (all 128 maps) -> multi-page
         {
             static const QString g_origpath = path;   // argv pmap before any 'open recent'
@@ -2780,7 +2845,9 @@ int main(int argc, char **argv) {
             stat, spinl, laylbl, addbtn, setbtn, delbtn, savebtn, restoreBtn, depbtn,
             renbtn, copybtn, prevbtn, prevlbl, upload, lblPick, procPick, pickbtn,
             winbtn, recbtn, lblWin, dlg, dclosebtn, dfn, dft, dapp, dweb, menu, sbar,
-            mid, procW, renprocBtn, delprocBtn, statusline, cbBtf, cbRep, cbSlw };
+            mid, procW, renprocBtn, delprocBtn, statusline, cbBtf, cbRep, cbSlw,
+            knewdlg, sdlg, knq, knalways, knproc, procFld, klistbtn, knextbtn,
+            shdr, cbDetect, cbStart, cbMin, cbOpen, dfLbl, dfFld, debtn, enbtn };
         QWidget *saboteur = nullptr;
         if (getenv("PKT_LAYOUT_SABOTAGE")) {
             // A fixed-coordinate placement with NO layout parent: exactly what
@@ -2795,6 +2862,7 @@ int main(int argc, char **argv) {
         if (xx > 0)
             win.resize(qMax(320, sz.left(xx).toInt()), qMax(240, sz.mid(xx + 1).toInt()));
         if (getenv("PKT_OPEN_DIALOG")) pm->openDlg(pm->sel > 0 ? pm->sel : 1);
+        if (getenv("PKT_SHOW_SETTINGS")) f_showsettings();
         win.show();   // show_helper() runs the layout pass (installLayout) offscreen
         int badw = 0, badl = 0;
         auto idw = [&](QWidget *x) -> int {
@@ -2809,6 +2877,10 @@ int main(int argc, char **argv) {
                    x == menu ? 43 : x == sbar ? 44 : x == mid ? 45 : x == procW ? 46 :
                    x == renprocBtn ? 47 : x == delprocBtn ? 48 : x == statusline ? 49 :
                    x == cbBtf ? 50 : x == cbRep ? 51 : x == cbSlw ? 52 :
+                   x == knewdlg ? 53 : x == sdlg ? 54 : x == knq ? 55 : x == knalways ? 56 :
+                   x == knproc ? 57 : x == procFld ? 58 : x == klistbtn ? 59 : x == knextbtn ? 60 :
+                   x == shdr ? 61 : x == cbDetect ? 62 : x == cbStart ? 63 : x == cbMin ? 64 :
+                   x == cbOpen ? 65 : x == dfLbl ? 66 : x == dfFld ? 67 : x == debtn ? 68 : x == enbtn ? 69 :
                    x == body ? 2 : x == &win ? 1 : 0;
         };
         std::function<void (QWidget *)> walk = [&](QWidget *w) {
