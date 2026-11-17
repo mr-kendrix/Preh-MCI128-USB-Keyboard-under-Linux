@@ -58,6 +58,7 @@
 #include <poll.h>   // POLLIN drain for the IPC peer
 #include "ipc.h"   // Phase 2: notify a running daemon after pmap file changes
 #include <filesystem>
+#include <fstream>
 #include <system_error>
 #include <QHash>
 #include <QSet>
@@ -1206,6 +1207,28 @@ int main(int argc, char **argv) {
         else if (!a.startsWith("--")) path = a;
     }
 
+    // Settings (§2): persistent in ~/.local/share/pkteditor/settings.ini
+    {
+        const QString sl = QDir::homePath() + QStringLiteral("/.local/share/pkteditor/settings.ini");
+        QFile sf(sl);
+        if (sf.open(QIODevice::ReadOnly)) {
+            while (!sf.atEnd()) {
+                const QString line = QString::fromUtf8(sf.readLine()).trimmed();
+                const int eq = line.indexOf('=');
+                if (eq <= 0) continue;
+                const QString k = line.left(eq), v = line.mid(eq + 1);
+                if (k == "autodetect") m.st.autodetect = v == "1";
+                else if (k == "startauto") m.st.startauto = v == "1";
+                else if (k == "minauto") m.st.minauto = v == "1";
+                else if (k == "openlast") m.st.openlast = v == "1";
+                else if (k == "datefmt") m.st.datefmt = v;
+                else if (k == "lang") m.st.lang = v.toInt();
+                else if (k == "modules") { m.st.modules.clear(); for (const QString &mo : v.split('+')) if (!mo.isEmpty()) m.st.modules << mo; }
+            }
+            sf.close();
+        }
+    }
+
     // Recent files (vendor File menu): persistent list in the tool dir.
     static QStringList gRecent;
     {
@@ -2041,13 +2064,29 @@ int main(int argc, char **argv) {
     slay->addWidget(dfLbl); slay->addWidget(dfFld); slay->addWidget(debtn); slay->addWidget(enbtn);
     auto f_showsettings = [&]{ sdlg->show();
         sdlg->setGeometry(QRect(6, 6, qMax(360, win.width() - 12), 280)); };
-    auto f_lang = [&](int l){ pm->st.lang = l; std::printf("settings lang=%d\n", l); };
+    auto save_set = [&]{
+        const std::filesystem::path dir{std::string(QDir::homePath().toUtf8().constData()) + "/.local/share/pkteditor"};
+        std::error_code ec; std::filesystem::create_directories(dir, ec);
+        QFile sf(QString::fromUtf8((dir / "settings.ini").u8string().c_str()));
+        if (!sf.open(QIODevice::WriteOnly | QIODevice::Text)) { std::printf("settings save FAILED\n"); return; }
+        QString t;
+        t += QStringLiteral("autodetect=") + (pm->st.autodetect ? "1" : "0") + "\n";
+        t += QStringLiteral("startauto=") + (pm->st.startauto ? "1" : "0") + "\n";
+        t += QStringLiteral("minauto=") + (pm->st.minauto ? "1" : "0") + "\n";
+        t += QStringLiteral("openlast=") + (pm->st.openlast ? "1" : "0") + "\n";
+        t += QStringLiteral("datefmt=") + pm->st.datefmt + "\n";
+        t += QStringLiteral("lang=") + QString::number(pm->st.lang) + "\n";
+        t += QStringLiteral("modules=") + pm->st.modules.join('+') + "\n";
+        sf.write(t.toUtf8());
+        sf.close();
+    };
+    auto f_lang = [&](int l){ pm->st.lang = l; save_set(); };
     debtn->connect(debtn, &QPushButton::clicked, [&]{ f_lang(1); });
     enbtn->connect(enbtn, &QPushButton::clicked, [&]{ f_lang(0); });
-    cbDetect->connect(cbDetect, &QCheckBox::stateChanged, [&](int s){ pm->st.autodetect = (s & Qt::Checked); });
-    cbStart->connect(cbStart, &QCheckBox::stateChanged, [&](int s){ pm->st.startauto = (s & Qt::Checked); });
-    cbMin->connect(cbMin, &QCheckBox::stateChanged, [&](int s){ pm->st.minauto = (s & Qt::Checked); });
-    cbOpen->connect(cbOpen, &QCheckBox::stateChanged, [&](int s){ pm->st.openlast = (s & Qt::Checked); });
+    cbDetect->connect(cbDetect, &QCheckBox::stateChanged, [&](int s){ pm->st.autodetect = (s & Qt::Checked); save_set(); });
+    cbStart->connect(cbStart, &QCheckBox::stateChanged, [&](int s){ pm->st.startauto = (s & Qt::Checked); save_set(); });
+    cbMin->connect(cbMin, &QCheckBox::stateChanged, [&](int s){ pm->st.minauto = (s & Qt::Checked); save_set(); });
+    cbOpen->connect(cbOpen, &QCheckBox::stateChanged, [&](int s){ pm->st.openlast = (s & Qt::Checked); save_set(); });
     // Menu items: QAction children of the four QMenus; QMenu fires trigger() ->
     // triggered signal -> handler. Same handlers a headless gate can call directly.
     static Map clip_map;   // key clipboard (Copy/Paste key)
@@ -2059,7 +2098,7 @@ int main(int argc, char **argv) {
         else save_note = QStringLiteral("open failed: %1").arg(pm->path);
         refresh(false);
     };
-    auto do_quit = [&]{ std::_Exit(0); };
+    auto do_quit = [&]{ save_set(); std::_Exit(0); };
     auto do_copy_key = [&]{
         if (const Map *m0 = find_map(pm->pm, pm->sel)) clip_map = *m0;
         else save_note = QStringLiteral("copy key: selected cell has no map");
@@ -2099,7 +2138,7 @@ int main(int argc, char **argv) {
     mk_item(fm, QStringLiteral("New"), [&]{ do_new(false); });
     mk_item(fm, QStringLiteral("Open"), do_open);
     mk_item(fm, QStringLiteral("Close"), [&]{ do_new(false); });
-    mk_item(fm, QStringLiteral("Quit"), do_quit);
+    mk_item(fm, QStringLiteral("Exit"), do_quit);   // vendor wording
     mk_item(em, QStringLiteral("Undo"), do_undo);
     mk_item(em, QStringLiteral("Copy key"), do_copy_key);
     mk_item(em, QStringLiteral("Paste key"), do_paste_key);
@@ -2115,6 +2154,7 @@ int main(int argc, char **argv) {
         pm->st.modules.removeAll(QStringLiteral("MSR"));
         std::printf("module remove MSR ok=%d\n", pm->st.modules.size()); });
     mk_item(hm, QStringLiteral("About"), do_about);
+    mk_item(hm, QStringLiteral("Check for update"), [&]{ std::printf("update check: offline (no net gate)\n"); });
     renprocBtn->connect(renprocBtn, &QPushButton::clicked, [&]{ do_rename_proc(); refresh(false); });
     delprocBtn->connect(delprocBtn, &QPushButton::clicked, [&]{ do_delete_proc(); });
     dclosebtn->connect(dclosebtn, &QPushButton::clicked, [&]{ close_dialog(); });
@@ -2708,6 +2748,14 @@ int main(int argc, char **argv) {
             cbDetect->setChecked(false);
             if (pm->st.autodetect) { std::printf("clicktest FAIL: checkbox signal not wired\n"); ++gfail; }
             f_lang(0);   // direct: same signal-path caveat as knext (no headless child layout)
+            // persistence proof: settings.ini written and re-readable
+            {
+                std::ifstream in(std::filesystem::path{std::string(QDir::homePath().toUtf8().constData()) + "/.local/share/pkteditor/settings.ini"});
+                const std::string all((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+                if (all.find("autodetect=0") == std::string::npos || all.find("lang=0") == std::string::npos) {
+                    std::printf("clicktest FAIL: settings not persisted\n"); ++gfail;
+                } else std::printf("settings persist ok\n");
+            }
             if (pm->st.lang != 0) { std::printf("clicktest FAIL: language switch broken\n"); ++gfail; }
             std::printf("settings gate ok detect=%d lang=%d\n", (int)pm->st.autodetect, pm->st.lang);
         }
