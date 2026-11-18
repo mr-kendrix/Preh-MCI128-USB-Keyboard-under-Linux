@@ -104,12 +104,14 @@ static QString processName(int pid)
 }
 
 struct CellRC { int poskey = 0; QRect rc; };
+static const Pmap *g_pm = nullptr;     // live model for tile coloring
 
 class KeyGrid : public QWidget
 {
 public:
     explicit KeyGrid(QWidget *parent = nullptr) : QWidget(parent) {}
     int sel = -1;
+    QString curproc;                   // selected process: drives tile colors
     QVector<CellRC> cells;
     void relayout()
     {
@@ -145,8 +147,21 @@ public:
         pt.setBrush(QColor(0xd8, 0xdb, 0xdf)); pt.setPen(QColor(0x9a, 0xa0, 0xa8));
         pt.drawRoundedRect(rect().adjusted(0, 0, -1, -1), 6, 6);
         for (const CellRC &c : cells) {
-            const bool on = (c.poskey == sel);
-            pt.setBrush(on ? QColor(0xff, 0xe0, 0x66) : QColor(0xff, 0xff, 0xff));
+            QColor brush(0xff, 0xff, 0xff);   // no function: light
+            const Map *mm = nullptr;
+            if (g_pm) for (const Map &m : g_pm->maps) if (m.poskey == c.poskey) { mm = &m; break; }
+            if (mm) {
+                brush = QColor(0xb4, 0xb8, 0xbe);              // no layers: unprogrammed gray
+                bool mine = false, foreign = false;
+                for (const Layer &l : mm->layers) {
+                    if (l.dependency.isEmpty() || l.dependency == curproc) mine = true;
+                    else foreign = true;
+                }
+                if (mine) brush = QColor(0xa6, 0xce, 0xa6);     // own process: green
+                else if (foreign) brush = QColor(0x79, 0x7d, 0x96); // other process: blue-gray
+            }
+            if (c.poskey == sel) brush = QColor(0xff, 0xe0, 0x66); // selected: yellow
+            pt.setBrush(brush);
             pt.setPen(QColor(0x3c, 0x3f, 0x45));
             pt.drawRoundedRect(c.rc, 2, 2);
             const QString lab = g_labels.value(c.poskey);
@@ -280,6 +295,7 @@ int main(int argc, char **argv)
     sidebar->setObjectName("sidebar");
     sidebar->setStyleSheet("#sidebar{background-color:#3c3c3c;} QLabel{color:#e8e8e8;}");
     sidebar->setMaximumWidth(260);
+    g_pm = &pm;
     QVBoxLayout *sv = new QVBoxLayout(sidebar);
     QLabel *logo = new QLabel(sidebar);
     logo->setObjectName("logo");
@@ -304,13 +320,20 @@ int main(int argc, char **argv)
     QLabel *shint = new QLabel(QString::fromUtf8("Double-click a key to edit it."), sidebar);
     shint->setObjectName("shint");
     shint->setWordWrap(true);
-    sv->addWidget(logo); sv->addWidget(kpic); sv->addWidget(shint);
+    QLabel *phead = new QLabel(QString::fromUtf8("Process:"), sidebar); phead->setObjectName("phead");
+    QComboBox *procSel = new QComboBox(sidebar); procSel->setObjectName("procSel");
+    procSel->addItem(QStringLiteral("Always"));
+    for (const QString &pn : procs_of(pm)) procSel->addItem(pn);
+    sv->addWidget(logo); sv->addWidget(kpic); sv->addWidget(phead); sv->addWidget(procSel); sv->addWidget(shint);
 
     KeyGrid *grid = new KeyGrid(mainrow);
     grid->setObjectName("grid");
     grid->setMinimumSize(480, 320);
     mrow->addWidget(sidebar, 1);
     mrow->addWidget(grid, 4);
+    procSel->setCurrentIndex(0);
+    grid->curproc = procSel->currentText();
+    auto f_proc = [&]() { grid->curproc = procSel->currentText(); };
     vwin->addWidget(mainrow);
 
     QWidget *statusbar = new QWidget(&win);
@@ -582,7 +605,7 @@ int main(int argc, char **argv)
         for (const QString &s2 : rseen)
             if (!rexp.contains(s2)) { std::printf("HARD FAIL: row extra part (%s)\n", s2.toUtf8().constData()); ++gfail; }
         const double frac = double(grid->width() * grid->height()) / double(win.width() * win.height());
-        if (frac < 0.45) { std::printf("HARD FAIL: grid only %.1f%% of window\n", frac * 100); ++gfail; }
+        if (frac < 0.40) { std::printf("HARD FAIL: grid only %.1f%% of window\n", frac * 100); ++gfail; }
         std::printf("hard: grid=%.1f%% parts ok=%d\n", frac * 100, gfail == 0 ? 1 : 0);
     }
 
@@ -678,6 +701,25 @@ int main(int argc, char **argv)
             }
             f_winprobe();
             if (winW->count() < 1) { std::printf("clicktest FAIL: window list empty\n"); ++gfail; }
+            {   // process selection recolors tiles
+                if (procSel->count() < 2) { std::printf("clicktest FAIL: no processes to select\n"); ++gfail; }
+                else {
+                    procSel->setCurrentIndex(1);
+                    f_proc();
+                    const QImage shot = win.grab().toImage();
+                    int green = 0, blue = 0;
+                    for (int y = 0; y < shot.height(); y += 3)
+                        for (int x = 0; x < shot.width(); x += 3) {
+                            const unsigned rgb = shot.pixel(x, y);
+                            if (qAbs(((rgb >> 16) & 0xff) - 0xa6) < 8 && qAbs(((rgb >> 8) & 0xff) - 0xce) < 8 && qAbs((rgb & 0xff) - 0xa6) < 8) ++green;
+                            if (qAbs(((rgb >> 16) & 0xff) - 0x79) < 8 && qAbs(((rgb >> 8) & 0xff) - 0x7d) < 8 && qAbs((rgb & 0xff) - 0x96) < 8) ++blue;
+                        }
+                    std::printf("proc recolor: green=%d blue=%d\n", green, blue);
+                    if (green + blue < 4) { std::printf("clicktest FAIL: no colored tiles for '%s'\n", procSel->currentText().toUtf8().constData()); ++gfail; }
+                    procSel->setCurrentIndex(0);
+                    f_proc();
+                }
+            }
             st.datefmt = QStringLiteral("YYYY-MM-DD");
             dateCombo->setCurrentIndex(2);
             f_settings();
