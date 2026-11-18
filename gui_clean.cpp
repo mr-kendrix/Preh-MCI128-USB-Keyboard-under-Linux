@@ -405,6 +405,9 @@ int main(int argc, char **argv)
     QSpinBox *spinl = new QSpinBox(dlg); spinl->setObjectName("spinl");
     // vendor §5 right column: Appearance (Key/Caption color, caption, font) + Function radios
     QLineEdit *capFld = new QLineEdit(dlg); capFld->setObjectName("capFld");
+    QCheckBox *btfFld = new QCheckBox(dlg); btfFld->setObjectName("btfFld");
+    QCheckBox *repFld = new QCheckBox(dlg); repFld->setObjectName("repFld");
+    QCheckBox *slwFld = new QCheckBox(dlg); slwFld->setObjectName("slwFld");
     QComboBox *forePick = new QComboBox(dlg); forePick->setObjectName("forePick");
     QComboBox *backPick = new QComboBox(dlg); backPick->setObjectName("backPick");
     for (int i = 0; i < 112; ++i) { const QString nm = QStringLiteral("Slot %1").arg(i);
@@ -416,6 +419,7 @@ int main(int argc, char **argv)
     QLabel *appearLbl = new QLabel(dlg); appearLbl->setObjectName("appearLbl");
     dlv->addWidget(appearLbl);
     dlv->addWidget(capFld); dlv->addWidget(forePick); dlv->addWidget(backPick);
+    dlv->addWidget(btfFld); dlv->addWidget(repFld); dlv->addWidget(slwFld);
     dlv->addWidget(fnNone); dlv->addWidget(fnText); dlv->addWidget(fnApp); dlv->addWidget(fnWeb);
     dlv->addWidget(delKeyBtn); dlv->addWidget(cancelBtn); dlv->addWidget(saveBtn); dlv->addWidget(undoBtn);
     dlv->addWidget(spinl);
@@ -523,6 +527,15 @@ int main(int argc, char **argv)
             const int fi = forePick->currentIndex(), bi = backPick->currentIndex();
             if (fi >= 0) mm.fore = fi;
             if (bi >= 0) mm.back = bi;
+            break;
+        }
+        dlg_refresh(pk_cur);
+    };
+    auto f_flags = [&]() { const int i = (g_row_hint >= 0 ? g_row_hint : layerW->currentRow());
+        if (pk_cur >= 0 && i >= 0) for (Map &mm : pm.maps) if (mm.poskey == pk_cur && i < mm.layers.size()) {
+            mm.layers[i].btf  = btfFld->isChecked() ? QStringLiteral("true") : QStringLiteral("false");
+            mm.layers[i].rep  = repFld->isChecked() ? QStringLiteral("true") : QStringLiteral("false");
+            mm.layers[i].slow = slwFld->isChecked() ? QStringLiteral("true") : QStringLiteral("false");
             break;
         }
         dlg_refresh(pk_cur);
@@ -738,6 +751,29 @@ int main(int argc, char **argv)
                   if (!vf.open(QIODevice::ReadOnly)) { std::printf("clicktest FAIL: saved file unreadable\n"); ++gfail; }
                   else { const Pmap bk = parse_pmap(vf.readAll()); vf.close();
                          if (bk.maps.size() != pm.maps.size()) { std::printf("clicktest FAIL: save roundtrip count differs\n"); ++gfail; } }
+                }
+                // per-layer flags: Bring to front / AutoRepeat / SlowOutput
+                if (!g_layers.isEmpty()) {
+                    btfFld->setChecked(true); repFld->setChecked(false); slwFld->setChecked(false);
+                    g_row_hint = qMin(row, g_layers.size() - 1);
+                    f_flags();
+                    const int fi = qBound(0, g_row_hint, g_layers.size() - 1);
+                    { bool ok = false;
+                      for (const Map &mm : pm.maps) if (mm.poskey == pk && fi < mm.layers.size()) { ok = (mm.layers[fi].btf == QStringLiteral("true")); break; }
+                      if (!ok) { std::printf("clicktest FAIL: btf flag not set\n"); ++gfail; } }
+                    f_save();
+                    { QFile vf2(path);
+                      bool foundb = false;
+                      if (vf2.open(QIODevice::ReadOnly)) { const QString all = vf2.readAll(); vf2.close();
+                        const QString hx = to_hex_cp1252(QStringLiteral("true"));
+                        foundb = all.contains(QStringLiteral("<BringToForeground>")) && all.contains(hx); }
+                      if (!foundb) { std::printf("clicktest FAIL: btf not serialized\n"); ++gfail; } }
+                    btfFld->setChecked(false);
+                    g_row_hint = fi;
+                    f_flags();
+                    { bool ok = false;
+                      for (const Map &mm : pm.maps) if (mm.poskey == pk && fi < mm.layers.size()) { ok = (mm.layers[fi].btf == QStringLiteral("false")); break; }
+                      if (!ok) { std::printf("clicktest FAIL: btf clear not applied\n"); ++gfail; } }
                 }
                 // vendor Undo: second save then restore newest backup
                 {
