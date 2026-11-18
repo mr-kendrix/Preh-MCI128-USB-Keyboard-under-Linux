@@ -366,8 +366,20 @@ int main(int argc, char **argv)
     QPushButton *renbtn = new QPushButton(dlg); renbtn->setObjectName("renbtn");
     QPushButton *cpybtn = new QPushButton(dlg); cpybtn->setObjectName("cpybtn");
     QSpinBox *spinl = new QSpinBox(dlg); spinl->setObjectName("spinl");
-    dlv->addWidget(dlgTitle); dlv->addWidget(edit); dlv->addWidget(layerW);
-    dlv->addWidget(addbtn); dlv->addWidget(delbtn); dlv->addWidget(renbtn); dlv->addWidget(cpybtn);
+    // vendor §5 right column: Appearance (Key/Caption color, caption, font) + Function radios
+    QLineEdit *capFld = new QLineEdit(dlg); capFld->setObjectName("capFld");
+    QComboBox *forePick = new QComboBox(dlg); forePick->setObjectName("forePick");
+    QComboBox *backPick = new QComboBox(dlg); backPick->setObjectName("backPick");
+    for (int i = 0; i < 112; ++i) { const QString nm = QStringLiteral("Slot %1").arg(i);
+        forePick->addItem(nm); backPick->addItem(nm); }
+    QRadioButton *fnNone = new QRadioButton(QStringLiteral("Do nothing"), dlg); fnNone->setObjectName("fnNone");
+    QRadioButton *fnText = new QRadioButton(QStringLiteral("Text-Shortcut"), dlg); fnText->setObjectName("fnText");
+    QRadioButton *fnApp  = new QRadioButton(QStringLiteral("Application"), dlg); fnApp->setObjectName("fnApp");
+    QRadioButton *fnWeb  = new QRadioButton(QStringLiteral("Web"), dlg); fnWeb->setObjectName("fnWeb");
+    QLabel *appearLbl = new QLabel(dlg); appearLbl->setObjectName("appearLbl");
+    dlv->addWidget(appearLbl);
+    dlv->addWidget(capFld); dlv->addWidget(forePick); dlv->addWidget(backPick);
+    dlv->addWidget(fnNone); dlv->addWidget(fnText); dlv->addWidget(fnApp); dlv->addWidget(fnWeb);
     dlv->addWidget(spinl);
 
     QWidget *knewdlg = new QWidget(&win);
@@ -455,6 +467,7 @@ int main(int argc, char **argv)
     };
     knNext->connect(knNext, &QPushButton::clicked, [&]() { f_knnext(); });
     static QString g_copy;                       // vendor: copy still pending
+    static QString g_newtype;                    // type from the function radio for the next add
     static int g_row_hint = -1;                  // gate: explicit layer index
     auto f_copy = [&]() { const int i = layerW->currentRow();
         if (i >= 0 && i < g_layers.size()) g_copy = g_layers[i].value; };
@@ -464,13 +477,34 @@ int main(int argc, char **argv)
     auto f_delete = [&]() { const int i = (g_row_hint >= 0 ? g_row_hint : layerW->currentRow());
         if (pk_cur >= 0 && i >= 0) for (Map &mm : pm.maps) if (mm.poskey == pk_cur && i < mm.layers.size()) { mm.layers.remove(i); break; }
         dlg_refresh(pk_cur); };
-    auto f_addlayer = [&]() { if (pk_cur < 0) return; Layer nl; nl.value = edit->text();
+    auto f_appear = [&]() {
+        for (Map &mm : pm.maps) if (mm.poskey == pk_cur) {
+            if (!capFld->text().isEmpty()) mm.print_text = capFld->text();
+            const int fi = forePick->currentIndex(), bi = backPick->currentIndex();
+            if (fi >= 0) mm.fore = fi;
+            if (bi >= 0) mm.back = bi;
+            break;
+        }
+        dlg_refresh(pk_cur);
+    };
+    auto f_settype = [&](const QString &t) { g_newtype = t; };
+    auto f_applytype = [&]() { const int i = (g_row_hint >= 0 ? g_row_hint : layerW->currentRow());
+        for (Map &mm : pm.maps) if (mm.poskey == pk_cur && i >= 0 && i < mm.layers.size()) { mm.layers[i].type = g_newtype; break; }
+        dlg_refresh(pk_cur);
+    };
+    auto f_addlayer = [&]() { if (pk_cur < 0) return; Layer nl; nl.value = edit->text(); nl.type = g_newtype.isEmpty() ? QStringLiteral("TEXT") : g_newtype;
         for (Map &mm : pm.maps) if (mm.poskey == pk_cur) { mm.layers << nl; break; }
         dlg_refresh(pk_cur); };
     addbtn->connect(addbtn, &QToolButton::clicked, [&]() { f_addlayer(); });
     renbtn->connect(renbtn, &QToolButton::clicked, [&]() { f_rename(); });
     delbtn->connect(delbtn, &QToolButton::clicked, [&]() { f_delete(); });
     cpybtn->connect(cpybtn, &QToolButton::clicked, [&]() { f_copy(); });
+    fnNone->connect(fnNone, &QRadioButton::clicked, [&]() { f_settype(QStringLiteral("NOTHING")); });
+    fnText->connect(fnText, &QRadioButton::clicked, [&]() { f_settype(QStringLiteral("TEXT")); });
+    fnApp->connect(fnApp, &QRadioButton::clicked, [&]() { f_settype(QStringLiteral("APPLICATION")); });
+    fnWeb->connect(fnWeb, &QRadioButton::clicked, [&]() { f_settype(QStringLiteral("WEBSITE")); });
+    auto f_app_appear = [&]() { f_appear(); };
+    auto f_app_applytype = [&]() { f_applytype(); };
     auto f_settings = [&]() {
         st.datefmt = dateCombo->currentText();
         st.lang = langEn->isChecked() ? 0 : 1;
@@ -586,6 +620,22 @@ int main(int argc, char **argv)
                 f_delete();
                 dlg_refresh(pk);
                 if (layerW->count() != g_layers.size()) { std::printf("clicktest FAIL: delete not mirrored\n"); ++gfail; }
+                // appearance: caption + colors applied to the Map
+                capFld->setText(QStringLiteral("GT-CAP"));
+                forePick->setCurrentIndex(5);
+                backPick->setCurrentIndex(7);
+                f_app_appear();
+                bool appOk = false;
+                for (const Map &mm : pm.maps) if (mm.poskey == pk) { appOk = (mm.print_text == QStringLiteral("GT-CAP") && mm.fore == 5 && mm.back == 7); break; }
+                if (!appOk) { std::printf("clicktest FAIL: appearance not applied\n"); ++gfail; }
+                // function radio WEBSITE -> next add gets type WEBSITE
+                f_settype(QStringLiteral("WEBSITE"));
+                g_row_hint = -1; layerW->clear(); // row hint reset
+                f_addlayer();
+                bool webOk = false;
+                for (const Map &mm : pm.maps) if (mm.poskey == pk) { webOk = (!mm.layers.isEmpty() && mm.layers.last().type == QStringLiteral("WEBSITE")); break; }
+                if (!webOk) { std::printf("clicktest FAIL: web layer type not stored\n"); ++gfail; }
+                g_newtype.clear();
                 }
             }
             f_winprobe();
