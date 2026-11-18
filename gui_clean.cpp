@@ -299,6 +299,7 @@ int main(int argc, char **argv)
     add_rib(1, "rib_new", "plus");
     add_rib(1, "rib_open", "folder");
     add_rib(1, "rib_recent", "list");
+    static QToolButton *g_ribundo = nullptr; g_ribundo = add_rib(1, "rib_undo", "minus");
     if (QToolButton *rc = add_rib(1, "rib_close", "x"))
         if (path.isEmpty()) rc->setEnabled(false);
     add_rib(1, "rib_exit", "x");
@@ -837,7 +838,9 @@ int main(int argc, char **argv)
     };
     load_recent();
     if (!path.isEmpty()) push_recent(path);
-    auto f_swap = [&]() {
+    auto f_openfile = [&]() { if (!g_recent.isEmpty()) do_open_file(g_recent.first()); };
+    auto f_closefile = [&]() { g_snap.clear(); g_recent.removeAll(path); if (path.isEmpty()) win.close(); };
+        auto f_swap = [&]() {
         for (Map &m2 : pm.maps) { const int f0 = m2.fore; m2.fore = m2.back; m2.back = f0; }
         grid->relayout();
     };
@@ -853,6 +856,8 @@ int main(int argc, char **argv)
         mk_item(fmenus[0], QStringLiteral("Restore"), [&]{ f_openrestore(); });
         mk_item(fmenus[0], QStringLiteral("Open template"), [&]{ if (!g_template.isEmpty()) do_open_file(g_template); });
         mk_item(fmenus[0], QStringLiteral("Upload"), [&]{ if (g_up) { g_up->run_now(); uplbl->setText(g_up->status_text()); } });
+        mk_item(fmenus[0], QStringLiteral("Open"), [&]{ f_openfile(); });
+        mk_item(fmenus[0], QStringLiteral("Close"), [&]{ f_closefile(); });
         mk_item(fmenus[0], QStringLiteral("Reload"), [&]{ f_push_reload(); });
         mk_item(fmenus[0], QStringLiteral("Close"), [&]{ if (dlg) dlg->hide(); });
         for (const QString &rp : g_recent) {
@@ -888,6 +893,7 @@ int main(int argc, char **argv)
         mk_item(fmenus[1], QStringLiteral("Export labels (PDF)"), [&]() { f_export(); });
     }
     undoBtn->connect(undoBtn, &QPushButton::clicked, [&]() { f_undo2(); });
+    g_ribundo->connect(g_ribundo, &QToolButton::clicked, [&]() { f_undo2(); });
     delKeyBtn->connect(delKeyBtn, &QPushButton::clicked, [&]() { f_delkey(); });
     cancelBtn->connect(cancelBtn, &QPushButton::clicked, [&]() { f_cancel(); });
     saveBtn->connect(saveBtn, &QPushButton::clicked, [&]() { f_save(); });
