@@ -1318,6 +1318,11 @@ int main(int argc, char **argv)
                 ok1 = all.contains("autodetect=0"); ok2 = all.contains("startauto=0"); }
               if (!ok1 || !ok2) { std::printf("clicktest FAIL: settings not persisted\n"); ++gfail; } }
             cbDetect->setChecked(true); cbStart->setChecked(true);
+            { static UploadPanel *g_uparm = new UploadPanel(&win, &pm, QString(), true);
+              g_uparm->hide();
+              g_uparm->run_now();
+              { const QString stt = g_uparm->status_text();
+                if (!stt.contains("FAILED at block") && !stt.contains("finished", Qt::CaseInsensitive)) { std::printf("clicktest FAIL: armed upload not attempted\n"); ++gfail; } } }
             f_export();
             { bool calOk = false;
               QFile cf(path + QStringLiteral(".cut.pdf"));
