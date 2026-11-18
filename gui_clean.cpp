@@ -279,30 +279,31 @@ int main(int argc, char **argv)
     QWidget *ribbon = new QWidget(&win);
     ribbon->setObjectName("ribbon");
     QVBoxLayout *rv = new QVBoxLayout(ribbon);
-    QSpinBox *tabSel = new QSpinBox(ribbon);
-    tabSel->setObjectName("tabSel");
-    tabSel->setMinimum(1); tabSel->setMaximum(5); tabSel->setValue(1);
-    rv->addWidget(tabSel);
+    static int g_tab = 1;                                    // active ribbon tab
+    QWidget *tabstrip = new QWidget(ribbon);
+    tabstrip->setObjectName("tabstrip");
+    QHBoxLayout *th = new QHBoxLayout(tabstrip);
+    rv->addWidget(tabstrip);
     QWidget *ribgrp[5];
     for (int t = 0; t < 5; ++t) { ribgrp[t] = new QWidget(ribbon); new QHBoxLayout(ribgrp[t]); }
-    auto rib_sync = [tabSel, &ribgrp] {
+    auto rib_sync = [&ribgrp] {
         for (int t = 0; t < 5; ++t)
-            (tabSel->value() == t + 1 ? ribgrp[t]->show() : ribgrp[t]->hide());
+            (g_tab == t + 1 ? ribgrp[t]->show() : ribgrp[t]->hide());
     };
-    auto add_rib = [tabSel, &ribgrp](int tab, const char *name, const char *icon) -> QToolButton * {
+    auto add_rib = [&ribgrp](int tab, const char *name, const char *icon) -> QToolButton * {
         QToolButton *b = new QToolButton(ribgrp[tab - 1]);
         b->setObjectName(name);
         b->setIcon(mkicon(icon));
         b->setToolTip(QString::fromLatin1(name));
         return b;
     };
-    add_rib(1, "rib_new", "plus");
+    static QToolButton *g_ribnew = nullptr; g_ribnew = add_rib(1, "rib_new", "plus");
     add_rib(1, "rib_open", "folder");
-    add_rib(1, "rib_recent", "list");
+    static QToolButton *g_ribrecent = nullptr; g_ribrecent = add_rib(1, "rib_recent", "list");
     static QToolButton *g_ribundo = nullptr; g_ribundo = add_rib(1, "rib_undo", "minus");
-    if (QToolButton *rc = add_rib(1, "rib_close", "x"))
-        if (path.isEmpty()) rc->setEnabled(false);
-    add_rib(1, "rib_exit", "x");
+    static QToolButton *g_ribclose = nullptr; g_ribclose = add_rib(1, "rib_close", "x");
+    if (g_ribclose && path.isEmpty()) g_ribclose->setEnabled(false);
+    static QToolButton *g_ribexit = nullptr; g_ribexit = add_rib(1, "rib_exit", "x");
     static QToolButton *g_upbtn = nullptr; g_upbtn = add_rib(1, "rib_upload", "up");
     add_rib(2, "rib_copy", "copy");
     add_rib(2, "rib_paste", "copy");
@@ -315,6 +316,18 @@ int main(int argc, char **argv)
     add_rib(3, "rib_moddel", "trash");
     add_rib(4, "rib_settings", "gear");
     add_rib(5, "rib_about", "doc");
+    { const char *tic[5] = { "doc", "copy", "plus", "gear", "doc" };
+      for (int t = 0; t < 5; ++t) {
+          QToolButton *tb = new QToolButton(tabstrip);
+          tb->setObjectName(QStringLiteral("tabBtn%1").arg(t + 1));
+          tb->setIcon(mkicon(tic[t]));
+          tb->setToolTip(QString::fromLatin1(caps[t]));
+          QLabel *tl = new QLabel(tabstrip);
+          tl->setObjectName(QStringLiteral("tabLbl%1").arg(t + 1));
+          tl->setText(QString::fromLatin1(caps[t]));
+          th->addWidget(tb); th->addWidget(tl);
+          tb->connect(tb, &QToolButton::clicked, [t, &rib_sync]{ g_tab = t + 1; rib_sync(); });
+      } }
     rib_sync();
     vwin->insertWidget(2, ribbon);
 
@@ -411,6 +424,7 @@ int main(int argc, char **argv)
     sbar->addWidget(zout); sbar->addWidget(zoomlbl); sbar->addWidget(zin); sbar->addWidget(pathlbl);
     sbar->addWidget(uplbl);
     g_upbtn->connect(g_upbtn, &QToolButton::clicked, [uplbl]{ if (g_up) { g_up->run_now(); uplbl->setText(g_up->status_text()); } });
+
     vwin->addWidget(statusbar);
 
     // ---- Settings tab content (vendor §2): 4 checkboxes + date format + language ----
@@ -894,6 +908,9 @@ int main(int argc, char **argv)
     }
     undoBtn->connect(undoBtn, &QPushButton::clicked, [&]() { f_undo2(); });
     g_ribundo->connect(g_ribundo, &QToolButton::clicked, [&]() { f_undo2(); });
+    g_ribrecent->connect(g_ribrecent, &QToolButton::clicked, [&]{ if (!g_recent.isEmpty()) do_open_file(g_recent.first()); });
+    g_ribclose->connect(g_ribclose, &QToolButton::clicked, [&]{ f_closefile(); });
+    g_ribexit->connect(g_ribexit, &QToolButton::clicked, [&]{ f_closefile(); app.exit(0); });
     delKeyBtn->connect(delKeyBtn, &QPushButton::clicked, [&]() { f_delkey(); });
     cancelBtn->connect(cancelBtn, &QPushButton::clicked, [&]() { f_cancel(); });
     saveBtn->connect(saveBtn, &QPushButton::clicked, [&]() { f_save(); });
