@@ -5,6 +5,7 @@
 // on demand; nothing else is on the main window. Legacy 3000-line gui stays
 // reachable via --legacy-gui until it can be deleted.
 #include <QApplication>
+#include <memory>
 #include <QChar>
 #include <QColorDialog>
 #include <QDialog>
@@ -254,16 +255,221 @@ static QString write_atomic(const QString &p, const QByteArray &bytes)
     return QString();
 }
 
-int main(int argc, char **argv)
-{
-    for (int i = 1; i < argc; ++i)
-        if (QString(argv[i]) == "--legacy-gui") {
-            std::printf("legacy GUI deleted; the clean shell IS the app\n");
-            return 0;
-        }
 
-    bool shot = false, hard = false, dlgategate = false, olastgate = false, dbg = false;
+    struct St { bool autodetect = true, startauto = true, minauto = true, openlast = true;
+        QStringList modules;                   // hardware modules present (MSR/Barcode/OCR)
+                QString datefmt = QStringLiteral("DD.MM.YYYY"); int lang = 1; };
+
+struct GuiApp {
+    QApplication *app = nullptr;
+    QWidget win;
+    Pmap pm;
+    St st;
+    bool shot=false, hard=false, dlgategate=false, olastgate=false, dbg=false;
     QString path;
+    QMenu *fmenus[5] = { nullptr };
+    QWidget *ribgrp[5] = { nullptr };
+    int gfail = 0;
+    int paired = 0;
+    int g_tab = 1;
+    QToolButton * g_ribnew = nullptr;
+    QToolButton * g_ribopen = nullptr;
+    QToolButton * g_ribrecent = nullptr;
+    QToolButton * g_ribundo = nullptr;
+    QToolButton * g_ribclose = nullptr;
+    QToolButton * g_ribexit = nullptr;
+    QToolButton * g_upbtn = nullptr;
+    QToolButton * g_ribcopy = nullptr;
+    QToolButton * g_ribpaste = nullptr;
+    QToolButton * g_ribdels = nullptr;
+    QToolButton * g_ribswap = nullptr;
+    QToolButton * g_ribpdf = nullptr;
+    QToolButton * g_ribtempl = nullptr;
+    QToolButton * g_ribrestore2 = nullptr;
+    QToolButton * g_ribmodadd = nullptr;
+    QToolButton * g_ribmoddel = nullptr;
+    QToolButton * g_ribset = nullptr;
+    QToolButton * g_ribabout = nullptr;
+    std::function<void()> g_openSettingsTab;
+    QString undoDir;
+    int g_undo_seq = 0;
+    QString recentFile;
+    QStringList g_recent;
+    QString g_template;
+    UploadPanel * g_up = nullptr;
+    QString setIni;
+    QColorDialog * cpick = nullptr;
+    QFontDialog * qpick = nullptr;
+    QStringList g_backups;
+    QVector<Map> g_snap;
+    int pk_cur = -1;
+    QVector<Layer> g_layers;
+    QStringList g_deps;
+    QString g_copy;
+    QString g_newtype;
+    int g_row_hint = -1;
+    int g_cf = 0, g_cb = 0;
+    QString g_swatch_css;
+    bool g_pick_fore = true;
+    QStringList g_macro;
+    QString g_last_backup;
+    QVBoxLayout *vwin = nullptr;
+    QMenuBar *menu = nullptr;
+    QWidget *accent = nullptr;
+    QWidget *ribbon = nullptr;
+    QVBoxLayout *rv = nullptr;
+    QWidget *tabstrip = nullptr;
+    QHBoxLayout *th = nullptr;
+    QWidget *mainrow = nullptr;
+    QHBoxLayout *mrow = nullptr;
+    QWidget *sidebar = nullptr;
+    QVBoxLayout *sv = nullptr;
+    QLabel *logo = nullptr;
+    QLabel *kpic = nullptr;
+    QLabel *shint = nullptr;
+    QLabel *phead = nullptr;
+    QComboBox *procSel = nullptr;
+    KeyGrid *grid = nullptr;
+    QWidget *statusbar = nullptr;
+    QHBoxLayout *sbar = nullptr;
+    QToolButton *zout = nullptr;
+    QLabel *zoomlbl = nullptr;
+    QToolButton *zin = nullptr;
+    QLabel *pathlbl = nullptr;
+    UploadPanel *upanel = nullptr;
+    QLabel *uplbl = nullptr;
+    QDialog *setdlg = nullptr;
+    QVBoxLayout *setlay = nullptr;
+    QLabel *setHdr = nullptr;
+    QCheckBox *cbDetect = nullptr;
+    QCheckBox *cbStart = nullptr;
+    QCheckBox *cbMin = nullptr;
+    QCheckBox *cbOpen = nullptr;
+    QLabel *dateLbl = nullptr;
+    QComboBox *dateCombo = nullptr;
+    QRadioButton *langDe = nullptr;
+    QRadioButton *langEn = nullptr;
+    QDialog *dlg = nullptr;
+    QVBoxLayout *dlv = nullptr;
+    QLabel *dlgTitle = nullptr;
+    QLineEdit *edit = nullptr;
+    QListWidget *layerW = nullptr;
+    QPushButton *addbtn = nullptr;
+    QPushButton *delbtn = nullptr;
+    QPushButton *renbtn = nullptr;
+    QPushButton *cpybtn = nullptr;
+    QPushButton *delKeyBtn = nullptr;
+    QPushButton *cancelBtn = nullptr;
+    QPushButton *saveBtn = nullptr;
+    QPushButton *undoBtn = nullptr;
+    QSpinBox *spinl = nullptr;
+    QLineEdit *capFld = nullptr;
+    QCheckBox *btfFld = nullptr;
+    QCheckBox *repFld = nullptr;
+    QCheckBox *slwFld = nullptr;
+    QToolButton *forePick = nullptr;
+    QLabel *foreLbl = nullptr;
+    QToolButton *backPick = nullptr;
+    QLabel *backLbl = nullptr;
+    QToolButton *fontBtn = nullptr;
+    QSpinBox *fontSz = nullptr;
+    QRadioButton *fnNone = nullptr;
+    QRadioButton *fnText = nullptr;
+    QRadioButton *fnApp = nullptr;
+    QRadioButton *fnWeb = nullptr;
+    QLabel *appearLbl = nullptr;
+    QLineEdit *appPath = nullptr;
+    QLineEdit *appPars = nullptr;
+    QLineEdit *appShort = nullptr;
+    QLineEdit *webLink = nullptr;
+    QSpinBox *webTo = nullptr;
+    QLineEdit *webPars = nullptr;
+    QComboBox *browserPick = nullptr;
+    QComboBox *macroPick = nullptr;
+    QListWidget *macroSlots = nullptr;
+    QLabel *previewLbl = nullptr;
+    QTextEdit *previewBox = nullptr;
+    QSpinBox *holdSpin = nullptr;
+    QLabel *sampleLbl = nullptr;
+    QDialog *rdlg = nullptr;
+    QVBoxLayout *rlv = nullptr;
+    QLabel *rHdr = nullptr;
+    QListWidget *rList = nullptr;
+    QPushButton *rPick = nullptr;
+    QDialog *knewdlg = nullptr;
+    QVBoxLayout *knv = nullptr;
+    QLabel *knq = nullptr;
+    QRadioButton *knAlways = nullptr;
+    QRadioButton *knProc = nullptr;
+    QLineEdit *procFld = nullptr;
+    QPushButton *knList = nullptr;
+    QPushButton *knNext = nullptr;
+    QDialog *dproc = nullptr;
+    QVBoxLayout *dpv = nullptr;
+    QListWidget *winW = nullptr;
+    QComboBox *procPick = nullptr;
+    QPushButton *winBtn = nullptr;
+    std::function<void()> rib_sync;
+    std::function<QToolButton *(int tab, const char *name, const char *icon, const char *text)> add_rib;
+    std::function<void()> eEdit;
+    std::function<void()> eCopy;
+    std::function<void()> ePaste;
+    std::function<void()> eDel;
+    std::function<void()> f_proc;
+    std::function<void()> save_set;
+    std::function<void()> load_set;
+    std::function<void(int pk)> dlg_refresh;
+    std::function<void(int pk)> open_dialog;
+    std::function<void()> f_knnext;
+    std::function<void(bool isFore)> f_pick_open;
+    std::function<void()> f_pick_ok;
+    std::function<void()> f_font_open;
+    std::function<void()> f_font_ok;
+    std::function<void()> f_copy;
+    std::function<void()> f_rename;
+    std::function<void()> f_delete;
+    std::function<void()> f_appear;
+    std::function<void()> f_flags;
+    std::function<void()> f_fnapply;
+    std::function<void()> f_applymacro;
+    std::function<void()> f_addmacro;
+    std::function<void()> f_preview;
+    std::function<void(const QString &t)> f_settype;
+    std::function<void()> f_applytype;
+    std::function<void()> f_addlayer;
+    std::function<void()> f_app_appear;
+    std::function<void()> f_delkey;
+    std::function<void()> f_cancel;
+    std::function<void()> f_backup;
+    std::function<void()> f_save;
+    std::function<void()> f_undo;
+    std::function<void()> f_daemon;
+    std::function<void()> f_app_applytype;
+    std::function<void()> f_refresh_backups;
+    std::function<void()> f_restore;
+    std::function<void()> f_openrestore;
+    std::function<void()> f_close_restore;
+    std::function<void()> load_recent;
+    std::function<void()> save_recent;
+    std::function<void(const QString &p)> push_recent;
+    std::function<void()> f_newfile;
+    std::function<void(const QString &p)> do_open_file;
+    std::function<void()> f_undo2;
+    std::function<void(QMenu *mnu, const QString &txt, const std::function<void()> &fn)> mk_item;
+    std::function<void()> f_openfile;
+    std::function<void()> f_closefile;
+    std::function<void()> f_swap;
+    std::function<bool()> f_push_reload;
+    std::function<void(int ms)> f_inject_send;
+    std::function<void()> f_export;
+    std::function<void()> f_settings;
+    std::function<QAction *(int tab, const QString &obj)> find_action;
+    std::function<void()> f_winprobe;
+    std::function<void()> setmin;
+
+    GuiApp(int argc, char **argv)
+    {
+
     for (int i = 1; i < argc; ++i) {
         const QString a = argv[i];
         if (a == "--shot") shot = true;
@@ -274,7 +480,6 @@ int main(int argc, char **argv)
         else if (!a.startsWith("--")) path = a;
     }
 
-    Pmap pm;
     if (!path.isEmpty()) {
         QFile f(path);
         if (f.open(QIODevice::ReadOnly)) {
@@ -285,43 +490,39 @@ int main(int argc, char **argv)
     for (const Map &m : pm.maps)
         if (!m.print_text.isEmpty()) g_labels.insert(m.poskey, m.print_text);
 
-    QApplication app(argc, argv);
-    QWidget win;
     win.setObjectName("win");
     win.resize(1100, 640);
     win.setStyleSheet("#win{background-color:#eceef2;}");
     if (auto *sh = QGuiApplication::styleHints()) sh->setColorScheme(Qt::ColorScheme::Light);   // fork 6.12 API: menus/dialogs render light even on a dark desktop
-    QVBoxLayout *vwin = new QVBoxLayout(&win);
+vwin = new QVBoxLayout(&win);
 
-    QMenuBar *menu = new QMenuBar(&win);
+menu = new QMenuBar(&win);
     menu->setObjectName("menu");
     const char *caps[5] = {"File", "Edit", "Modules", "Settings", "Help"};
-    QMenu *fmenus[5] = { nullptr };
     for (int t = 0; t < 5; ++t)
         fmenus[t] = menu->addMenu(QString::fromLatin1(caps[t]));
     vwin->insertWidget(0, menu);
 
-    QWidget *accent = new QWidget(&win);
+accent = new QWidget(&win);
     accent->setObjectName("accent");
     accent->setStyleSheet("#accent{background-color:#4f7d96;}");
     accent->setMinimumHeight(6);
     vwin->insertWidget(1, accent);
 
-    QWidget *ribbon = new QWidget(&win);
+ribbon = new QWidget(&win);
     ribbon->setObjectName("ribbon");
-    QVBoxLayout *rv = new QVBoxLayout(ribbon);
-    static int g_tab = 1;                                    // active ribbon tab
-    QWidget *tabstrip = new QWidget(ribbon);
+rv = new QVBoxLayout(ribbon);
+g_tab = 1;
+tabstrip = new QWidget(ribbon);
     tabstrip->setObjectName("tabstrip");
-    QHBoxLayout *th = new QHBoxLayout(tabstrip);
+th = new QHBoxLayout(tabstrip);
     rv->addWidget(tabstrip);
-    QWidget *ribgrp[5];
     for (int t = 0; t < 5; ++t) { ribgrp[t] = new QWidget(ribbon); new QHBoxLayout(ribgrp[t]); }
-    auto rib_sync = [&ribgrp] {
+    rib_sync = [this] {
         for (int t = 0; t < 5; ++t)
             (g_tab == t + 1 ? ribgrp[t]->show() : ribgrp[t]->hide());
     };
-    auto add_rib = [&ribgrp](int tab, const char *name, const char *icon, const char *text = "") -> QToolButton * {
+    add_rib = [this](int tab, const char *name, const char *icon, const char *text = "") -> QToolButton * {
         QToolButton *b = new QToolButton(ribgrp[tab - 1]);
         b->setObjectName(name);
         b->setIcon(mkicon(icon));
@@ -330,27 +531,27 @@ int main(int argc, char **argv)
                        b->setStyleSheet(QStringLiteral("QToolButton{font-size:6pt;}")); }
         return b;
     };
-    static QToolButton *g_ribnew = nullptr; g_ribnew = add_rib(1, "rib_new", "plus", "New");
-    static QToolButton *g_ribopen = nullptr; g_ribopen = add_rib(1, "rib_open", "folder", "Open");
-    static QToolButton *g_ribrecent = nullptr; g_ribrecent = add_rib(1, "rib_recent", "list", "Recent");
-    static QToolButton *g_ribundo = nullptr; g_ribundo = add_rib(1, "rib_undo", "minus", "Undo");
-    static QToolButton *g_ribclose = nullptr; g_ribclose = add_rib(1, "rib_close", "x", "Close");
+g_ribnew = nullptr; g_ribnew = add_rib(1, "rib_new", "plus", "New");
+g_ribopen = nullptr; g_ribopen = add_rib(1, "rib_open", "folder", "Open");
+g_ribrecent = nullptr; g_ribrecent = add_rib(1, "rib_recent", "list", "Recent");
+g_ribundo = nullptr; g_ribundo = add_rib(1, "rib_undo", "minus", "Undo");
+g_ribclose = nullptr; g_ribclose = add_rib(1, "rib_close", "x", "Close");
     if (g_ribclose && path.isEmpty()) g_ribclose->setEnabled(false);
-    static QToolButton *g_ribexit = nullptr; g_ribexit = add_rib(1, "rib_exit", "x", "Exit");
-    static QToolButton *g_upbtn = nullptr; g_upbtn = add_rib(1, "rib_upload", "up", "Upload");
-    static QToolButton *g_ribcopy = nullptr; g_ribcopy = add_rib(2, "rib_copy", "copy", "Copy");
-    static QToolButton *g_ribpaste = nullptr; g_ribpaste = add_rib(2, "rib_paste", "copy", "Paste");
-    static QToolButton *g_ribdels = nullptr; g_ribdels = add_rib(2, "rib_del", "trash", "Del");
-    static QToolButton *g_ribswap = nullptr; g_ribswap = add_rib(2, "rib_swap", "gear", "Swap");
-    static QToolButton *g_ribpdf = nullptr; g_ribpdf = add_rib(2, "rib_pdf", "doc", "PDF");
-    static QToolButton *g_ribtempl = nullptr; g_ribtempl = add_rib(2, "rib_templ", "pencil", "Tmpl");
-    static QToolButton *g_ribrestore2 = nullptr; g_ribrestore2 = add_rib(2, "rib_restore", "list", "Restore");
-    static QToolButton *g_ribmodadd = nullptr, *g_ribmoddel = nullptr;
+g_ribexit = nullptr; g_ribexit = add_rib(1, "rib_exit", "x", "Exit");
+g_upbtn = nullptr; g_upbtn = add_rib(1, "rib_upload", "up", "Upload");
+g_ribcopy = nullptr; g_ribcopy = add_rib(2, "rib_copy", "copy", "Copy");
+g_ribpaste = nullptr; g_ribpaste = add_rib(2, "rib_paste", "copy", "Paste");
+g_ribdels = nullptr; g_ribdels = add_rib(2, "rib_del", "trash", "Del");
+g_ribswap = nullptr; g_ribswap = add_rib(2, "rib_swap", "gear", "Swap");
+g_ribpdf = nullptr; g_ribpdf = add_rib(2, "rib_pdf", "doc", "PDF");
+g_ribtempl = nullptr; g_ribtempl = add_rib(2, "rib_templ", "pencil", "Tmpl");
+g_ribrestore2 = nullptr; g_ribrestore2 = add_rib(2, "rib_restore", "list", "Restore");
+
     g_ribmodadd = add_rib(3, "rib_modadd", "plus", "Mod+");
     g_ribmoddel = add_rib(3, "rib_moddel", "trash", "Mod-");
-    static QToolButton *g_ribset = nullptr; g_ribset = add_rib(4, "rib_settings", "gear", "Settings");
-    static QToolButton *g_ribabout = nullptr; g_ribabout = add_rib(5, "rib_about", "doc", "About");
-    static std::function<void()> g_openSettingsTab;   // set later to f_settings
+g_ribset = nullptr; g_ribset = add_rib(4, "rib_settings", "gear", "Settings");
+g_ribabout = nullptr; g_ribabout = add_rib(5, "rib_about", "doc", "About");
+
     { const char *tic[5] = { "doc", "copy", "plus", "gear", "doc" };
       for (int t = 0; t < 5; ++t) {
           QToolButton *tb = new QToolButton(tabstrip);
@@ -361,29 +562,35 @@ int main(int argc, char **argv)
           tl->setObjectName(QStringLiteral("tabLbl%1").arg(t + 1));
           tl->setText(QString::fromLatin1(caps[t]));
           th->addWidget(tb); th->addWidget(tl);
-          tb->connect(tb, &QToolButton::clicked, [t, &rib_sync]{ g_tab = t + 1; rib_sync(); if (g_openSettingsTab && t == 3) g_openSettingsTab(); });
+          tb->connect(tb, &QToolButton::clicked, [t,this]{ g_tab = t + 1; rib_sync(); if (g_openSettingsTab && t == 3) g_openSettingsTab(); });
       } }
     rib_sync();
     vwin->insertWidget(2, ribbon);
 
-    QWidget *mainrow = new QWidget(&win);
+    build_grid();
+    build_overlays();
+    build_menus();
+
+    }
+    void build_grid() {
+mainrow = new QWidget(&win);
     mainrow->setObjectName("mainrow");
     mainrow->setStyleSheet("#mainrow{background-color:#e9ebef;}");
-    QHBoxLayout *mrow = new QHBoxLayout(mainrow);
-    QWidget *sidebar = new QWidget(mainrow);
+mrow = new QHBoxLayout(mainrow);
+sidebar = new QWidget(mainrow);
     sidebar->setObjectName("sidebar");
     sidebar->setStyleSheet("#sidebar{background-color:#3c3c3c;} QLabel{color:#e8e8e8;}");
     sidebar->setMaximumWidth(260);
-    static QString undoDir;                      // undo/<timestamp>.pmap copies
-    static int g_undo_seq = 0;                   // same-second saves stay distinct
-    static QString recentFile;                   // recent list persisted here
-    static QStringList g_recent;                 // newest first, max 8
-    static QString g_template;                   // settings key template=
+
+g_undo_seq = 0;
+
+
+
     g_pm = &pm;
     undoDir = QDir(QDir::homePath()).filePath(QStringLiteral(".local/share/pkteditor/undo"));
     recentFile = QDir(QDir::homePath()).filePath(QStringLiteral(".local/share/pkteditor/recent.txt"));
-    QVBoxLayout *sv = new QVBoxLayout(sidebar);
-    QLabel *logo = new QLabel(sidebar);
+sv = new QVBoxLayout(sidebar);
+logo = new QLabel(sidebar);
     logo->setObjectName("logo");
     {
         QImage img(200, 34, QImage::Format_ARGB32);
@@ -400,19 +607,19 @@ int main(int argc, char **argv)
         pt.end();
         logo->setPixmap(QPixmap::fromImage(img));
     }
-    QLabel *kpic = new QLabel(sidebar);
+kpic = new QLabel(sidebar);
     kpic->setObjectName("kpic");
     kpic->setPixmap(QPixmap::fromImage(sidePic(220, 120)));
-    QLabel *shint = new QLabel(QString::fromUtf8("Double-click a key to edit it."), sidebar);
+shint = new QLabel(QString::fromUtf8("Double-click a key to edit it."), sidebar);
     shint->setObjectName("shint");
     shint->setWordWrap(true);
-    QLabel *phead = new QLabel(QString::fromUtf8("Process:"), sidebar); phead->setObjectName("phead");
-    QComboBox *procSel = new QComboBox(sidebar); procSel->setObjectName("procSel");
+phead = new QLabel(QString::fromUtf8("Process:"), sidebar); phead->setObjectName("phead");
+procSel = new QComboBox(sidebar); procSel->setObjectName("procSel");
     procSel->addItem(QStringLiteral("Always"));
     for (const QString &pn : procs_of(pm)) procSel->addItem(pn);
     sv->addWidget(logo); sv->addWidget(kpic); sv->addWidget(phead); sv->addWidget(procSel); sv->addWidget(shint);
 
-    KeyGrid *grid = new KeyGrid(mainrow);
+grid = new KeyGrid(mainrow);
     grid->setObjectName("grid");
     g_ctx_menu = new QMenu(grid);
     g_ctx_menu->setObjectName("ctxmenu");
@@ -422,12 +629,12 @@ int main(int argc, char **argv)
             g_ctx_menu->addAction(a);
             a->connect(a, &QAction::triggered, [fn]{ if (fn) fn(); });
         };
-        auto eEdit = [&]{ if (g_openDlg && g_ctx_pk >= 0) g_openDlg(g_ctx_pk); };
-        auto eCopy = [&]{ g_clip.clear();
+        eEdit = [&]{ if (g_openDlg && g_ctx_pk >= 0) g_openDlg(g_ctx_pk); };
+        eCopy = [&]{ g_clip.clear();
             for (const Map &m : pm.maps) if (m.poskey == g_ctx_pk) { g_clip = m.layers; break; } };
-        auto ePaste = [&]{ if (g_clip.isEmpty()) return;
+        ePaste = [&]{ if (g_clip.isEmpty()) return;
             for (Map &m : pm.maps) if (m.poskey == g_ctx_pk) { m.layers = g_clip; break; } };
-        auto eDel = [&]{ for (Map &m : pm.maps) if (m.poskey == g_ctx_pk) { m.layers.clear(); break; } };
+        eDel = [&]{ for (Map &m : pm.maps) if (m.poskey == g_ctx_pk) { m.layers.clear(); break; } };
         g_ctx_edit = eEdit; g_ctx_copy = eCopy; g_ctx_paste = ePaste; g_ctx_del = eDel;
         mkctx("Edit", eEdit); mkctx("Copy", eCopy); mkctx("Paste", ePaste); mkctx("Delete", eDel);
     }
@@ -436,58 +643,55 @@ int main(int argc, char **argv)
     mrow->addWidget(grid, 4);
     procSel->setCurrentIndex(0);
     grid->curproc = procSel->currentText();
-    auto f_proc = [&]() { grid->curproc = procSel->currentText(); };
+    f_proc = [&]() { grid->curproc = procSel->currentText(); };
     vwin->addWidget(mainrow);
 
-    QWidget *statusbar = new QWidget(&win);
+statusbar = new QWidget(&win);
     statusbar->setObjectName("statusbar");
-    QHBoxLayout *sbar = new QHBoxLayout(statusbar);
-    QToolButton *zout = new QToolButton(statusbar);
+sbar = new QHBoxLayout(statusbar);
+zout = new QToolButton(statusbar);
     zout->setObjectName("zout"); zout->setIcon(mkicon("minus"));
-    QLabel *zoomlbl = new QLabel(statusbar);
+zoomlbl = new QLabel(statusbar);
     zoomlbl->setObjectName("zoomlbl");
     zoomlbl->setText(QStringLiteral("100 %"));
-    QToolButton *zin = new QToolButton(statusbar);
+zin = new QToolButton(statusbar);
     zin->setObjectName("zin"); zin->setIcon(mkicon("plus"));
-    QLabel *pathlbl = new QLabel(statusbar);
+pathlbl = new QLabel(statusbar);
     pathlbl->setObjectName("pathlbl");
     pathlbl->setText(path);
-    static UploadPanel *g_up = nullptr;
-    UploadPanel *upanel = new UploadPanel(statusbar, &pm, QString(), false);
-    QLabel *uplbl = new QLabel(statusbar); uplbl->setObjectName("uplbl");
+g_up = nullptr;
+upanel = new UploadPanel(statusbar, &pm, QString(), false);
+uplbl = new QLabel(statusbar); uplbl->setObjectName("uplbl");
     g_up = upanel;
     sbar->addWidget(zout); sbar->addWidget(zoomlbl); sbar->addWidget(zin); sbar->addWidget(pathlbl);
     sbar->addWidget(uplbl);
-    g_upbtn->connect(g_upbtn, &QToolButton::clicked, [uplbl]{ if (g_up) { g_up->run_now(); uplbl->setText(g_up->status_text()); } });
+    g_upbtn->connect(g_upbtn, &QToolButton::clicked, [this]{ if (g_up) { g_up->run_now(); uplbl->setText(g_up->status_text()); } });
 
     vwin->addWidget(statusbar);
 
     // ---- Settings tab content (vendor §2): 4 checkboxes + date format + language ----
-    struct St { bool autodetect = true, startauto = true, minauto = true, openlast = true;
-        QStringList modules;                   // hardware modules present (MSR/Barcode/OCR)
-                QString datefmt = QStringLiteral("DD.MM.YYYY"); int lang = 1; } st;
-    QDialog *setdlg = new QDialog(&win);
+setdlg = new QDialog(&win);
     setdlg->setObjectName("setdlg");
     setdlg->hide();
-    QVBoxLayout *setlay = new QVBoxLayout(setdlg);
-    QLabel *setHdr = new QLabel(QStringLiteral("Settings"), setdlg);
-    QCheckBox *cbDetect = new QCheckBox(setdlg); cbDetect->setObjectName("cbDetect");
-    QCheckBox *cbStart  = new QCheckBox(setdlg); cbStart->setObjectName("cbStart");
-    QCheckBox *cbMin    = new QCheckBox(setdlg); cbMin->setObjectName("cbMin");
-    QCheckBox *cbOpen   = new QCheckBox(setdlg); cbOpen->setObjectName("cbOpen");
-    QLabel *dateLbl = new QLabel(setdlg); dateLbl->setObjectName("dateLbl");
-    QComboBox *dateCombo = new QComboBox(setdlg); dateCombo->setObjectName("dateCombo");
+setlay = new QVBoxLayout(setdlg);
+setHdr = new QLabel(QStringLiteral("Settings"), setdlg);
+cbDetect = new QCheckBox(setdlg); cbDetect->setObjectName("cbDetect");
+cbStart = new QCheckBox(setdlg); cbStart->setObjectName("cbStart");
+cbMin = new QCheckBox(setdlg); cbMin->setObjectName("cbMin");
+cbOpen = new QCheckBox(setdlg); cbOpen->setObjectName("cbOpen");
+dateLbl = new QLabel(setdlg); dateLbl->setObjectName("dateLbl");
+dateCombo = new QComboBox(setdlg); dateCombo->setObjectName("dateCombo");
     dateCombo->addItems({QStringLiteral("DD.MM.YYYY"), QStringLiteral("MM/DD/YYYY"), QStringLiteral("YYYY-MM-DD")});
-    QRadioButton *langDe = new QRadioButton(QStringLiteral("Deutsch"), setdlg);
-    QRadioButton *langEn = new QRadioButton(QStringLiteral("English"), setdlg);
+langDe = new QRadioButton(QStringLiteral("Deutsch"), setdlg);
+langEn = new QRadioButton(QStringLiteral("English"), setdlg);
     setlay->addWidget(setHdr);
     setlay->addWidget(cbDetect); setlay->addWidget(cbStart); setlay->addWidget(cbMin); setlay->addWidget(cbOpen);
     setlay->addWidget(dateLbl); setlay->addWidget(dateCombo);
     setlay->addWidget(langDe); setlay->addWidget(langEn);
     dateLbl->setText(QStringLiteral("Date format: %1").arg(st.datefmt));
     // persistence of settings (§2) — same ini as legacy
-    static QString setIni;
-    auto save_set = [&]() {
+
+    save_set = [&]() {
         QFile sf(setIni);
         if (!sf.open(QIODevice::WriteOnly | QIODevice::Text)) return;
         sf.write((QStringLiteral("autodetect=") + QString::number(st.autodetect ? 1 : 0) + "\n"
@@ -499,7 +703,7 @@ int main(int argc, char **argv)
                   "lang=" + QString::number(st.lang) + "\n").toUtf8());
         sf.close();
     };
-    auto load_set = [&]() {
+    load_set = [&]() {
         setIni = QDir(QDir::homePath()).filePath(QStringLiteral(".local/share/pkteditor/settings.ini"));
         QFile sf(setIni);
         if (!sf.open(QIODevice::ReadOnly | QIODevice::Text)) return;
@@ -529,61 +733,63 @@ int main(int argc, char **argv)
 
 
     // ---- dialogs (overlays, not part of the main window layout) ----
-    QDialog *dlg = new QDialog(&win);
+    }
+    void build_overlays() {
+dlg = new QDialog(&win);
     dlg->setObjectName("dlg");
     dlg->hide();
-    QVBoxLayout *dlv = new QVBoxLayout(dlg);
-    QLabel *dlgTitle = new QLabel(dlg);
-    QLineEdit *edit = new QLineEdit(dlg);
-    QListWidget *layerW = new QListWidget(dlg);
+dlv = new QVBoxLayout(dlg);
+dlgTitle = new QLabel(dlg);
+edit = new QLineEdit(dlg);
+layerW = new QListWidget(dlg);
     layerW->setMinimumSize(160, 24);
-    QPushButton *addbtn = new QPushButton(dlg); addbtn->setObjectName("addbtn");
-    QPushButton *delbtn = new QPushButton(dlg); delbtn->setObjectName("delbtn");
-    QPushButton *renbtn = new QPushButton(dlg); renbtn->setObjectName("renbtn");
-    QPushButton *cpybtn = new QPushButton(dlg); cpybtn->setObjectName("cpybtn");
-    QPushButton *delKeyBtn = new QPushButton(dlg); delKeyBtn->setObjectName("delKeyBtn");
-    QPushButton *cancelBtn = new QPushButton(dlg); cancelBtn->setObjectName("cancelBtn");
-    QPushButton *saveBtn  = new QPushButton(dlg); saveBtn->setObjectName("saveBtn");
-    QPushButton *undoBtn  = new QPushButton(dlg); undoBtn->setObjectName("undoBtn");
-    QSpinBox *spinl = new QSpinBox(dlg); spinl->setObjectName("spinl");
+addbtn = new QPushButton(dlg); addbtn->setObjectName("addbtn");
+delbtn = new QPushButton(dlg); delbtn->setObjectName("delbtn");
+renbtn = new QPushButton(dlg); renbtn->setObjectName("renbtn");
+cpybtn = new QPushButton(dlg); cpybtn->setObjectName("cpybtn");
+delKeyBtn = new QPushButton(dlg); delKeyBtn->setObjectName("delKeyBtn");
+cancelBtn = new QPushButton(dlg); cancelBtn->setObjectName("cancelBtn");
+saveBtn = new QPushButton(dlg); saveBtn->setObjectName("saveBtn");
+undoBtn = new QPushButton(dlg); undoBtn->setObjectName("undoBtn");
+spinl = new QSpinBox(dlg); spinl->setObjectName("spinl");
     // vendor §5 right column: Appearance (Key/Caption color, caption, font) + Function radios
-    QLineEdit *capFld = new QLineEdit(dlg); capFld->setObjectName("capFld");
-    QCheckBox *btfFld = new QCheckBox(dlg); btfFld->setObjectName("btfFld");
-    QCheckBox *repFld = new QCheckBox(dlg); repFld->setObjectName("repFld");
-    QCheckBox *slwFld = new QCheckBox(dlg); slwFld->setObjectName("slwFld");
-    QToolButton *forePick = new QToolButton(dlg); forePick->setObjectName("forePick");
+capFld = new QLineEdit(dlg); capFld->setObjectName("capFld");
+btfFld = new QCheckBox(dlg); btfFld->setObjectName("btfFld");
+repFld = new QCheckBox(dlg); repFld->setObjectName("repFld");
+slwFld = new QCheckBox(dlg); slwFld->setObjectName("slwFld");
+forePick = new QToolButton(dlg); forePick->setObjectName("forePick");
     forePick->setToolTip("Foreground"); forePick->setIcon(mkicon("dot"));
-    QLabel *foreLbl = new QLabel(dlg); foreLbl->setObjectName("foreLbl"); foreLbl->setText("Foreground");
-    QToolButton *backPick = new QToolButton(dlg); backPick->setObjectName("backPick");
+foreLbl = new QLabel(dlg); foreLbl->setObjectName("foreLbl"); foreLbl->setText("Foreground");
+backPick = new QToolButton(dlg); backPick->setObjectName("backPick");
     backPick->setToolTip("Background"); backPick->setIcon(mkicon("dot"));
-    QLabel *backLbl = new QLabel(dlg); backLbl->setObjectName("backLbl"); backLbl->setText("Background");
-    static QColorDialog *cpick = new QColorDialog(&win); cpick->hide();
-    QToolButton *fontBtn = new QToolButton(dlg); fontBtn->setObjectName("fontBtn");
+backLbl = new QLabel(dlg); backLbl->setObjectName("backLbl"); backLbl->setText("Background");
+cpick = new QColorDialog(&win); cpick->hide();
+fontBtn = new QToolButton(dlg); fontBtn->setObjectName("fontBtn");
     fontBtn->setToolTip("Font (Dialog)"); fontBtn->setIcon(mkicon("pencil"));
-    QSpinBox *fontSz = new QSpinBox(dlg); fontSz->setObjectName("fontSz");
+fontSz = new QSpinBox(dlg); fontSz->setObjectName("fontSz");
     fontSz->setMinimum(5); fontSz->setMaximum(200); fontSz->setValue(10); fontSz->setSuffix(" pt");
-    static QFontDialog *qpick = new QFontDialog(&win); qpick->hide();
-    QRadioButton *fnNone = new QRadioButton(QStringLiteral("Do nothing"), dlg); fnNone->setObjectName("fnNone");
-    QRadioButton *fnText = new QRadioButton(QStringLiteral("Text-Shortcut"), dlg); fnText->setObjectName("fnText");
-    QRadioButton *fnApp  = new QRadioButton(QStringLiteral("Application"), dlg); fnApp->setObjectName("fnApp");
-    QRadioButton *fnWeb  = new QRadioButton(QStringLiteral("Web"), dlg); fnWeb->setObjectName("fnWeb");
-    QLabel *appearLbl = new QLabel(dlg); appearLbl->setObjectName("appearLbl");
+qpick = new QFontDialog(&win); qpick->hide();
+fnNone = new QRadioButton(QStringLiteral("Do nothing"), dlg); fnNone->setObjectName("fnNone");
+fnText = new QRadioButton(QStringLiteral("Text-Shortcut"), dlg); fnText->setObjectName("fnText");
+fnApp = new QRadioButton(QStringLiteral("Application"), dlg); fnApp->setObjectName("fnApp");
+fnWeb = new QRadioButton(QStringLiteral("Web"), dlg); fnWeb->setObjectName("fnWeb");
+appearLbl = new QLabel(dlg); appearLbl->setObjectName("appearLbl");
     // vendor 6.10 Application dialog fields + 6.12 Web fields (inline in dlg)
-    QLineEdit *appPath = new QLineEdit(dlg); appPath->setObjectName("appPath");
-    QLineEdit *appPars = new QLineEdit(dlg); appPars->setObjectName("appPars");
-    QLineEdit *appShort = new QLineEdit(dlg); appShort->setObjectName("appShort");
-    QLineEdit *webLink = new QLineEdit(dlg); webLink->setObjectName("webLink");
-    QSpinBox *webTo = new QSpinBox(dlg); webTo->setObjectName("webTo"); webTo->setMinimum(1); webTo->setMaximum(120);
-    QLineEdit *webPars = new QLineEdit(dlg); webPars->setObjectName("webPars");
-    QComboBox *browserPick = new QComboBox(dlg); browserPick->setObjectName("browserPick");
-    QComboBox *macroPick = new QComboBox(dlg); macroPick->setObjectName("macroPick");
+appPath = new QLineEdit(dlg); appPath->setObjectName("appPath");
+appPars = new QLineEdit(dlg); appPars->setObjectName("appPars");
+appShort = new QLineEdit(dlg); appShort->setObjectName("appShort");
+webLink = new QLineEdit(dlg); webLink->setObjectName("webLink");
+webTo = new QSpinBox(dlg); webTo->setObjectName("webTo"); webTo->setMinimum(1); webTo->setMaximum(120);
+webPars = new QLineEdit(dlg); webPars->setObjectName("webPars");
+browserPick = new QComboBox(dlg); browserPick->setObjectName("browserPick");
+macroPick = new QComboBox(dlg); macroPick->setObjectName("macroPick");
     for (const char *t : {"N0","N1","N2","N3","N4","N5","N6","N7","N8","N9","BS","DEL","ESC","TAB","SPACE","ENTER",
                           "UP","DOWN","LEFT","RIGHT","PGUP","PGDN","SHIFT","CTRL","ALT","CAPS","NUMLOCK","SCROLL-LOCK"})
         macroPick->addItem(QLatin1String(t));
-    QListWidget *macroSlots = new QListWidget(dlg); macroSlots->setObjectName("macroSlots");
-    QLabel *previewLbl = new QLabel(dlg); previewLbl->setObjectName("previewLbl");
-    QTextEdit *previewBox = new QTextEdit(dlg); previewBox->setObjectName("previewBox");
-    QSpinBox *holdSpin = new QSpinBox(dlg); holdSpin->setObjectName("holdSpin");
+macroSlots = new QListWidget(dlg); macroSlots->setObjectName("macroSlots");
+previewLbl = new QLabel(dlg); previewLbl->setObjectName("previewLbl");
+previewBox = new QTextEdit(dlg); previewBox->setObjectName("previewBox");
+holdSpin = new QSpinBox(dlg); holdSpin->setObjectName("holdSpin");
     holdSpin->setMinimum(100); holdSpin->setMaximum(200); holdSpin->setValue(120); holdSpin->setSuffix(" ms");
     for (const QString &b : {QStringLiteral("Default browser"), QStringLiteral("Firefox"), QStringLiteral("Chrome"),
                               QStringLiteral("Opera"), QStringLiteral("Edge"), QStringLiteral("Safari")})
@@ -593,7 +799,7 @@ int main(int argc, char **argv)
     dlv->addWidget(appearLbl);
     dlv->addWidget(capFld); dlv->addWidget(foreLbl); dlv->addWidget(forePick); dlv->addWidget(backLbl); dlv->addWidget(backPick);
     dlv->addWidget(fontBtn); dlv->addWidget(fontSz);
-    QLabel *sampleLbl = new QLabel(dlg); sampleLbl->setObjectName("sampleLbl");
+sampleLbl = new QLabel(dlg); sampleLbl->setObjectName("sampleLbl");
     sampleLbl->setText(QStringLiteral("AaBb CcDd ÄÖÜ äöü ß € 0123"));
     dlv->addWidget(previewLbl); dlv->addWidget(holdSpin);
     dlv->addWidget(btfFld); dlv->addWidget(repFld); dlv->addWidget(slwFld);
@@ -608,43 +814,43 @@ int main(int argc, char **argv)
     dlv->addWidget(spinl);
 
     // ---- Restore dialog: timestamped backups (vendor Restore folder list) ----
-    QDialog *rdlg = new QDialog(&win);
+rdlg = new QDialog(&win);
     rdlg->setObjectName("rdlg");
     rdlg->hide();
-    QVBoxLayout *rlv = new QVBoxLayout(rdlg);
-    QLabel *rHdr = new QLabel(rdlg); rHdr->setObjectName("rHdr");
-    QListWidget *rList = new QListWidget(rdlg); rList->setObjectName("rList");
-    static QStringList g_backups;                // names newest-first
-    QPushButton *rPick = new QPushButton(rdlg); rPick->setObjectName("rPick");
+rlv = new QVBoxLayout(rdlg);
+rHdr = new QLabel(rdlg); rHdr->setObjectName("rHdr");
+rList = new QListWidget(rdlg); rList->setObjectName("rList");
+
+rPick = new QPushButton(rdlg); rPick->setObjectName("rPick");
     rlv->addWidget(rHdr); rlv->addWidget(rList); rlv->addWidget(rPick);
 
-    QDialog *knewdlg = new QDialog(&win);
+knewdlg = new QDialog(&win);
     knewdlg->setObjectName("knewdlg");
     knewdlg->hide();
-    QVBoxLayout *knv = new QVBoxLayout(knewdlg);
-    QLabel *knq = new QLabel(knewdlg);
-    QRadioButton *knAlways = new QRadioButton(knewdlg);
-    QRadioButton *knProc = new QRadioButton(knewdlg);
-    QLineEdit *procFld = new QLineEdit(knewdlg);
-    QPushButton *knList = new QPushButton(knewdlg); knList->setObjectName("klist");
-    QPushButton *knNext = new QPushButton(knewdlg); knNext->setObjectName("knext");
+knv = new QVBoxLayout(knewdlg);
+knq = new QLabel(knewdlg);
+knAlways = new QRadioButton(knewdlg);
+knProc = new QRadioButton(knewdlg);
+procFld = new QLineEdit(knewdlg);
+knList = new QPushButton(knewdlg); knList->setObjectName("klist");
+knNext = new QPushButton(knewdlg); knNext->setObjectName("knext");
     knv->addWidget(knq); knv->addWidget(knAlways); knv->addWidget(knProc);
     knv->addWidget(procFld); knv->addWidget(knList); knv->addWidget(knNext);
 
-    QDialog *dproc = new QDialog(&win);
+dproc = new QDialog(&win);
     dproc->setObjectName("dproc");
     dproc->hide();
-    QVBoxLayout *dpv = new QVBoxLayout(dproc);
-    QListWidget *winW = new QListWidget(dproc); winW->setMinimumSize(240, 24);
-    QComboBox *procPick = new QComboBox(dproc);
-    QPushButton *winBtn = new QPushButton(dproc); winBtn->setObjectName("winprobe");
+dpv = new QVBoxLayout(dproc);
+winW = new QListWidget(dproc); winW->setMinimumSize(240, 24);
+procPick = new QComboBox(dproc);
+winBtn = new QPushButton(dproc); winBtn->setObjectName("winprobe");
     dpv->addWidget(winW); dpv->addWidget(procPick); dpv->addWidget(winBtn);
 
-    static QVector<Map> g_snap;                   // snapshot for Cancel
-    static int pk_cur = -1;                      // key of the open dialog
-    static QVector<Layer> g_layers;              // view of the open dialog's layers
-    static QStringList g_deps;                   // parallel: dependency per layer
-    auto dlg_refresh = [&](int pk) {
+
+pk_cur = -1;
+
+
+    dlg_refresh = [&](int pk) {
         int cur = 0;
         for (const Map &mm : pm.maps) if (mm.poskey == pk) cur = mm.layers.size();
         dlgTitle->setText(QStringLiteral("POSKEY %1 - layers (%2):").arg(pk).arg(cur));
@@ -674,7 +880,7 @@ int main(int argc, char **argv)
         dlg->setGeometry(QRect(6, 6, qMin(460, win.width() - 12), qMin(560, win.height() - 12)));
         dlg->show();
     };
-    auto open_dialog = [&](int pk) {
+    open_dialog = [&](int pk) {
         g_pending_pk = pk;
         pk_cur = pk;
         g_snap = pm.maps;
@@ -692,7 +898,7 @@ int main(int argc, char **argv)
     };
     g_openDlg = open_dialog;
 
-    auto f_knnext = [&]() {
+    f_knnext = [&]() {
         const int pk = g_pending_pk;
         if (pk < 0) return;
         Layer nl; nl.value = edit->text();
@@ -704,39 +910,39 @@ int main(int argc, char **argv)
         dlg_refresh(pk);
     };
     knNext->connect(knNext, &QPushButton::clicked, [&]() { f_knnext(); });
-    static QString g_copy;                       // vendor: copy still pending
-    static QString g_newtype;                    // type from the function radio for the next add
-    static int g_row_hint = -1;                  // gate: explicit layer index
-    static int g_cf = 0, g_cb = 0;               // pending color picks (signed rgba, 0 = none)
-    static QString g_swatch_css;                // last applied swatch stylesheet (gate-readable)
-    static bool g_pick_fore = true;
-    auto f_pick_open = [&](bool isFore) {
+
+
+g_row_hint = -1;
+g_cf = 0, g_cb = 0;
+
+g_pick_fore = true;
+    f_pick_open = [&](bool isFore) {
         g_pick_fore = isFore;
         int col = 0; for (const Map &mm : pm.maps) if (mm.poskey == pk_cur) { col = isFore ? mm.fore : mm.back; break; }
         cpick->setCurrentColor(col == -1 ? QColor(0, 0, 0) : QColor::fromRgb(int(quint8(col >> 24)), int(quint8(col >> 16)), int(quint8(col >> 8)), int(quint8(col))));
         cpick->show();
     };
-    auto f_pick_ok = [&]() { const int v = (int)cpick->currentColor().rgba();
+    f_pick_ok = [&]() { const int v = (int)cpick->currentColor().rgba();
         if (g_pick_fore) g_cf = v; else g_cb = v; cpick->hide(); };
-    auto f_font_open = [&]() { QString fam, rest; for (const Map &mm : pm.maps) if (mm.poskey == pk_cur) {
+    f_font_open = [&]() { QString fam, rest; for (const Map &mm : pm.maps) if (mm.poskey == pk_cur) {
             const QStringList parts = mm.fontdesc.split(", ");
             fam = parts.value(0); rest = parts.value(1); break; }
         QFont ini = fam.isEmpty() ? QFont() : QFont(fam);
         qpick->setCurrentFont(ini); qpick->show(); };
-    auto f_font_ok = [&]() { const QFont f = qpick->currentFont();
+    f_font_ok = [&]() { const QFont f = qpick->currentFont();
         const QString desc = QStringLiteral("%1, %2pt").arg(QString(f.family())).arg(fontSz->value());
         for (Map &mm : pm.maps) if (mm.poskey == pk_cur) { mm.fontdesc = desc; break; }
         dlg_refresh(pk_cur); };
     // NOTE: f_appear defined later applies swatch; f_font_ok re-appearance handled there
-    auto f_copy = [&]() { const int i = layerW->currentRow();
+    f_copy = [&]() { const int i = layerW->currentRow();
         if (i >= 0 && i < g_layers.size()) g_copy = g_layers[i].value; };
-    auto f_rename = [&]() { const int i = (g_row_hint >= 0 ? g_row_hint : layerW->currentRow());
+    f_rename = [&]() { const int i = (g_row_hint >= 0 ? g_row_hint : layerW->currentRow());
         if (pk_cur >= 0 && i >= 0) for (Map &mm : pm.maps) if (mm.poskey == pk_cur && i < mm.layers.size()) { mm.layers[i].value = edit->text(); break; }
         dlg_refresh(pk_cur); };
-    auto f_delete = [&]() { const int i = (g_row_hint >= 0 ? g_row_hint : layerW->currentRow());
+    f_delete = [&]() { const int i = (g_row_hint >= 0 ? g_row_hint : layerW->currentRow());
         if (pk_cur >= 0 && i >= 0) for (Map &mm : pm.maps) if (mm.poskey == pk_cur && i < mm.layers.size()) { mm.layers.remove(i); break; }
         dlg_refresh(pk_cur); };
-    auto f_appear = [&]() {
+    f_appear = [&]() {
         for (Map &mm : pm.maps) if (mm.poskey == pk_cur) {
             if (!capFld->text().isEmpty()) mm.print_text = capFld->text();
             if (g_cf) mm.fore = g_cf;
@@ -762,7 +968,7 @@ int main(int argc, char **argv)
           sampleLbl->setStyleSheet(full);
         }
     };
-    auto f_flags = [&]() { const int i = (g_row_hint >= 0 ? g_row_hint : layerW->currentRow());
+    f_flags = [&]() { const int i = (g_row_hint >= 0 ? g_row_hint : layerW->currentRow());
         if (pk_cur >= 0 && i >= 0) for (Map &mm : pm.maps) if (mm.poskey == pk_cur && i < mm.layers.size()) {
             mm.layers[i].btf  = btfFld->isChecked() ? QStringLiteral("true") : QStringLiteral("false");
             mm.layers[i].rep  = repFld->isChecked() ? QStringLiteral("true") : QStringLiteral("false");
@@ -771,7 +977,7 @@ int main(int argc, char **argv)
         }
         dlg_refresh(pk_cur);
     };
-    auto f_fnapply = [&]() { const int i = (g_row_hint >= 0 ? g_row_hint : layerW->currentRow());
+    f_fnapply = [&]() { const int i = (g_row_hint >= 0 ? g_row_hint : layerW->currentRow());
         if (pk_cur < 0 || i < 0) return;
         for (Map &mm : pm.maps) if (mm.poskey == pk_cur && i < mm.layers.size()) {
             Layer &l = mm.layers[i];
@@ -786,7 +992,7 @@ int main(int argc, char **argv)
         }
         dlg_refresh(pk_cur);
     };
-    auto f_applymacro = [&]() { const int i = (g_row_hint >= 0 ? g_row_hint : layerW->currentRow());
+    f_applymacro = [&]() { const int i = (g_row_hint >= 0 ? g_row_hint : layerW->currentRow());
         if (pk_cur < 0 || i < 0) return;
         for (Map &m2 : pm.maps) if (m2.poskey == pk_cur && i < m2.layers.size()) {
             m2.layers[i].value = QLatin1Char('{') + macroPick->currentText() + QLatin1Char('}');
@@ -794,8 +1000,8 @@ int main(int argc, char **argv)
         }
         dlg_refresh(pk_cur);
     };
-        static QStringList g_macro;                  // macro slot tokens (max 16)
-        auto f_addmacro = [&]() { if (g_macro.size() >= 16) return;
+
+        f_addmacro = [&]() { if (g_macro.size() >= 16) return;
             g_macro << macroPick->currentText();
             QString v; for (const QString &t : g_macro) v += QLatin1Char('{') + t + QLatin1Char('}');
             const int i = (g_row_hint >= 0 ? g_row_hint : layerW->currentRow());
@@ -803,7 +1009,7 @@ int main(int argc, char **argv)
             macroSlots->clear(); macroSlots->addItems(g_macro);
             dlg_refresh(pk_cur);
         };
-        auto f_preview = [&]() {
+        f_preview = [&]() {
         for (const Map &m2 : pm.maps) if (m2.poskey == pk_cur) {
             const QString pv1 = pktm::preview_map(m2, spinl->value());
             previewLbl->setText(pv1);
@@ -814,12 +1020,12 @@ int main(int argc, char **argv)
         previewLbl->setText(QStringLiteral("EMPTY (no layer)"));
         previewBox->setPlainText(QStringLiteral("EMPTY (no layer)"));
     };
-        auto f_settype = [&](const QString &t) { g_newtype = t; };
-    auto f_applytype = [&]() { const int i = (g_row_hint >= 0 ? g_row_hint : layerW->currentRow());
+        f_settype = [&](const QString &t) { g_newtype = t; };
+    f_applytype = [&]() { const int i = (g_row_hint >= 0 ? g_row_hint : layerW->currentRow());
         for (Map &mm : pm.maps) if (mm.poskey == pk_cur && i >= 0 && i < mm.layers.size()) { mm.layers[i].type = g_newtype; break; }
         dlg_refresh(pk_cur);
     };
-    auto f_addlayer = [&]() { if (pk_cur < 0) return; Layer nl; nl.value = edit->text(); nl.type = g_newtype.isEmpty() ? QStringLiteral("TEXT") : g_newtype;
+    f_addlayer = [&]() { if (pk_cur < 0) return; Layer nl; nl.value = edit->text(); nl.type = g_newtype.isEmpty() ? QStringLiteral("TEXT") : g_newtype;
         for (Map &mm : pm.maps) if (mm.poskey == pk_cur) { mm.layers << nl; break; }
         dlg_refresh(pk_cur); };
     addbtn->connect(addbtn, &QToolButton::clicked, [&]() { f_addlayer(); });
@@ -830,12 +1036,12 @@ int main(int argc, char **argv)
     fnText->connect(fnText, &QRadioButton::clicked, [&]() { f_settype(QStringLiteral("TEXT")); });
     fnApp->connect(fnApp, &QRadioButton::clicked, [&]() { f_settype(QStringLiteral("APPLICATION")); });
     fnWeb->connect(fnWeb, &QRadioButton::clicked, [&]() { f_settype(QStringLiteral("WEBSITE")); });
-    auto f_app_appear = [&]() { f_appear(); };
-    auto f_delkey = [&]() { for (int i = pm.maps.size() - 1; i >= 0; --i) if (pm.maps[i].poskey == pk_cur) pm.maps.remove(i);
+    f_app_appear = [&]() { f_appear(); };
+    f_delkey = [&]() { for (int i = pm.maps.size() - 1; i >= 0; --i) if (pm.maps[i].poskey == pk_cur) pm.maps.remove(i);
         dlg->hide(); };
-    auto f_cancel = [&]() { pm.maps = g_snap; dlg_refresh(pk_cur); };
-    static QString g_last_backup;                     // bytes of the ORIGINAL copied before save
-    auto f_backup = [&]() {
+    f_cancel = [&]() { pm.maps = g_snap; dlg_refresh(pk_cur); };
+
+    f_backup = [&]() {
         g_last_backup.clear();
         QFile rf(path);
         if (!rf.open(QIODevice::ReadOnly)) return;    // new file: nothing to back up
@@ -855,7 +1061,7 @@ int main(int argc, char **argv)
         while (names.size() > 30)
             QFile::remove(undoDir + QLatin1Char('/') + QString::fromStdString(names.front()));
     };
-    auto f_save = [&]() {
+    f_save = [&]() {
         f_backup();
         QFile rf(path);
         if (!rf.open(QIODevice::ReadOnly)) {   // new/unreadable target: serialize + atomic
@@ -895,7 +1101,7 @@ int main(int argc, char **argv)
         const QString werr = write_atomic(path, serialize_pmap(pm).toUtf8());
         if (!werr.isEmpty()) std::printf("dlg FAIL: save %s: %s\n", path.toUtf8().constData(), werr.toUtf8().constData());
     };
-    auto f_undo = [&]() {
+    f_undo = [&]() {
         if (!g_undos.isEmpty()) {
             const UndoSnap last = g_undos.back();
             g_undos.removeLast();
@@ -919,7 +1125,7 @@ int main(int argc, char **argv)
         QFile::remove(latest);   // a second undo goes to the PREVIOUS backup
         pm = parse_pmap(QString::fromLatin1(content));
     };
-    auto f_daemon = [&]() {
+    f_daemon = [&]() {
         QString err;
         const int fd = pktipc::try_connect_nb(err);
         if (fd < 0) { pathlbl->setText(path + QStringLiteral(" — daemon: off")); return; }
@@ -957,8 +1163,8 @@ int main(int argc, char **argv)
                                     : path + QStringLiteral(" — daemon: connected")) + dtxt);
     };
     f_daemon();
-    auto f_app_applytype = [&]() { f_applytype(); };
-    auto f_refresh_backups = [&]() {
+    f_app_applytype = [&]() { f_applytype(); };
+    f_refresh_backups = [&]() {
         rList->clear();
         std::error_code ec;
         std::vector<std::string> names;
@@ -969,7 +1175,7 @@ int main(int argc, char **argv)
         for (const auto &n : names) { g_backups << QString::fromStdString(n); rList->addItem(QString::fromStdString(n)); }
         rHdr->setText(QStringLiteral("Restore (%1):").arg(rList->count()));
     };
-    auto f_restore = [&]() {
+    f_restore = [&]() {
         const int i = rList->currentRow();
         if (i < 0 || i >= g_backups.size()) return;
         const QString latest = g_backups[i];
@@ -982,13 +1188,13 @@ int main(int argc, char **argv)
         pm = parse_pmap(QString::fromUtf8(content));
     };
     rPick->connect(rPick, &QPushButton::clicked, [&]() { f_restore(); });
-    auto f_openrestore = [&]() {
+    f_openrestore = [&]() {
         f_refresh_backups();
         rdlg->setGeometry(QRect(6, 6, qMin(420, win.width() - 12), 300));
         rdlg->show();
     };
-    auto f_close_restore = [&]() { rdlg->hide(); };
-    auto load_recent = [&]() {
+    f_close_restore = [&]() { rdlg->hide(); };
+    load_recent = [&]() {
         QFile rf(recentFile);
         if (rf.open(QIODevice::ReadOnly | QIODevice::Text)) {
             g_recent.clear();
@@ -996,19 +1202,19 @@ int main(int argc, char **argv)
             rf.close();
         }
     };
-    auto save_recent = [&]() {
+    save_recent = [&]() {
         QFile rf(recentFile);
         if (!rf.open(QIODevice::WriteOnly | QIODevice::Text)) return;
         for (int i = 0; i < g_recent.size() && i < 8; ++i) rf.write((g_recent[i] + "\n").toUtf8());
         rf.close();
     };
-    auto push_recent = [&](const QString &p) {
+    push_recent = [&](const QString &p) {
         g_recent.removeAll(p);
         g_recent.prepend(p);
         save_recent();
     };
-    auto f_newfile = [&]() { pm = Pmap(); g_geom.clear(); g_snap.clear(); g_labels.clear(); grid->relayout(); };
-    auto do_open_file = [&](const QString &p) {
+    f_newfile = [&]() { pm = Pmap(); g_geom.clear(); g_snap.clear(); g_labels.clear(); grid->relayout(); };
+    do_open_file = [&](const QString &p) {
         QFile of(p);
         if (!of.open(QIODevice::ReadOnly)) return;
         pm = parse_pmap(of.readAll()); of.close();
@@ -1017,8 +1223,8 @@ int main(int argc, char **argv)
         pathlbl->setText(path);
         grid->relayout();
     };
-    auto f_undo2 = [&]() { f_undo(); };
-    auto mk_item = [&](QMenu *mnu, const QString &txt, const std::function<void()> &fn) {
+    f_undo2 = [&]() { f_undo(); };
+    mk_item = [&](QMenu *mnu, const QString &txt, const std::function<void()> &fn) {
         QAction *a = new QAction(txt, mnu);
         a->setObjectName(QStringLiteral("menu:") + txt);
         mnu->addAction(a);
@@ -1027,13 +1233,13 @@ int main(int argc, char **argv)
     load_recent();
     if (!path.isEmpty()) push_recent(path);
     if (st.openlast && path.isEmpty() && !g_recent.isEmpty()) do_open_file(g_recent.first());  // settings have effect
-    auto f_openfile = [&]() { if (!g_recent.isEmpty()) do_open_file(g_recent.first()); };
-    auto f_closefile = [&]() { g_snap.clear(); g_recent.removeAll(path); if (path.isEmpty()) win.close(); };
-        auto f_swap = [&]() {
+    f_openfile = [&]() { if (!g_recent.isEmpty()) do_open_file(g_recent.first()); };
+    f_closefile = [&]() { g_snap.clear(); g_recent.removeAll(path); if (path.isEmpty()) win.close(); };
+        f_swap = [&]() {
         for (Map &m2 : pm.maps) { const int f0 = m2.fore; m2.fore = m2.back; m2.back = f0; }
         grid->relayout();
     };
-    auto f_push_reload = [&]() -> bool {
+    f_push_reload = [&]() -> bool {
         QString err;
         const int fd = pktipc::try_connect_nb(err);
         if (fd < 0) return false;                 // no daemon: silent, file is truth
@@ -1041,12 +1247,14 @@ int main(int argc, char **argv)
         ::close(fd);
         return ok;
     };
-    auto f_inject_send = [&](int ms) {
+    f_inject_send = [&](int ms) {
         QString err; const int fd = pktipc::try_connect_nb(err);
         if (fd < 0) return;
         pktipc::send_line(fd, pktipc::mk_inject(pk_cur >= 0 ? pk_cur : 1, QStringLiteral("click"), QStringLiteral("K1"), ms), err);
         ::close(fd);
     };
+    }
+    void build_menus() {
     if (fmenus[0]) {
         mk_item(fmenus[0], QStringLiteral("Restore"), [&]{ f_openrestore(); });
         mk_item(fmenus[0], QStringLiteral("Open template"), [&]{ if (!g_template.isEmpty()) do_open_file(g_template); });
@@ -1062,7 +1270,7 @@ int main(int argc, char **argv)
             mk_item(fmenus[0], disp, [&]{ do_open_file(actual); });
         }
     }
-    auto f_export = [&]() {
+    f_export = [&]() {
         QVector<std::pair<int, QString>> rows, rt;
         for (const CellRC &c : grid->cells) {
             const Map *mm = nullptr;
@@ -1102,12 +1310,12 @@ int main(int argc, char **argv)
     g_ribundo->connect(g_ribundo, &QToolButton::clicked, [&]() { f_undo2(); });
     g_ribrecent->connect(g_ribrecent, &QToolButton::clicked, [&]{ if (!g_recent.isEmpty()) do_open_file(g_recent.first()); });
     g_ribclose->connect(g_ribclose, &QToolButton::clicked, [&]{ f_closefile(); });
-    g_ribexit->connect(g_ribexit, &QToolButton::clicked, [&]{ f_closefile(); app.exit(0); });
+    g_ribexit->connect(g_ribexit, &QToolButton::clicked, [&]{ f_closefile(); app->exit(0); });
     delKeyBtn->connect(delKeyBtn, &QPushButton::clicked, [&]() { f_delkey(); });
     cancelBtn->connect(cancelBtn, &QPushButton::clicked, [&]() { f_cancel(); });
     saveBtn->connect(saveBtn, &QPushButton::clicked, [&]() { f_save(); });
 
-    auto f_settings = [&]() {
+    f_settings = [&]() {
         st.datefmt = dateCombo->currentText();
         st.lang = langEn->isChecked() ? 0 : 1;
         dateLbl->setText(QStringLiteral("Date format: %1").arg(st.datefmt));
@@ -1138,7 +1346,7 @@ int main(int argc, char **argv)
                     .arg(pathlbl->text().contains("daemon: connected") ? QStringLiteral("connected") : QStringLiteral("off")));
         });
     }
-    auto find_action = [&fmenus](int tab, const QString &obj) -> QAction * {
+    find_action = [this](int tab, const QString &obj) -> QAction * {
         if (!fmenus[tab]) return nullptr;
         for (QObject *ch : fmenus[tab]->children()) {
             QAction *aa = qobject_cast<QAction *>(ch);
@@ -1151,14 +1359,13 @@ int main(int argc, char **argv)
       {"pdf",&g_ribpdf,1,"menu:Export labels (PDF)"},{"copy",&g_ribcopy,1,"menu:Copy"},
       {"paste",&g_ribpaste,1,"menu:Paste"},{"del",&g_ribdels,1,"menu:Delete"},
       {"about",&g_ribabout,4,"menu:About"} };
-    int paired = 0;
     for (const PR &pr : prs) {
         QAction *aa = find_action(pr.tab, QString::fromLatin1(pr.act));
         if (aa && *pr.tb) { (*pr.tb)->setDefaultAction(aa); ++paired; }
         else std::printf("pair MISS %s (%s)\n", pr.nm, pr.act);
     }
 
-    auto f_winprobe = [&]() {
+    f_winprobe = [&]() {
         winW->clear();
         for (const auto &wp : pktm::list_windows(20))
             winW->addItem(QStringLiteral("%1 - pid %2").arg(wp.first).arg(wp.second));
@@ -1170,14 +1377,15 @@ int main(int argc, char **argv)
     knList->connect(knList, &QPushButton::clicked, [&]() { f_winprobe(); });
     winBtn->connect(winBtn, &QPushButton::clicked, [&]() { f_winprobe(); });
 
-    auto setmin = [&]() {
+    setmin = [&]() {
         grid->setMinimumHeight(qMax(300, int(win.height() * 0.62)));
         grid->relayout();
     };
     setmin();
     win.show();
 
-    int gfail = 0;
+    }
+    int run() {
     if (hard) {
         QSet<QString> expect = {"menu", "accent", "ribbon", "mainrow", "statusbar"};
         QSet<QString> seen;
@@ -1548,6 +1756,19 @@ int main(int argc, char **argv)
         std::printf("openlast ok: %s\n", path.toUtf8().constData());
         return 0;
     }
-    if (!shot && !hard && !dlgategate) return app.exec();   // real run: event loop
+    if (!shot && !hard && !dlgategate) return app->exec();   // real run: event loop
     return gfail ? 1 : 0;
+    }
+};
+
+int main(int argc, char **argv)
+{
+    QApplication app(argc, argv);
+    for (int i = 1; i < argc; ++i)
+        if (QString(argv[i]) == "--legacy-gui") {
+            std::printf("legacy GUI deleted; the clean shell IS the app\n");
+            return 0;
+        }
+    GuiApp gui(argc, argv);
+    return gui.run();
 }
