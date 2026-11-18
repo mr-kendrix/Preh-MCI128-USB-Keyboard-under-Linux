@@ -8,6 +8,13 @@
 #include <QChar>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDateTime>
+#include <filesystem>
+#include <QDir>
+#include <algorithm>
+#include <vector>
+#include <ctime>
+#include <chrono>
 #include <QFile>
 #include <QHash>
 #include <QIcon>
@@ -295,7 +302,10 @@ int main(int argc, char **argv)
     sidebar->setObjectName("sidebar");
     sidebar->setStyleSheet("#sidebar{background-color:#3c3c3c;} QLabel{color:#e8e8e8;}");
     sidebar->setMaximumWidth(260);
+    static QString undoDir;                      // undo/<timestamp>.pmap copies
+    static int g_undo_seq = 0;                   // same-second saves stay distinct
     g_pm = &pm;
+    undoDir = QDir(QDir::homePath()).filePath(QStringLiteral(".local/share/pkteditor/undo"));
     QVBoxLayout *sv = new QVBoxLayout(sidebar);
     QLabel *logo = new QLabel(sidebar);
     logo->setObjectName("logo");
@@ -391,6 +401,7 @@ int main(int argc, char **argv)
     QPushButton *delKeyBtn = new QPushButton(dlg); delKeyBtn->setObjectName("delKeyBtn");
     QPushButton *cancelBtn = new QPushButton(dlg); cancelBtn->setObjectName("cancelBtn");
     QPushButton *saveBtn  = new QPushButton(dlg); saveBtn->setObjectName("saveBtn");
+    QPushButton *undoBtn  = new QPushButton(dlg); undoBtn->setObjectName("undoBtn");
     QSpinBox *spinl = new QSpinBox(dlg); spinl->setObjectName("spinl");
     // vendor §5 right column: Appearance (Key/Caption color, caption, font) + Function radios
     QLineEdit *capFld = new QLineEdit(dlg); capFld->setObjectName("capFld");
@@ -406,7 +417,7 @@ int main(int argc, char **argv)
     dlv->addWidget(appearLbl);
     dlv->addWidget(capFld); dlv->addWidget(forePick); dlv->addWidget(backPick);
     dlv->addWidget(fnNone); dlv->addWidget(fnText); dlv->addWidget(fnApp); dlv->addWidget(fnWeb);
-    dlv->addWidget(delKeyBtn); dlv->addWidget(cancelBtn); dlv->addWidget(saveBtn);
+    dlv->addWidget(delKeyBtn); dlv->addWidget(cancelBtn); dlv->addWidget(saveBtn); dlv->addWidget(undoBtn);
     dlv->addWidget(spinl);
 
     QWidget *knewdlg = new QWidget(&win);
@@ -536,13 +547,44 @@ int main(int argc, char **argv)
     auto f_delkey = [&]() { for (int i = pm.maps.size() - 1; i >= 0; --i) if (pm.maps[i].poskey == pk_cur) pm.maps.remove(i);
         dlg->hide(); };
     auto f_cancel = [&]() { pm.maps = g_snap; dlg_refresh(pk_cur); };
+    auto f_backup = [&]() {
+        QFile rf(path);
+        if (!rf.open(QIODevice::ReadOnly)) return;
+        const QByteArray pre = rf.readAll(); rf.close();
+        std::error_code ec;
+        std::filesystem::create_directories(std::filesystem::path(undoDir.toStdString()), ec);
+        const long secs = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        const QString stamp = QStringLiteral("undo-") + QString::number(secs) + '-' + QString::number(++g_undo_seq);
+        QFile wf(undoDir + QLatin1Char('/') + stamp + QStringLiteral(".pmap"));
+        if (wf.open(QIODevice::WriteOnly)) { wf.write(pre); wf.close(); }
+    };
     auto f_save = [&]() {
+        f_backup();
         const QString txt = serialize_pmap(pm);
         QFile f(path);
         if (f.open(QIODevice::WriteOnly)) { f.write(txt.toUtf8()); f.close(); }
         else { std::printf("dlg FAIL: save open %s\n", path.toUtf8().constData()); }
     };
+    auto f_undo = [&]() {
+        std::error_code ec;
+        std::vector<std::string> names;
+        for (const auto &e : std::filesystem::directory_iterator(std::filesystem::path(undoDir.toStdString()), ec))
+            if (e.path().filename().string().size() > 4) names.push_back(e.path().filename().string());
+        if (names.empty()) { std::printf("undo empty\n"); return; }
+        std::sort(names.begin(), names.end());
+        const QString latest = undoDir + QLatin1Char('/') + QString::fromStdString(names.back());
+        QFile rf(latest);
+        if (!rf.open(QIODevice::ReadOnly)) { std::printf("undo read fail\n"); return; }
+        const QByteArray content = rf.readAll(); rf.close();
+        QFile wf(path);
+        if (!wf.open(QIODevice::WriteOnly)) { std::printf("undo write fail\n"); return; }
+        wf.write(content); wf.close();
+        pm = parse_pmap(QString::fromUtf8(content));
+    };
     auto f_app_applytype = [&]() { f_applytype(); };
+    auto f_undo2 = [&]() { f_undo(); };
+    undoBtn->connect(undoBtn, &QPushButton::clicked, [&]() { f_undo2(); });
     delKeyBtn->connect(delKeyBtn, &QPushButton::clicked, [&]() { f_delkey(); });
     cancelBtn->connect(cancelBtn, &QPushButton::clicked, [&]() { f_cancel(); });
     saveBtn->connect(saveBtn, &QPushButton::clicked, [&]() { f_save(); });
@@ -696,6 +738,23 @@ int main(int argc, char **argv)
                   if (!vf.open(QIODevice::ReadOnly)) { std::printf("clicktest FAIL: saved file unreadable\n"); ++gfail; }
                   else { const Pmap bk = parse_pmap(vf.readAll()); vf.close();
                          if (bk.maps.size() != pm.maps.size()) { std::printf("clicktest FAIL: save roundtrip count differs\n"); ++gfail; } }
+                }
+                // vendor Undo: second save then restore newest backup
+                {
+                    edit->setText(QStringLiteral("UNDO-MARK"));
+                    f_save();                       // copies pre-save content to undo dir
+                    std::error_code ec;
+                    int nBak = 0; QString latest;
+                    for (const auto &ent : std::filesystem::directory_iterator(std::filesystem::path(undoDir.toStdString()), ec))
+                        if (ent.path().filename().extension() == ".pmap") { ++nBak; if (latest < QString::fromUtf8(ent.path().filename().string())) latest = QString::fromUtf8(ent.path().filename().string()); }
+                    if (nBak < 2) { std::printf("clicktest FAIL: undo backups %d < 2\n", nBak); ++gfail; }
+                    const QByteArray want = [&]{ QFile f(undoDir + QStringLiteral("/") + latest);
+                        if (f.open(QIODevice::ReadOnly)) { QByteArray b = f.readAll(); f.close(); return b; } return QByteArray(); }();
+                    f_undo();
+                    QFile vf2(path);
+                    if (!vf2.open(QIODevice::ReadOnly)) { std::printf("clicktest FAIL: undo file unreadable\n"); ++gfail; }
+                    else { const QByteArray now = vf2.readAll(); vf2.close();
+                           if (now != want) { std::printf("clicktest FAIL: undo content mismatch\n"); ++gfail; } }
                 }
                 }
             }
