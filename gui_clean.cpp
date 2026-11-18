@@ -417,10 +417,19 @@ int main(int argc, char **argv)
     QRadioButton *fnApp  = new QRadioButton(QStringLiteral("Application"), dlg); fnApp->setObjectName("fnApp");
     QRadioButton *fnWeb  = new QRadioButton(QStringLiteral("Web"), dlg); fnWeb->setObjectName("fnWeb");
     QLabel *appearLbl = new QLabel(dlg); appearLbl->setObjectName("appearLbl");
+    // vendor 6.10 Application dialog fields + 6.12 Web fields (inline in dlg)
+    QLineEdit *appPath = new QLineEdit(dlg); appPath->setObjectName("appPath");
+    QLineEdit *appPars = new QLineEdit(dlg); appPars->setObjectName("appPars");
+    QLineEdit *appShort = new QLineEdit(dlg); appShort->setObjectName("appShort");
+    QLineEdit *webLink = new QLineEdit(dlg); webLink->setObjectName("webLink");
+    QSpinBox *webTo = new QSpinBox(dlg); webTo->setObjectName("webTo"); webTo->setMinimum(1); webTo->setMaximum(120);
+    QLineEdit *webPars = new QLineEdit(dlg); webPars->setObjectName("webPars");
     dlv->addWidget(appearLbl);
     dlv->addWidget(capFld); dlv->addWidget(forePick); dlv->addWidget(backPick);
     dlv->addWidget(btfFld); dlv->addWidget(repFld); dlv->addWidget(slwFld);
     dlv->addWidget(fnNone); dlv->addWidget(fnText); dlv->addWidget(fnApp); dlv->addWidget(fnWeb);
+    dlv->addWidget(appPath); dlv->addWidget(appPars); dlv->addWidget(appShort);
+    dlv->addWidget(webLink); dlv->addWidget(webTo); dlv->addWidget(webPars);
     dlv->addWidget(delKeyBtn); dlv->addWidget(cancelBtn); dlv->addWidget(saveBtn); dlv->addWidget(undoBtn);
     dlv->addWidget(spinl);
 
@@ -536,6 +545,21 @@ int main(int argc, char **argv)
             mm.layers[i].btf  = btfFld->isChecked() ? QStringLiteral("true") : QStringLiteral("false");
             mm.layers[i].rep  = repFld->isChecked() ? QStringLiteral("true") : QStringLiteral("false");
             mm.layers[i].slow = slwFld->isChecked() ? QStringLiteral("true") : QStringLiteral("false");
+            break;
+        }
+        dlg_refresh(pk_cur);
+    };
+    auto f_fnapply = [&]() { const int i = (g_row_hint >= 0 ? g_row_hint : layerW->currentRow());
+        if (pk_cur < 0 || i < 0) return;
+        for (Map &mm : pm.maps) if (mm.poskey == pk_cur && i < mm.layers.size()) {
+            Layer &l = mm.layers[i];
+            if (l.type == QStringLiteral("APPLICATION") && !appPath->text().isEmpty()) {
+                QString v = appPath->text();
+                if (!appPars->text().isEmpty()) v += QStringLiteral("::") + appPars->text();
+                l.value = v;
+            } else if (l.type == QStringLiteral("WEBSITE") && !webLink->text().isEmpty()) {
+                l.value = webLink->text();
+            }
             break;
         }
         dlg_refresh(pk_cur);
@@ -771,6 +795,23 @@ int main(int argc, char **argv)
                     btfFld->setChecked(false);
                     g_row_hint = fi;
                     f_flags();
+                    {
+                      const int fi2 = fi;
+                      webLink->setText(QStringLiteral("https://undo.test"));
+                      appPath->setText(QStringLiteral("/usr/bin/soffice"));
+                      f_fnapply();
+                      const QString want = QStringLiteral("https://undo.test");
+                      bool valOk = false;
+                      for (const Map &mm : pm.maps) if (mm.poskey == pk && fi2 < mm.layers.size())
+                          valOk = (mm.layers[fi2].value == want);
+                      if (!valOk) { std::printf("clicktest FAIL: web link not applied\n"); ++gfail; }
+                      f_save();
+                      QFile vf3(path);
+                      bool linkIn = false;
+                      if (vf3.open(QIODevice::ReadOnly)) { const QString all = vf3.readAll(); vf3.close();
+                          linkIn = all.contains(to_hex_cp1252(want)); }
+                      if (!linkIn) { std::printf("clicktest FAIL: link not serialized\n"); ++gfail; }
+                    }
                     { bool ok = false;
                       for (const Map &mm : pm.maps) if (mm.poskey == pk && fi < mm.layers.size()) { ok = (mm.layers[fi].btf == QStringLiteral("false")); break; }
                       if (!ok) { std::printf("clicktest FAIL: btf clear not applied\n"); ++gfail; } }
