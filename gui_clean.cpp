@@ -573,6 +573,8 @@ int main(int argc, char **argv)
     dlv->addWidget(appearLbl);
     dlv->addWidget(capFld); dlv->addWidget(foreLbl); dlv->addWidget(forePick); dlv->addWidget(backLbl); dlv->addWidget(backPick);
     dlv->addWidget(fontBtn); dlv->addWidget(fontSz);
+    QLabel *sampleLbl = new QLabel(dlg); sampleLbl->setObjectName("sampleLbl");
+    sampleLbl->setText(QStringLiteral("AaBb CcDd ÄÖÜ äöü ß € 0123"));
     dlv->addWidget(previewLbl); dlv->addWidget(holdSpin);
     dlv->addWidget(btfFld); dlv->addWidget(repFld); dlv->addWidget(slwFld);
     dlv->addWidget(fnNone); dlv->addWidget(fnText); dlv->addWidget(fnApp); dlv->addWidget(fnWeb);
@@ -581,6 +583,7 @@ int main(int argc, char **argv)
     dlv->addWidget(macroPick);
     dlv->addWidget(macroSlots);
     dlv->addWidget(previewBox);
+    dlv->addWidget(sampleLbl);
     dlv->addWidget(delKeyBtn); dlv->addWidget(cancelBtn); dlv->addWidget(saveBtn); dlv->addWidget(undoBtn);
     dlv->addWidget(spinl);
 
@@ -685,6 +688,7 @@ int main(int argc, char **argv)
     static QString g_newtype;                    // type from the function radio for the next add
     static int g_row_hint = -1;                  // gate: explicit layer index
     static int g_cf = 0, g_cb = 0;               // pending color picks (signed rgba, 0 = none)
+    static QString g_swatch_css;                // last applied swatch stylesheet (gate-readable)
     static bool g_pick_fore = true;
     auto f_pick_open = [&](bool isFore) {
         g_pick_fore = isFore;
@@ -703,6 +707,7 @@ int main(int argc, char **argv)
         const QString desc = QStringLiteral("%1, %2pt").arg(QString(f.family())).arg(fontSz->value());
         for (Map &mm : pm.maps) if (mm.poskey == pk_cur) { mm.fontdesc = desc; break; }
         dlg_refresh(pk_cur); };
+    // NOTE: f_appear defined later applies swatch; f_font_ok re-appearance handled there
     auto f_copy = [&]() { const int i = layerW->currentRow();
         if (i >= 0 && i < g_layers.size()) g_copy = g_layers[i].value; };
     auto f_rename = [&]() { const int i = (g_row_hint >= 0 ? g_row_hint : layerW->currentRow());
@@ -719,6 +724,23 @@ int main(int argc, char **argv)
             break;
         }
         dlg_refresh(pk_cur);
+        { QString fam; int pt = 0; int fg = -1, bg = -1;
+          for (const Map &mm : pm.maps) if (mm.poskey == pk_cur) {
+              const int comma = mm.fontdesc.indexOf(QStringLiteral(", "));
+              if (comma > 0) { fam = mm.fontdesc.left(comma);
+                  QString sz = mm.fontdesc.mid(comma + 2);
+                  pt = sz.remove(QStringLiteral("pt")).trimmed().toInt(); }
+              fg = mm.fore; bg = mm.back; break; }
+          QString css;
+          if (!fam.isEmpty() && pt > 0) css = QStringLiteral("font-family: \"%1\"; font-size: %2px;").arg(fam).arg(pt);
+          if (fg != -1) { const QColor c = QColor::fromRgb((fg >> 24) & 0xff, (fg >> 16) & 0xff, (fg >> 8) & 0xff);
+              css += QStringLiteral(" color: %1;").arg(c.name()); }
+          if (bg != -1) { const QColor c = QColor::fromRgb((bg >> 24) & 0xff, (bg >> 16) & 0xff, (bg >> 8) & 0xff);
+              css += QStringLiteral(" background-color: %1;").arg(c.name()); }
+          const QString full = css.isEmpty() ? QString() : QStringLiteral("QLabel#sampleLbl{") + css + "}";
+          g_swatch_css = full;
+          sampleLbl->setStyleSheet(full);
+        }
     };
     auto f_flags = [&]() { const int i = (g_row_hint >= 0 ? g_row_hint : layerW->currentRow());
         if (pk_cur >= 0 && i >= 0) for (Map &mm : pm.maps) if (mm.poskey == pk_cur && i < mm.layers.size()) {
@@ -1001,7 +1023,7 @@ int main(int argc, char **argv)
     forePick->connect(forePick, &QToolButton::clicked, [&]{ f_pick_open(true); });
     backPick->connect(backPick, &QToolButton::clicked, [&]{ f_pick_open(false); });
     fontBtn->connect(fontBtn, &QToolButton::clicked, [&]{ f_font_open(); });
-    qpick->connect(qpick, &QFontDialog::currentFontChanged, [&]{ f_font_ok(); });
+    qpick->connect(qpick, &QFontDialog::currentFontChanged, [&]{ f_font_ok(); f_appear(); });
     QObject::connect(cpick, &QColorDialog::colorSelected, [&]{ f_pick_ok(); f_appear(); });
     g_ribnew->connect(g_ribnew, &QToolButton::clicked, [&]{ f_newfile(); });
     g_ribundo->connect(g_ribundo, &QToolButton::clicked, [&]() { f_undo2(); });
@@ -1170,6 +1192,8 @@ int main(int argc, char **argv)
                     { bool fontOk = false;
                       for (const Map &mm : pm.maps) if (mm.poskey == pk) { fontOk = mm.fontdesc.contains(QStringLiteral(", 10pt")); break; }
                       if (!fontOk) { std::printf("clicktest FAIL: font not applied\n"); ++gfail; } }
+                    { const QString &sty = g_swatch_css;
+                      if (!sty.contains("font-family:") || !sty.contains("background-color:")) { std::printf("clicktest FAIL: swatch not updated\n"); ++gfail; } }
                 // function radio WEBSITE -> next add gets type WEBSITE
                 f_settype(QStringLiteral("WEBSITE"));
                 g_row_hint = -1; layerW->clear(); // row hint reset
