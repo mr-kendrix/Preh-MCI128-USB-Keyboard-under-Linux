@@ -33,6 +33,7 @@ int main() {
                 pktipc::Msg m;
                 QString why;
                 std::printf("fakekd recv: %s\n", line.toUtf8().constData());
+                std::fflush(stdout);
                 if (!pktipc::parse_line(line, m, why)) { pktipc::send_line(p, pktipc::mk_error("ipc", why), e2); continue; }
                 if (m.t == QLatin1String("reload")) {
                     pktipc::send_line(p, pktipc::mk_reload(QStringLiteral("/fakekd/p.pmap"), 3), e2);

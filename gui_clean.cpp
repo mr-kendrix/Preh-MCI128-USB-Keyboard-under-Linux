@@ -943,6 +943,12 @@ int main(int argc, char **argv)
     if (fmenus[1]) {
         mk_item(fmenus[1], QStringLiteral("Undo"), [&]{ f_undo2(); });
         mk_item(fmenus[1], QStringLiteral("Swap"), [&]{ f_swap(); });
+        mk_item(fmenus[1], QStringLiteral("Inject key"), [&]{
+            QString err; const int fd = pktipc::try_connect_nb(err);
+            if (fd < 0) return;
+            pktipc::send_line(fd, pktipc::mk_inject(pk_cur >= 0 ? pk_cur : 1, QStringLiteral("click"), QStringLiteral("K1"), 0), err);
+            ::close(fd);
+        });
         mk_item(fmenus[1], QStringLiteral("Reconnect"), [&]() { f_daemon(); });
         mk_item(fmenus[1], QStringLiteral("Export labels (PDF)"), [&]() { f_export(); });
     }
@@ -1263,6 +1269,16 @@ int main(int argc, char **argv)
               f_daemon();
               if (!pathlbl->text().contains("3 rules")) { std::printf("clicktest FAIL: reconnect failed\n"); ++gfail; }
               if (!f_push_reload()) { std::printf("clicktest FAIL: reload not delivered\n"); ++gfail; }
+              std::system("(b2/fakekd >> /tmp/fkd2.log 2>&1 &) ; sleep 0.5");   // fresh daemon: old one idle-exits after 3 s
+              f_daemon();
+              { QString err; const int fd = pktipc::try_connect_nb(err);
+                if (fd < 0) { std::printf("clicktest FAIL: no daemon for inject\n"); ++gfail; }
+                else { pktipc::send_line(fd, pktipc::mk_inject(1, QStringLiteral("click"), QStringLiteral("K1"), 0), err); ::close(fd); } }
+              std::system("sleep 0.3; grep -c inject /tmp/fkd2.log >/dev/null 2>&1 && echo OK >/dev/null");
+              { bool got = false;
+                QFile lf(QStringLiteral("/tmp/fkd2.log"));
+                if (lf.open(QIODevice::ReadOnly)) { got = lf.readAll().contains("inject"); lf.close(); }
+                if (!got) { std::printf("clicktest FAIL: inject not received\n"); ++gfail; } }
               std::system("pkill -x fakekd >/dev/null 2>&1");
               g_up->run_now();
               if (g_up->status_text().isEmpty()) { std::printf("clicktest FAIL: upload status empty\n"); ++gfail; }
