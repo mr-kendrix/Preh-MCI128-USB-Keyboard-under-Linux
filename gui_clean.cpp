@@ -320,8 +320,9 @@ int main(int argc, char **argv)
     add_rib(2, "rib_pdf", "doc");
     add_rib(2, "rib_templ", "pencil");
     add_rib(2, "rib_restore", "list");
-    add_rib(3, "rib_modadd", "plus");
-    add_rib(3, "rib_moddel", "trash");
+    static QToolButton *g_ribmodadd = nullptr, *g_ribmoddel = nullptr;
+    g_ribmodadd = add_rib(3, "rib_modadd", "plus");
+    g_ribmoddel = add_rib(3, "rib_moddel", "trash");
     add_rib(4, "rib_settings", "gear");
     add_rib(5, "rib_about", "doc");
     { const char *tic[5] = { "doc", "copy", "plus", "gear", "doc" };
@@ -437,6 +438,7 @@ int main(int argc, char **argv)
 
     // ---- Settings tab content (vendor §2): 4 checkboxes + date format + language ----
     struct St { bool autodetect = true, startauto = true, minauto = true, openlast = true;
+        QStringList modules;                   // hardware modules present (MSR/Barcode/OCR)
                 QString datefmt = QStringLiteral("DD.MM.YYYY"); int lang = 1; } st;
     QDialog *setdlg = new QDialog(&win);
     setdlg->setObjectName("setdlg");
@@ -467,6 +469,7 @@ int main(int argc, char **argv)
                   "minauto=" + QString::number(st.minauto ? 1 : 0) + "\n"
                   "openlast=" + QString::number(st.openlast ? 1 : 0) + "\n"
                   "datefmt=" + st.datefmt + "\n"
+                  "modules=" + st.modules.join(QLatin1Char('+')) + "\n"
                   "lang=" + QString::number(st.lang) + "\n").toUtf8());
         sf.close();
     };
@@ -486,6 +489,7 @@ int main(int argc, char **argv)
             else if (k == "datefmt") st.datefmt = v;
             else if (k == "lang") st.lang = v.toInt();
             else if (k == "template") g_template = v;
+            else if (k == "modules") { st.modules.clear(); for (const QString &mo : v.split(QLatin1Char('+'))) if (!mo.isEmpty()) st.modules << mo; }
         }
         sf.close();
     };
@@ -994,6 +998,12 @@ int main(int argc, char **argv)
         mk_item(fmenus[3], QStringLiteral("Settings …"), [&]{ f_settings(); });
         mk_item(fmenus[3], QStringLiteral("Upload"), [&]{ if (g_up) { g_up->run_now(); uplbl->setText(g_up->status_text()); } });
     }
+    if (fmenus[2]) {
+        mk_item(fmenus[2], QStringLiteral("Add module (MSR)"), [&]{ if (!st.modules.contains("MSR")) st.modules << QStringLiteral("MSR"); save_set(); });
+        mk_item(fmenus[2], QStringLiteral("Remove module (MSR)"), [&]{ st.modules.removeAll(QStringLiteral("MSR")); save_set(); });
+    }
+    g_ribmodadd->connect(g_ribmodadd, &QToolButton::clicked, [&]{ if (!st.modules.contains("MSR")) st.modules << QStringLiteral("MSR"); save_set(); });
+    g_ribmoddel->connect(g_ribmoddel, &QToolButton::clicked, [&]{ st.modules.removeAll(QStringLiteral("MSR")); save_set(); });
     if (fmenus[4]) {
         mk_item(fmenus[4], QStringLiteral("About"), [&]{
             QMessageBox::information(&win, QStringLiteral("PKT-Editor"),
@@ -1336,6 +1346,11 @@ int main(int argc, char **argv)
                 ok1 = all.contains("autodetect=0"); ok2 = all.contains("startauto=0"); }
               if (!ok1 || !ok2) { std::printf("clicktest FAIL: settings not persisted\n"); ++gfail; } }
             cbDetect->setChecked(true); cbStart->setChecked(true);
+            { st.modules << QStringLiteral("MSR"); save_set();
+              QFile sf(setIni); bool ok = false;
+              if (sf.open(QIODevice::ReadOnly)) { ok = sf.readAll().contains("modules=MSR"); sf.close(); }
+              if (!ok) { std::printf("clicktest FAIL: modules not persisted\n"); ++gfail; }
+              st.modules.clear(); save_set(); }
             { static UploadPanel *g_uparm = new UploadPanel(&win, &pm, QString(), true);
               g_uparm->hide();
               g_uparm->run_now();
