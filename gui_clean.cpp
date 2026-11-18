@@ -17,6 +17,7 @@
 #include <chrono>
 #include <QAction>
 #include <functional>
+#include "pdfexport.h"
 #include <QFile>
 #include <QHash>
 #include <QIcon>
@@ -712,8 +713,29 @@ int main(int argc, char **argv)
             mk_item(fmenus[0], disp, [&]{ do_open_file(actual); });
         }
     }
+    auto f_export = [&]() {
+        QVector<std::pair<int, QString>> rows, rt;
+        for (const CellRC &c : grid->cells) {
+            const Map *mm = nullptr;
+            for (const Map &m2 : pm.maps) if (m2.poskey == c.poskey) { mm = &m2; break; }
+            rows << std::make_pair(c.poskey, (mm && !mm->layers.isEmpty()) ? mm->layers.first().value : QStringLiteral("-"));
+            rt << std::make_pair(c.poskey, (mm && !mm->layers.isEmpty()) ? mm->layers.first().type : QString());
+        }
+        std::printf("export dbg: rows=%d geom=%d\n", rows.size(), g_geom.size());
+        if (rows.isEmpty()) return;
+        const QString stem = path.isEmpty() ? QStringLiteral("pkt-export") : path;
+        QFile pf(stem + QStringLiteral(".labels.pdf"));
+        if (pf.open(QIODevice::WriteOnly)) { pf.write(pdfx::make_label_pdf(rows)); pf.close(); }
+        QHash<int, QString> texts, fonts;
+        for (const Map &m2 : pm.maps) { if (!m2.print_text.isEmpty()) texts.insert(m2.poskey, m2.print_text); if (!m2.fontdesc.isEmpty()) fonts.insert(m2.poskey, m2.fontdesc); }
+        QFile p2(stem + QStringLiteral(".geom.pdf"));
+        if (p2.open(QIODevice::WriteOnly)) { p2.write(pdfx::make_label_pdf_geom(rows, rt, texts, fonts)); p2.close(); }
+        QFile p3(stem + QStringLiteral(".cut.pdf"));
+        if (p3.open(QIODevice::WriteOnly)) { p3.write(pdfx::make_cut_sheet(texts, fonts)); p3.close(); }
+    };
     if (fmenus[1]) {
         mk_item(fmenus[1], QStringLiteral("Undo"), [&]{ f_undo2(); });
+        mk_item(fmenus[1], QStringLiteral("Export labels (PDF)"), [&]() { f_export(); });
     }
     undoBtn->connect(undoBtn, &QPushButton::clicked, [&]() { f_undo2(); });
     delKeyBtn->connect(delKeyBtn, &QPushButton::clicked, [&]() { f_delkey(); });
@@ -946,6 +968,14 @@ int main(int argc, char **argv)
                   QFile rf(recentFile); bool hasP = false;
                   if (rf.open(QIODevice::ReadOnly)) { hasP = rf.readAll().contains(path.toUtf8()); rf.close(); }
                   if (!hasP) { std::printf("clicktest FAIL: recent list lacks current file\n"); ++gfail; }
+                }
+                { f_export();
+                  for (const QString &ext : {QStringLiteral(".labels.pdf"), QStringLiteral(".geom.pdf"), QStringLiteral(".cut.pdf")}) {
+                      QFile pf(path + ext);
+                      if (!pf.open(QIODevice::ReadOnly)) { std::printf("clicktest FAIL: export %s missing\n", ext.toUtf8().constData()); ++gfail; }
+                      else { const QByteArray h = pf.read(4); pf.close();
+                             if (h != "%PDF") { std::printf("clicktest FAIL: export %s not pdf\n", ext.toUtf8().constData()); ++gfail; } }
+                  }
                 }
             f_winprobe();
             if (winW->count() < 1) { std::printf("clicktest FAIL: window list empty\n"); ++gfail; }

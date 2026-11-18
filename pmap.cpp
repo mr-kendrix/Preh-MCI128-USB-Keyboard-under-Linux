@@ -212,6 +212,16 @@ QString serialize_pmap(const Pmap &p) {
         }
         x += "</MAP>";
     }
+    // vendor preserves <Key> geometry blocks on save — re-emit from g_geom
+    for (auto it = g_geom.cbegin(); it != g_geom.cend(); ++it) {
+        const KeyGeom &k = it.value();
+        x += "<Key><PosKey>" + to_hex_cp1252(QString::number(it.key())) + "</PosKey>";
+        x += "<X>" + to_hex_cp1252(QString::number(k.x)) + "</X>";
+        x += "<Y>" + to_hex_cp1252(QString::number(k.y)) + "</Y>";
+        x += "<Width>" + to_hex_cp1252(QString::number(k.w)) + "</Width>";
+        x += "<Height>" + to_hex_cp1252(QString::number(k.h)) + "</Height>";
+        x += "<ParentPosKey>" + to_hex_cp1252(QString::number(k.parent)) + "</ParentPosKey></Key>";
+    }
     x += "</MAPPING><LAYOUT><Name>" + to_hex_cp1252(p.name)
        + "</Name></LAYOUT></POSKeyMapper>";
     return x;

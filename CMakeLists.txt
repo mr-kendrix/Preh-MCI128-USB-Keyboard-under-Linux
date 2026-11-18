@@ -7,7 +7,8 @@ set(CMAKE_CXX_STANDARD 20)
 set(PKT_SRC pmap.cpp transport.cpp)
 
 add_executable(pktest test_main.cpp ${PKT_SRC})
-add_executable(pkteditor gui_clean.cpp gui_main.cpp upload.cpp pmap_dom.cpp mapper.cpp ipc.cpp ${PKT_SRC})  # gui_clean = spec-clean shell (main); --legacy-gui dispatches to gui_main legacy
+add_executable(
+    pkteditor gui_clean.cpp pdfexport.cpp gui_main.cpp upload.cpp pmap_dom.cpp mapper.cpp ipc.cpp ${PKT_SRC})  # gui_clean = spec-clean shell (main); --legacy-gui dispatches to gui_main legacy
 add_executable(pktxc pktxc_main.cpp pktxc.cpp)
 # LB5 upload engine + gate (own target: upload.cpp needs Qt6 Widgets, pktest must not)
 add_executable(pktup upload_main.cpp upload.cpp pmap.cpp transport.cpp)
