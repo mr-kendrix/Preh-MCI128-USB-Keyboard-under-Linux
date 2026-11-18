@@ -319,33 +319,35 @@ int main(int argc, char **argv)
         for (int t = 0; t < 5; ++t)
             (g_tab == t + 1 ? ribgrp[t]->show() : ribgrp[t]->hide());
     };
-    auto add_rib = [&ribgrp](int tab, const char *name, const char *icon) -> QToolButton * {
+    auto add_rib = [&ribgrp](int tab, const char *name, const char *icon, const char *text = "") -> QToolButton * {
         QToolButton *b = new QToolButton(ribgrp[tab - 1]);
         b->setObjectName(name);
         b->setIcon(mkicon(icon));
         b->setToolTip(QString::fromLatin1(name));
+        if (text[0]) { b->setText(QString::fromUtf8(text));
+                       b->setStyleSheet(QStringLiteral("QToolButton{font-size:6pt;}")); }
         return b;
     };
-    static QToolButton *g_ribnew = nullptr; g_ribnew = add_rib(1, "rib_new", "plus");
-    static QToolButton *g_ribopen = nullptr; g_ribopen = add_rib(1, "rib_open", "folder");
-    static QToolButton *g_ribrecent = nullptr; g_ribrecent = add_rib(1, "rib_recent", "list");
-    static QToolButton *g_ribundo = nullptr; g_ribundo = add_rib(1, "rib_undo", "minus");
-    static QToolButton *g_ribclose = nullptr; g_ribclose = add_rib(1, "rib_close", "x");
+    static QToolButton *g_ribnew = nullptr; g_ribnew = add_rib(1, "rib_new", "plus", "New");
+    static QToolButton *g_ribopen = nullptr; g_ribopen = add_rib(1, "rib_open", "folder", "Open");
+    static QToolButton *g_ribrecent = nullptr; g_ribrecent = add_rib(1, "rib_recent", "list", "Recent");
+    static QToolButton *g_ribundo = nullptr; g_ribundo = add_rib(1, "rib_undo", "minus", "Undo");
+    static QToolButton *g_ribclose = nullptr; g_ribclose = add_rib(1, "rib_close", "x", "Close");
     if (g_ribclose && path.isEmpty()) g_ribclose->setEnabled(false);
-    static QToolButton *g_ribexit = nullptr; g_ribexit = add_rib(1, "rib_exit", "x");
-    static QToolButton *g_upbtn = nullptr; g_upbtn = add_rib(1, "rib_upload", "up");
-    static QToolButton *g_ribcopy = nullptr; g_ribcopy = add_rib(2, "rib_copy", "copy");
-    static QToolButton *g_ribpaste = nullptr; g_ribpaste = add_rib(2, "rib_paste", "copy");
-    static QToolButton *g_ribdels = nullptr; g_ribdels = add_rib(2, "rib_del", "trash");
-    static QToolButton *g_ribswap = nullptr; g_ribswap = add_rib(2, "rib_swap", "gear");
-    static QToolButton *g_ribpdf = nullptr; g_ribpdf = add_rib(2, "rib_pdf", "doc");
-    static QToolButton *g_ribtempl = nullptr; g_ribtempl = add_rib(2, "rib_templ", "pencil");
-    static QToolButton *g_ribrestore2 = nullptr; g_ribrestore2 = add_rib(2, "rib_restore", "list");
+    static QToolButton *g_ribexit = nullptr; g_ribexit = add_rib(1, "rib_exit", "x", "Exit");
+    static QToolButton *g_upbtn = nullptr; g_upbtn = add_rib(1, "rib_upload", "up", "Upload");
+    static QToolButton *g_ribcopy = nullptr; g_ribcopy = add_rib(2, "rib_copy", "copy", "Copy");
+    static QToolButton *g_ribpaste = nullptr; g_ribpaste = add_rib(2, "rib_paste", "copy", "Paste");
+    static QToolButton *g_ribdels = nullptr; g_ribdels = add_rib(2, "rib_del", "trash", "Del");
+    static QToolButton *g_ribswap = nullptr; g_ribswap = add_rib(2, "rib_swap", "gear", "Swap");
+    static QToolButton *g_ribpdf = nullptr; g_ribpdf = add_rib(2, "rib_pdf", "doc", "PDF");
+    static QToolButton *g_ribtempl = nullptr; g_ribtempl = add_rib(2, "rib_templ", "pencil", "Tmpl");
+    static QToolButton *g_ribrestore2 = nullptr; g_ribrestore2 = add_rib(2, "rib_restore", "list", "Restore");
     static QToolButton *g_ribmodadd = nullptr, *g_ribmoddel = nullptr;
-    g_ribmodadd = add_rib(3, "rib_modadd", "plus");
-    g_ribmoddel = add_rib(3, "rib_moddel", "trash");
-    add_rib(4, "rib_settings", "gear");
-    static QToolButton *g_ribabout = nullptr; g_ribabout = add_rib(5, "rib_about", "doc");
+    g_ribmodadd = add_rib(3, "rib_modadd", "plus", "Mod+");
+    g_ribmoddel = add_rib(3, "rib_moddel", "trash", "Mod-");
+    static QToolButton *g_ribset = nullptr; g_ribset = add_rib(4, "rib_settings", "gear", "Settings");
+    static QToolButton *g_ribabout = nullptr; g_ribabout = add_rib(5, "rib_about", "doc", "About");
     static std::function<void()> g_openSettingsTab;   // set later to f_settings
     { const char *tic[5] = { "doc", "copy", "plus", "gear", "doc" };
       for (int t = 0; t < 5; ++t) {
