@@ -31,6 +31,8 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QFontDialog>
+#include <QFontComboBox>
 #include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPainter>
@@ -526,6 +528,11 @@ int main(int argc, char **argv)
     backPick->setToolTip("Background"); backPick->setIcon(mkicon("dot"));
     QLabel *backLbl = new QLabel(dlg); backLbl->setObjectName("backLbl"); backLbl->setText("Background");
     static QColorDialog *cpick = new QColorDialog(&win); cpick->hide();
+    QToolButton *fontBtn = new QToolButton(dlg); fontBtn->setObjectName("fontBtn");
+    fontBtn->setToolTip("Font (Dialog)"); fontBtn->setIcon(mkicon("pencil"));
+    QSpinBox *fontSz = new QSpinBox(dlg); fontSz->setObjectName("fontSz");
+    fontSz->setMinimum(5); fontSz->setMaximum(200); fontSz->setValue(10); fontSz->setSuffix(" pt");
+    static QFontDialog *qpick = new QFontDialog(&win); qpick->hide();
     QRadioButton *fnNone = new QRadioButton(QStringLiteral("Do nothing"), dlg); fnNone->setObjectName("fnNone");
     QRadioButton *fnText = new QRadioButton(QStringLiteral("Text-Shortcut"), dlg); fnText->setObjectName("fnText");
     QRadioButton *fnApp  = new QRadioButton(QStringLiteral("Application"), dlg); fnApp->setObjectName("fnApp");
@@ -551,6 +558,7 @@ int main(int argc, char **argv)
     dlv->addWidget(addbtn); dlv->addWidget(delbtn); dlv->addWidget(renbtn); dlv->addWidget(cpybtn);
     dlv->addWidget(appearLbl);
     dlv->addWidget(capFld); dlv->addWidget(foreLbl); dlv->addWidget(forePick); dlv->addWidget(backLbl); dlv->addWidget(backPick);
+    dlv->addWidget(fontBtn); dlv->addWidget(fontSz);
     dlv->addWidget(btfFld); dlv->addWidget(repFld); dlv->addWidget(slwFld);
     dlv->addWidget(fnNone); dlv->addWidget(fnText); dlv->addWidget(fnApp); dlv->addWidget(fnWeb);
     dlv->addWidget(appPath); dlv->addWidget(appPars); dlv->addWidget(appShort);
@@ -670,6 +678,15 @@ int main(int argc, char **argv)
     };
     auto f_pick_ok = [&]() { const int v = (int)cpick->currentColor().rgba();
         if (g_pick_fore) g_cf = v; else g_cb = v; cpick->hide(); };
+    auto f_font_open = [&]() { QString fam, rest; for (const Map &mm : pm.maps) if (mm.poskey == pk_cur) {
+            const QStringList parts = mm.fontdesc.split(", ");
+            fam = parts.value(0); rest = parts.value(1); break; }
+        QFont ini = fam.isEmpty() ? QFont() : QFont(fam);
+        qpick->setCurrentFont(ini); qpick->show(); };
+    auto f_font_ok = [&]() { const QFont f = qpick->currentFont();
+        const QString desc = QStringLiteral("%1, %2pt").arg(QString(f.family())).arg(fontSz->value());
+        for (Map &mm : pm.maps) if (mm.poskey == pk_cur) { mm.fontdesc = desc; break; }
+        dlg_refresh(pk_cur); };
     auto f_copy = [&]() { const int i = layerW->currentRow();
         if (i >= 0 && i < g_layers.size()) g_copy = g_layers[i].value; };
     auto f_rename = [&]() { const int i = (g_row_hint >= 0 ? g_row_hint : layerW->currentRow());
@@ -932,6 +949,8 @@ int main(int argc, char **argv)
     undoBtn->connect(undoBtn, &QPushButton::clicked, [&]() { f_undo2(); });
     forePick->connect(forePick, &QToolButton::clicked, [&]{ f_pick_open(true); });
     backPick->connect(backPick, &QToolButton::clicked, [&]{ f_pick_open(false); });
+    fontBtn->connect(fontBtn, &QToolButton::clicked, [&]{ f_font_open(); });
+    qpick->connect(qpick, &QFontDialog::currentFontChanged, [&]{ f_font_ok(); });
     QObject::connect(cpick, &QColorDialog::colorSelected, [&]{ f_pick_ok(); f_appear(); });
     g_ribnew->connect(g_ribnew, &QToolButton::clicked, [&]{ f_newfile(); });
     g_ribundo->connect(g_ribundo, &QToolButton::clicked, [&]() { f_undo2(); });
@@ -1087,6 +1106,11 @@ int main(int argc, char **argv)
                       for (const Map &mm : pm.maps) if (mm.poskey == pk) { ok2 = (mm.fore == (int)QColor(255, 255, 0).rgba() && mm.back == (int)QColor(0, 0, 255).rgba()); break; }
                       if (!ok2) { std::printf("clicktest FAIL: swap not applied\n"); ++gfail; } }
                     f_swap();
+                    f_font_open();
+                    qpick->setCurrentFont(QFont("Sans"));   // user picks Sans in the dialog (signal fires)
+                    { bool fontOk = false;
+                      for (const Map &mm : pm.maps) if (mm.poskey == pk) { fontOk = mm.fontdesc.contains(QStringLiteral(", 10pt")); break; }
+                      if (!fontOk) { std::printf("clicktest FAIL: font not applied\n"); ++gfail; } }
                 // function radio WEBSITE -> next add gets type WEBSITE
                 f_settype(QStringLiteral("WEBSITE"));
                 g_row_hint = -1; layerW->clear(); // row hint reset
