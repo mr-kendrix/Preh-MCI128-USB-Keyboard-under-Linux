@@ -326,6 +326,7 @@ int main(int argc, char **argv)
     static int g_undo_seq = 0;                   // same-second saves stay distinct
     static QString recentFile;                   // recent list persisted here
     static QStringList g_recent;                 // newest first, max 8
+    static QString g_template;                   // settings key template=
     g_pm = &pm;
     undoDir = QDir(QDir::homePath()).filePath(QStringLiteral(".local/share/pkteditor/undo"));
     recentFile = QDir(QDir::homePath()).filePath(QStringLiteral(".local/share/pkteditor/recent.txt"));
@@ -451,6 +452,7 @@ int main(int argc, char **argv)
             else if (k == "openlast") st.openlast = v == "1";
             else if (k == "datefmt") st.datefmt = v;
             else if (k == "lang") st.lang = v.toInt();
+            else if (k == "template") g_template = v;
         }
         sf.close();
     };
@@ -824,6 +826,10 @@ int main(int argc, char **argv)
     };
     load_recent();
     if (!path.isEmpty()) push_recent(path);
+    auto f_swap = [&]() {
+        for (Map &m2 : pm.maps) { const int f0 = m2.fore; m2.fore = m2.back; m2.back = f0; }
+        grid->relayout();
+    };
     auto f_push_reload = [&]() -> bool {
         QString err;
         const int fd = pktipc::try_connect_nb(err);
@@ -834,6 +840,7 @@ int main(int argc, char **argv)
     };
     if (fmenus[0]) {
         mk_item(fmenus[0], QStringLiteral("Restore"), [&]{ f_openrestore(); });
+        mk_item(fmenus[0], QStringLiteral("Open template"), [&]{ if (!g_template.isEmpty()) do_open_file(g_template); });
         mk_item(fmenus[0], QStringLiteral("Reload"), [&]{ f_push_reload(); });
         mk_item(fmenus[0], QStringLiteral("Close"), [&]{ if (dlg) dlg->hide(); });
         for (const QString &rp : g_recent) {
@@ -864,6 +871,7 @@ int main(int argc, char **argv)
     };
     if (fmenus[1]) {
         mk_item(fmenus[1], QStringLiteral("Undo"), [&]{ f_undo2(); });
+        mk_item(fmenus[1], QStringLiteral("Swap"), [&]{ f_swap(); });
         mk_item(fmenus[1], QStringLiteral("Reconnect"), [&]() { f_daemon(); });
         mk_item(fmenus[1], QStringLiteral("Export labels (PDF)"), [&]() { f_export(); });
     }
@@ -995,6 +1003,11 @@ int main(int argc, char **argv)
                 bool appOk = false;
                 for (const Map &mm : pm.maps) if (mm.poskey == pk) { appOk = (mm.print_text == QStringLiteral("GT-CAP") && mm.fore == 5 && mm.back == 7); break; }
                 if (!appOk) { std::printf("clicktest FAIL: appearance not applied\n"); ++gfail; }
+                    f_swap();
+                    { bool ok2 = false;
+                      for (const Map &mm : pm.maps) if (mm.poskey == pk) { ok2 = (mm.fore == 7 && mm.back == 5); break; }
+                      if (!ok2) { std::printf("clicktest FAIL: swap not applied\n"); ++gfail; } }
+                    f_swap();
                 // function radio WEBSITE -> next add gets type WEBSITE
                 f_settype(QStringLiteral("WEBSITE"));
                 g_row_hint = -1; layerW->clear(); // row hint reset
