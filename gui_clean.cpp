@@ -115,6 +115,11 @@ static QString processName(int pid)
 
 struct CellRC { int poskey = 0; QRect rc; };
 static const Pmap *g_pm = nullptr;     // live model for tile coloring
+static int g_ctx_pk = -1;              // right-clicked poskey
+static int g_ctx_count = 0;            // right-click counter (gate)
+static QMenu *g_ctx_menu = nullptr;    // context menu
+static QVector<Layer> g_clip;          // clipboard for context copy/paste
+static std::function<void()> g_ctx_edit, g_ctx_copy, g_ctx_paste, g_ctx_del;
 
 class KeyGrid : public QWidget
 {
@@ -195,6 +200,15 @@ public:
     {
         selectAt(ev->pos());
         if (g_openDlg && sel >= 0) g_openDlg(sel);
+    }
+    void mousePressEvent(QMouseEvent *ev) override
+    {
+        if (ev->button() == Qt::RightButton) {
+            selectAt(ev->pos());
+            g_ctx_pk = sel;
+            ++g_ctx_count;
+            if (g_ctx_menu && sel >= 0) g_ctx_menu->popup(ev->pos());
+        }
     }
 };
 
@@ -345,6 +359,22 @@ int main(int argc, char **argv)
 
     KeyGrid *grid = new KeyGrid(mainrow);
     grid->setObjectName("grid");
+    g_ctx_menu = new QMenu(grid);
+    g_ctx_menu->setObjectName("ctxmenu");
+    {   auto mkctx = [&](const QString &t, std::function<void()> fn) {
+            QAction *a = new QAction(t, g_ctx_menu);
+            a->setObjectName(QStringLiteral("ctx:") + t);
+            a->connect(a, &QAction::triggered, [fn]{ if (fn) fn(); });
+        };
+        auto eEdit = [&]{ if (g_openDlg && g_ctx_pk >= 0) g_openDlg(g_ctx_pk); };
+        auto eCopy = [&]{ g_clip.clear();
+            for (const Map &m : pm.maps) if (m.poskey == g_ctx_pk) { g_clip = m.layers; break; } };
+        auto ePaste = [&]{ if (g_clip.isEmpty()) return;
+            for (Map &m : pm.maps) if (m.poskey == g_ctx_pk) { m.layers = g_clip; break; } };
+        auto eDel = [&]{ for (Map &m : pm.maps) if (m.poskey == g_ctx_pk) { m.layers.clear(); break; } };
+        g_ctx_edit = eEdit; g_ctx_copy = eCopy; g_ctx_paste = ePaste; g_ctx_del = eDel;
+        mkctx("Edit", eEdit); mkctx("Copy", eCopy); mkctx("Paste", ePaste); mkctx("Delete", eDel);
+    }
     grid->setMinimumSize(480, 320);
     mrow->addWidget(sidebar, 1);
     mrow->addWidget(grid, 4);
@@ -872,6 +902,23 @@ int main(int argc, char **argv)
                 bool webOk = false;
                 for (const Map &mm : pm.maps) if (mm.poskey == pk) { webOk = (!mm.layers.isEmpty() && mm.layers.last().type == QStringLiteral("WEBSITE")); break; }
                 if (!webOk) { std::printf("clicktest FAIL: web layer type not stored\n"); ++gfail; }
+                // right-click context menu: Edit/Copy/Paste/Delete via g_ctx_*
+                if (g_ctx_pk < 0) g_ctx_pk = pk;
+                { int have = 0;
+                  for (QObject *ch : g_ctx_menu->children()) {
+                      QAction *a = qobject_cast<QAction *>(ch);
+                      if (!a) continue;
+                      const QString n = a->objectName();
+                      if (n == QStringLiteral("ctx:Edit") || n == QStringLiteral("ctx:Copy") ||
+                          n == QStringLiteral("ctx:Paste") || n == QStringLiteral("ctx:Delete")) ++have;
+                  }
+                  if (have != 4) { std::printf("clicktest FAIL: ctx menu items missing\n"); ++gfail; } }
+                g_ctx_copy();
+                if (g_clip.isEmpty()) { std::printf("clicktest FAIL: copy empty\n"); ++gfail; }
+                g_ctx_paste();
+                g_ctx_del();
+                for (const Map &m : pm.maps) if (m.poskey == g_ctx_pk && !m.layers.isEmpty()) { std::printf("clicktest FAIL: ctx delete left layers\n"); ++gfail; }
+                // gate: export dbg rows>0? not needed here
                 g_newtype.clear();
                 // footer: Delete-all removes the key, Cancel restores the snapshot, Save round-trips
                 bool found = false;
