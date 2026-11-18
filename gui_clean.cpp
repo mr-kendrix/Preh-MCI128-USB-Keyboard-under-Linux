@@ -6,6 +6,7 @@
 // reachable via --legacy-gui until it can be deleted.
 #include <QApplication>
 #include <QChar>
+#include <QColorDialog>
 #include <QDialog>
 #include <QCheckBox>
 #include <QComboBox>
@@ -77,6 +78,7 @@ static QIcon mkicon(const char *kind)
     else if (k == "list") { for (int y = 8; y <= 24; y += 8) pt.drawLine(7, y, 25, y); }
     else if (k == "x") { pt.drawLine(8, 8, 24, 24); pt.drawLine(24, 8, 8, 24); }
     else if (k == "copy") { pt.drawRect(8, 8, 10, 14); pt.drawRect(14, 12, 10, 14); }
+    else if (k == "dot") { pt.setBrush(QColor(60, 60, 60)); pt.setPen(QPen(QColor(60, 60, 60), 1)); pt.drawEllipse(16, 16, 9, 9); }
     else if (k == "trash") { pt.drawRect(10, 10, 12, 16); pt.drawLine(8, 8, 24, 8); }
     else if (k == "up") { pt.drawLine(16, 26, 16, 8); pt.drawLine(16, 8, 10, 14); pt.drawLine(16, 8, 22, 14); pt.drawLine(8, 28, 24, 28); }
     else if (k == "gear") { pt.drawEllipse(16, 16, 10, 10); pt.drawEllipse(16, 16, 3, 3); }
@@ -514,10 +516,13 @@ int main(int argc, char **argv)
     QCheckBox *btfFld = new QCheckBox(dlg); btfFld->setObjectName("btfFld");
     QCheckBox *repFld = new QCheckBox(dlg); repFld->setObjectName("repFld");
     QCheckBox *slwFld = new QCheckBox(dlg); slwFld->setObjectName("slwFld");
-    QComboBox *forePick = new QComboBox(dlg); forePick->setObjectName("forePick");
-    QComboBox *backPick = new QComboBox(dlg); backPick->setObjectName("backPick");
-    for (int i = 0; i < 112; ++i) { const QString nm = QStringLiteral("Slot %1").arg(i);
-        forePick->addItem(nm); backPick->addItem(nm); }
+    QToolButton *forePick = new QToolButton(dlg); forePick->setObjectName("forePick");
+    forePick->setToolTip("Foreground"); forePick->setIcon(mkicon("dot"));
+    QLabel *foreLbl = new QLabel(dlg); foreLbl->setObjectName("foreLbl"); foreLbl->setText("Foreground");
+    QToolButton *backPick = new QToolButton(dlg); backPick->setObjectName("backPick");
+    backPick->setToolTip("Background"); backPick->setIcon(mkicon("dot"));
+    QLabel *backLbl = new QLabel(dlg); backLbl->setObjectName("backLbl"); backLbl->setText("Background");
+    static QColorDialog *cpick = new QColorDialog(&win); cpick->hide();
     QRadioButton *fnNone = new QRadioButton(QStringLiteral("Do nothing"), dlg); fnNone->setObjectName("fnNone");
     QRadioButton *fnText = new QRadioButton(QStringLiteral("Text-Shortcut"), dlg); fnText->setObjectName("fnText");
     QRadioButton *fnApp  = new QRadioButton(QStringLiteral("Application"), dlg); fnApp->setObjectName("fnApp");
@@ -542,7 +547,7 @@ int main(int argc, char **argv)
     dlv->addWidget(dlgTitle); dlv->addWidget(edit); dlv->addWidget(layerW);
     dlv->addWidget(addbtn); dlv->addWidget(delbtn); dlv->addWidget(renbtn); dlv->addWidget(cpybtn);
     dlv->addWidget(appearLbl);
-    dlv->addWidget(capFld); dlv->addWidget(forePick); dlv->addWidget(backPick);
+    dlv->addWidget(capFld); dlv->addWidget(foreLbl); dlv->addWidget(forePick); dlv->addWidget(backLbl); dlv->addWidget(backPick);
     dlv->addWidget(btfFld); dlv->addWidget(repFld); dlv->addWidget(slwFld);
     dlv->addWidget(fnNone); dlv->addWidget(fnText); dlv->addWidget(fnApp); dlv->addWidget(fnWeb);
     dlv->addWidget(appPath); dlv->addWidget(appPars); dlv->addWidget(appShort);
@@ -652,6 +657,16 @@ int main(int argc, char **argv)
     static QString g_copy;                       // vendor: copy still pending
     static QString g_newtype;                    // type from the function radio for the next add
     static int g_row_hint = -1;                  // gate: explicit layer index
+    static int g_cf = 0, g_cb = 0;               // pending color picks (signed rgba, 0 = none)
+    static bool g_pick_fore = true;
+    auto f_pick_open = [&](bool isFore) {
+        g_pick_fore = isFore;
+        int col = 0; for (const Map &mm : pm.maps) if (mm.poskey == pk_cur) { col = isFore ? mm.fore : mm.back; break; }
+        cpick->setCurrentColor(col == -1 ? QColor(0, 0, 0) : QColor::fromRgb(int(quint8(col >> 24)), int(quint8(col >> 16)), int(quint8(col >> 8)), int(quint8(col))));
+        cpick->show();
+    };
+    auto f_pick_ok = [&]() { const int v = (int)cpick->currentColor().rgba();
+        if (g_pick_fore) g_cf = v; else g_cb = v; cpick->hide(); };
     auto f_copy = [&]() { const int i = layerW->currentRow();
         if (i >= 0 && i < g_layers.size()) g_copy = g_layers[i].value; };
     auto f_rename = [&]() { const int i = (g_row_hint >= 0 ? g_row_hint : layerW->currentRow());
@@ -663,9 +678,8 @@ int main(int argc, char **argv)
     auto f_appear = [&]() {
         for (Map &mm : pm.maps) if (mm.poskey == pk_cur) {
             if (!capFld->text().isEmpty()) mm.print_text = capFld->text();
-            const int fi = forePick->currentIndex(), bi = backPick->currentIndex();
-            if (fi >= 0) mm.fore = fi;
-            if (bi >= 0) mm.back = bi;
+            if (g_cf) mm.fore = g_cf;
+            if (g_cb) mm.back = g_cb;
             break;
         }
         dlg_refresh(pk_cur);
@@ -910,6 +924,9 @@ int main(int argc, char **argv)
         mk_item(fmenus[1], QStringLiteral("Export labels (PDF)"), [&]() { f_export(); });
     }
     undoBtn->connect(undoBtn, &QPushButton::clicked, [&]() { f_undo2(); });
+    forePick->connect(forePick, &QToolButton::clicked, [&]{ f_pick_open(true); });
+    backPick->connect(backPick, &QToolButton::clicked, [&]{ f_pick_open(false); });
+    QObject::connect(cpick, &QColorDialog::colorSelected, [&]{ f_pick_ok(); f_appear(); });
     g_ribundo->connect(g_ribundo, &QToolButton::clicked, [&]() { f_undo2(); });
     g_ribrecent->connect(g_ribrecent, &QToolButton::clicked, [&]{ if (!g_recent.isEmpty()) do_open_file(g_recent.first()); });
     g_ribclose->connect(g_ribclose, &QToolButton::clicked, [&]{ f_closefile(); });
@@ -1035,15 +1052,21 @@ int main(int argc, char **argv)
                 if (layerW->count() != g_layers.size()) { std::printf("clicktest FAIL: delete not mirrored\n"); ++gfail; }
                 // appearance: caption + colors applied to the Map
                 capFld->setText(QStringLiteral("GT-CAP"));
-                forePick->setCurrentIndex(5);
-                backPick->setCurrentIndex(7);
-                f_app_appear();
-                bool appOk = false;
-                for (const Map &mm : pm.maps) if (mm.poskey == pk) { appOk = (mm.print_text == QStringLiteral("GT-CAP") && mm.fore == 5 && mm.back == 7); break; }
-                if (!appOk) { std::printf("clicktest FAIL: appearance not applied\n"); ++gfail; }
+                f_pick_open(true);
+                cpick->setCurrentColor(QColor(0, 0, 255));   // user picks blue in the color dialog
+                f_pick_ok();
+                f_pick_open(false);
+                cpick->setCurrentColor(QColor(255, 255, 0)); // background: yellow
+                f_pick_ok();
+                f_appear();
+                { const int blue = (int)QColor(0, 0, 255).rgba();
+                  const int yellow = (int)QColor(255, 255, 0).rgba();
+                  bool appOk = false;
+                  for (const Map &mm : pm.maps) if (mm.poskey == pk) { appOk = (mm.print_text == QStringLiteral("GT-CAP") && mm.fore == blue && mm.back == yellow); break; }
+                  if (!appOk) { std::printf("clicktest FAIL: appearance not applied\n"); ++gfail; } }
                     f_swap();
                     { bool ok2 = false;
-                      for (const Map &mm : pm.maps) if (mm.poskey == pk) { ok2 = (mm.fore == 7 && mm.back == 5); break; }
+                      for (const Map &mm : pm.maps) if (mm.poskey == pk) { ok2 = (mm.fore == (int)QColor(255, 255, 0).rgba() && mm.back == (int)QColor(0, 0, 255).rgba()); break; }
                       if (!ok2) { std::printf("clicktest FAIL: swap not applied\n"); ++gfail; } }
                     f_swap();
                 // function radio WEBSITE -> next add gets type WEBSITE
