@@ -215,6 +215,7 @@ int main(int argc, char **argv)
     QWidget win;
     win.setObjectName("win");
     win.resize(1100, 640);
+    win.setStyleSheet("#win{background-color:#eceef2;}");
     QVBoxLayout *vwin = new QVBoxLayout(&win);
 
     QMenuBar *menu = new QMenuBar(&win);
@@ -226,7 +227,7 @@ int main(int argc, char **argv)
 
     QWidget *accent = new QWidget(&win);
     accent->setObjectName("accent");
-    accent->setStyleSheet("QWidget{background-color:#4f7d96;}");
+    accent->setStyleSheet("#accent{background-color:#4f7d96;}");
     accent->setMinimumHeight(6);
     vwin->insertWidget(1, accent);
 
@@ -272,10 +273,11 @@ int main(int argc, char **argv)
 
     QWidget *mainrow = new QWidget(&win);
     mainrow->setObjectName("mainrow");
+    mainrow->setStyleSheet("#mainrow{background-color:#e9ebef;}");
     QHBoxLayout *mrow = new QHBoxLayout(mainrow);
     QWidget *sidebar = new QWidget(mainrow);
     sidebar->setObjectName("sidebar");
-    sidebar->setStyleSheet("QWidget{background-color:#3c3c3c;} QLabel{background-color:transparent; color:#e8e8e8;}");
+    sidebar->setStyleSheet("#sidebar{background-color:#3c3c3c;} QLabel{color:#e8e8e8;}");
     sidebar->setMaximumWidth(260);
     QVBoxLayout *sv = new QVBoxLayout(sidebar);
     QLabel *logo = new QLabel(sidebar);
