@@ -421,6 +421,45 @@ int main(int argc, char **argv)
     setlay->addWidget(dateLbl); setlay->addWidget(dateCombo);
     setlay->addWidget(langDe); setlay->addWidget(langEn);
     dateLbl->setText(QStringLiteral("Date format: %1").arg(st.datefmt));
+    // persistence of settings (§2) — same ini as legacy
+    static QString setIni;
+    auto save_set = [&]() {
+        QFile sf(setIni);
+        if (!sf.open(QIODevice::WriteOnly | QIODevice::Text)) return;
+        sf.write((QStringLiteral("autodetect=") + QString::number(st.autodetect ? 1 : 0) + "\n"
+                  "startauto=" + QString::number(st.startauto ? 1 : 0) + "\n"
+                  "minauto=" + QString::number(st.minauto ? 1 : 0) + "\n"
+                  "openlast=" + QString::number(st.openlast ? 1 : 0) + "\n"
+                  "datefmt=" + st.datefmt + "\n"
+                  "lang=" + QString::number(st.lang) + "\n").toUtf8());
+        sf.close();
+    };
+    auto load_set = [&]() {
+        setIni = QDir(QDir::homePath()).filePath(QStringLiteral(".local/share/pkteditor/settings.ini"));
+        QFile sf(setIni);
+        if (!sf.open(QIODevice::ReadOnly | QIODevice::Text)) return;
+        while (!sf.atEnd()) {
+            const QString line = QString::fromUtf8(sf.readLine()).trimmed();
+            const int eq = line.indexOf('=');
+            if (eq <= 0) continue;
+            const QString k = line.left(eq), v = line.mid(eq + 1);
+            if (k == "autodetect") st.autodetect = v == "1";
+            else if (k == "startauto") st.startauto = v == "1";
+            else if (k == "minauto") st.minauto = v == "1";
+            else if (k == "openlast") st.openlast = v == "1";
+            else if (k == "datefmt") st.datefmt = v;
+            else if (k == "lang") st.lang = v.toInt();
+        }
+        sf.close();
+    };
+    load_set();
+    cbDetect->setChecked(st.autodetect); cbStart->setChecked(st.startauto);
+    cbMin->setChecked(st.minauto); cbOpen->setChecked(st.openlast);
+    cbDetect->connect(cbDetect, &QCheckBox::stateChanged, [&](int x){ st.autodetect = (x & Qt::Checked) != 0; save_set(); });
+    cbStart->connect(cbStart, &QCheckBox::stateChanged, [&](int x){ st.startauto = (x & Qt::Checked) != 0; save_set(); });
+    cbMin->connect(cbMin, &QCheckBox::stateChanged, [&](int x){ st.minauto = (x & Qt::Checked) != 0; save_set(); });
+    cbOpen->connect(cbOpen, &QCheckBox::stateChanged, [&](int x){ st.openlast = (x & Qt::Checked) != 0; save_set(); });
+
 
     // ---- dialogs (overlays, not part of the main window layout) ----
     QWidget *dlg = new QWidget(&win);
@@ -1051,6 +1090,13 @@ int main(int argc, char **argv)
             if (setdlg->isHidden()) { std::printf("clicktest FAIL: settings dialog not shown\n"); ++gfail; }
             if (dateLbl->text() != QStringLiteral("Date format: YYYY-MM-DD")) { std::printf("clicktest FAIL: date format not applied\n"); ++gfail; }
             setdlg->hide();
+            cbDetect->setChecked(false); cbStart->setChecked(false);
+            { QFile sf(setIni);
+              bool ok1 = false, ok2 = false;
+              if (sf.open(QIODevice::ReadOnly)) { const QString all = sf.readAll(); sf.close();
+                ok1 = all.contains("autodetect=0"); ok2 = all.contains("startauto=0"); }
+              if (!ok1 || !ok2) { std::printf("clicktest FAIL: settings not persisted\n"); ++gfail; } }
+            cbDetect->setChecked(true); cbStart->setChecked(true);
             std::printf("dlg gate done\n");
         }
     }
