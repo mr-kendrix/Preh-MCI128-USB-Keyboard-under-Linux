@@ -802,8 +802,17 @@ int main(int argc, char **argv)
     };
     load_recent();
     if (!path.isEmpty()) push_recent(path);
+    auto f_push_reload = [&]() -> bool {
+        QString err;
+        const int fd = pktipc::try_connect_nb(err);
+        if (fd < 0) return false;                 // no daemon: silent, file is truth
+        const bool ok = pktipc::send_line(fd, pktipc::mk_reload_req(), err);
+        ::close(fd);
+        return ok;
+    };
     if (fmenus[0]) {
         mk_item(fmenus[0], QStringLiteral("Restore"), [&]{ f_openrestore(); });
+        mk_item(fmenus[0], QStringLiteral("Reload"), [&]{ f_push_reload(); });
         mk_item(fmenus[0], QStringLiteral("Close"), [&]{ if (dlg) dlg->hide(); });
         for (const QString &rp : g_recent) {
             const QString disp = rp.section(QChar('/'), -1);
@@ -1105,6 +1114,7 @@ int main(int argc, char **argv)
               std::system("b2/fakekd >/tmp/fkd2.log 2>&1 & sleep 0.6");
               f_daemon();
               if (!pathlbl->text().contains("3 rules")) { std::printf("clicktest FAIL: reconnect failed\n"); ++gfail; }
+              if (!f_push_reload()) { std::printf("clicktest FAIL: reload not delivered\n"); ++gfail; }
               std::system("pkill -x fakekd >/dev/null 2>&1");
             }
             f_winprobe();
