@@ -853,6 +853,7 @@ int main(int argc, char **argv)
         g_recent.prepend(p);
         save_recent();
     };
+    auto f_newfile = [&]() { pm = Pmap(); g_geom.clear(); g_snap.clear(); g_labels.clear(); grid->relayout(); };
     auto do_open_file = [&](const QString &p) {
         QFile of(p);
         if (!of.open(QIODevice::ReadOnly)) return;
@@ -890,6 +891,7 @@ int main(int argc, char **argv)
         mk_item(fmenus[0], QStringLiteral("Restore"), [&]{ f_openrestore(); });
         mk_item(fmenus[0], QStringLiteral("Open template"), [&]{ if (!g_template.isEmpty()) do_open_file(g_template); });
         mk_item(fmenus[0], QStringLiteral("Upload"), [&]{ if (g_up) { g_up->run_now(); uplbl->setText(g_up->status_text()); } });
+        mk_item(fmenus[0], QStringLiteral("New"), [&]{ f_newfile(); });
         mk_item(fmenus[0], QStringLiteral("Open"), [&]{ f_openfile(); });
         mk_item(fmenus[0], QStringLiteral("Close"), [&]{ f_closefile(); });
         mk_item(fmenus[0], QStringLiteral("Reload"), [&]{ f_push_reload(); });
@@ -930,6 +932,7 @@ int main(int argc, char **argv)
     forePick->connect(forePick, &QToolButton::clicked, [&]{ f_pick_open(true); });
     backPick->connect(backPick, &QToolButton::clicked, [&]{ f_pick_open(false); });
     QObject::connect(cpick, &QColorDialog::colorSelected, [&]{ f_pick_ok(); f_appear(); });
+    g_ribnew->connect(g_ribnew, &QToolButton::clicked, [&]{ f_newfile(); });
     g_ribundo->connect(g_ribundo, &QToolButton::clicked, [&]() { f_undo2(); });
     g_ribrecent->connect(g_ribrecent, &QToolButton::clicked, [&]{ if (!g_recent.isEmpty()) do_open_file(g_recent.first()); });
     g_ribclose->connect(g_ribclose, &QToolButton::clicked, [&]{ f_closefile(); });
@@ -1263,6 +1266,9 @@ int main(int argc, char **argv)
                 ok1 = all.contains("autodetect=0"); ok2 = all.contains("startauto=0"); }
               if (!ok1 || !ok2) { std::printf("clicktest FAIL: settings not persisted\n"); ++gfail; } }
             cbDetect->setChecked(true); cbStart->setChecked(true);
+            f_newfile();
+            { const bool empty = pm.maps.isEmpty() && g_geom.isEmpty();
+              if (!empty) { std::printf("clicktest FAIL: new file not empty\n"); ++gfail; } }
             std::printf("dlg gate done\n");
         }
     }
