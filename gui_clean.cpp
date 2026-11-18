@@ -6,6 +6,7 @@
 // reachable via --legacy-gui until it can be deleted.
 #include <QApplication>
 #include <QChar>
+#include <QDialog>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDateTime>
@@ -430,7 +431,7 @@ int main(int argc, char **argv)
     // ---- Settings tab content (vendor §2): 4 checkboxes + date format + language ----
     struct St { bool autodetect = true, startauto = true, minauto = true, openlast = true;
                 QString datefmt = QStringLiteral("DD.MM.YYYY"); int lang = 1; } st;
-    QWidget *setdlg = new QWidget(&win);
+    QDialog *setdlg = new QDialog(&win);
     setdlg->setObjectName("setdlg");
     setdlg->hide();
     QVBoxLayout *setlay = new QVBoxLayout(setdlg);
@@ -491,7 +492,7 @@ int main(int argc, char **argv)
 
 
     // ---- dialogs (overlays, not part of the main window layout) ----
-    QWidget *dlg = new QWidget(&win);
+    QDialog *dlg = new QDialog(&win);
     dlg->setObjectName("dlg");
     dlg->hide();
     QVBoxLayout *dlv = new QVBoxLayout(dlg);
@@ -538,6 +539,8 @@ int main(int argc, char **argv)
     for (const QString &b : {QStringLiteral("Default browser"), QStringLiteral("Firefox"), QStringLiteral("Chrome"),
                               QStringLiteral("Opera"), QStringLiteral("Edge"), QStringLiteral("Safari")})
         browserPick->addItem(b);
+    dlv->addWidget(dlgTitle); dlv->addWidget(edit); dlv->addWidget(layerW);
+    dlv->addWidget(addbtn); dlv->addWidget(delbtn); dlv->addWidget(renbtn); dlv->addWidget(cpybtn);
     dlv->addWidget(appearLbl);
     dlv->addWidget(capFld); dlv->addWidget(forePick); dlv->addWidget(backPick);
     dlv->addWidget(btfFld); dlv->addWidget(repFld); dlv->addWidget(slwFld);
@@ -550,7 +553,7 @@ int main(int argc, char **argv)
     dlv->addWidget(spinl);
 
     // ---- Restore dialog: timestamped backups (vendor Restore folder list) ----
-    QWidget *rdlg = new QWidget(&win);
+    QDialog *rdlg = new QDialog(&win);
     rdlg->setObjectName("rdlg");
     rdlg->hide();
     QVBoxLayout *rlv = new QVBoxLayout(rdlg);
@@ -560,7 +563,7 @@ int main(int argc, char **argv)
     QPushButton *rPick = new QPushButton(rdlg); rPick->setObjectName("rPick");
     rlv->addWidget(rHdr); rlv->addWidget(rList); rlv->addWidget(rPick);
 
-    QWidget *knewdlg = new QWidget(&win);
+    QDialog *knewdlg = new QDialog(&win);
     knewdlg->setObjectName("knewdlg");
     knewdlg->hide();
     QVBoxLayout *knv = new QVBoxLayout(knewdlg);
@@ -573,7 +576,7 @@ int main(int argc, char **argv)
     knv->addWidget(knq); knv->addWidget(knAlways); knv->addWidget(knProc);
     knv->addWidget(procFld); knv->addWidget(knList); knv->addWidget(knNext);
 
-    QWidget *dproc = new QWidget(&win);
+    QDialog *dproc = new QDialog(&win);
     dproc->setObjectName("dproc");
     dproc->hide();
     QVBoxLayout *dpv = new QVBoxLayout(dproc);
@@ -613,7 +616,7 @@ int main(int argc, char **argv)
         }
         if (alwaysSel) { renbtn->hide(); delbtn->hide(); }
         else { renbtn->show(); delbtn->show(); }
-        dlg->setGeometry(QRect(6, 6, qMin(460, win.width() - 12), 320));
+        dlg->setGeometry(QRect(6, 6, qMin(460, win.width() - 12), qMin(560, win.height() - 12)));
         dlg->show();
     };
     auto open_dialog = [&](int pk) {
