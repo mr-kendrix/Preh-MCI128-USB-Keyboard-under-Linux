@@ -54,6 +54,7 @@
 #include "fitlabel.h"
 #include "pmap.h"
 #include "mapper.h"
+#include "upload.h"
 
 extern int gui_legacy_main(int argc, char **argv);
 
@@ -300,6 +301,7 @@ int main(int argc, char **argv)
     if (QToolButton *rc = add_rib(1, "rib_close", "x"))
         if (path.isEmpty()) rc->setEnabled(false);
     add_rib(1, "rib_exit", "x");
+    static QToolButton *g_upbtn = nullptr; g_upbtn = add_rib(1, "rib_upload", "up");
     add_rib(2, "rib_copy", "copy");
     add_rib(2, "rib_paste", "copy");
     add_rib(2, "rib_del", "trash");
@@ -399,7 +401,13 @@ int main(int argc, char **argv)
     QLabel *pathlbl = new QLabel(statusbar);
     pathlbl->setObjectName("pathlbl");
     pathlbl->setText(path);
+    static UploadPanel *g_up = nullptr;
+    UploadPanel *upanel = new UploadPanel(statusbar, &pm, QString(), false);
+    QLabel *uplbl = new QLabel(statusbar); uplbl->setObjectName("uplbl");
+    g_up = upanel;
     sbar->addWidget(zout); sbar->addWidget(zoomlbl); sbar->addWidget(zin); sbar->addWidget(pathlbl);
+    sbar->addWidget(uplbl);
+    g_upbtn->connect(g_upbtn, &QToolButton::clicked, [uplbl]{ if (g_up) { g_up->run_now(); uplbl->setText(g_up->status_text()); } });
     vwin->addWidget(statusbar);
 
     // ---- Settings tab content (vendor §2): 4 checkboxes + date format + language ----
@@ -841,6 +849,7 @@ int main(int argc, char **argv)
     if (fmenus[0]) {
         mk_item(fmenus[0], QStringLiteral("Restore"), [&]{ f_openrestore(); });
         mk_item(fmenus[0], QStringLiteral("Open template"), [&]{ if (!g_template.isEmpty()) do_open_file(g_template); });
+        mk_item(fmenus[0], QStringLiteral("Upload"), [&]{ if (g_up) { g_up->run_now(); uplbl->setText(g_up->status_text()); } });
         mk_item(fmenus[0], QStringLiteral("Reload"), [&]{ f_push_reload(); });
         mk_item(fmenus[0], QStringLiteral("Close"), [&]{ if (dlg) dlg->hide(); });
         for (const QString &rp : g_recent) {
@@ -1161,6 +1170,9 @@ int main(int argc, char **argv)
               if (!pathlbl->text().contains("3 rules")) { std::printf("clicktest FAIL: reconnect failed\n"); ++gfail; }
               if (!f_push_reload()) { std::printf("clicktest FAIL: reload not delivered\n"); ++gfail; }
               std::system("pkill -x fakekd >/dev/null 2>&1");
+              g_up->run_now();
+              if (g_up->status_text().isEmpty()) { std::printf("clicktest FAIL: upload status empty\n"); ++gfail; }
+              if (!g_up->status_text().contains("upload", Qt::CaseInsensitive)) { std::printf("clicktest FAIL: upload text missing\n"); ++gfail; }
             }
             f_winprobe();
             if (winW->count() < 1) { std::printf("clicktest FAIL: window list empty\n"); ++gfail; }
