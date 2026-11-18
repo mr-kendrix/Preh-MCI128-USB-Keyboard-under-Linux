@@ -17,7 +17,9 @@
 #include <chrono>
 #include <QAction>
 #include <functional>
+#include "ipc.h"
 #include "pdfexport.h"
+#include <unistd.h>
 #include <QFile>
 #include <QHash>
 #include <QIcon>
@@ -811,6 +813,26 @@ int main(int argc, char **argv)
     cancelBtn->connect(cancelBtn, &QPushButton::clicked, [&]() { f_cancel(); });
     saveBtn->connect(saveBtn, &QPushButton::clicked, [&]() { f_save(); });
 
+    auto f_daemon = [&]() {
+        QString err;
+        const int fd = pktipc::try_connect_nb(err);
+        if (fd < 0) { pathlbl->setText(path + QStringLiteral(" — daemon: off")); return; }
+        pktipc::send_line(fd, pktipc::mk_reload_req(), err);
+        int rules = -1;
+        pktipc::LineBuf in;
+        for (int k = 0; k < 24 && rules < 0; ++k) {
+            QString line;
+            if (pktipc::recv_line(fd, in, line, err)) {
+                pktipc::Msg m; QString why;
+                if (pktipc::parse_line(line, m, why) && m.t == QLatin1String("reload"))
+                    rules = m.o.value("rules").toInteger();
+            } else usleep(40000);
+        }
+        ::close(fd);
+        pathlbl->setText(rules >= 0 ? path + QStringLiteral(" — daemon: connected (%1 rules)").arg(rules)
+                                    : path + QStringLiteral(" — daemon: connected"));
+    };
+    f_daemon();
     auto f_settings = [&]() {
         st.datefmt = dateCombo->currentText();
         st.lang = langEn->isChecked() ? 0 : 1;
@@ -1063,6 +1085,10 @@ int main(int argc, char **argv)
                              if (h != "%PDF") { std::printf("clicktest FAIL: export %s not pdf\n", ext.toUtf8().constData()); ++gfail; } }
                   }
                 }
+            { std::system("b2/fakekd >/tmp/fkd.log 2>&1 & sleep 0.6");
+              f_daemon();
+              if (!pathlbl->text().contains("3 rules")) { std::printf("clicktest FAIL: daemon rules not shown\n"); ++gfail; }
+              std::system("pkill -f 'b2/fakekd' >/dev/null"); }
             f_winprobe();
             if (winW->count() < 1) { std::printf("clicktest FAIL: window list empty\n"); ++gfail; }
             {   // process selection recolors tiles
