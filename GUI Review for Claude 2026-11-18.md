@@ -67,20 +67,7 @@ Claude flagged after deletion of gui_main.cpp that the file is no longer lossles
  (chain)
 
 `78993b4` event-loop+addAction · `9658ef7` ribbon Undo/Open/Close · `022d34d` tabstrip · `ccb6afa` QDialogs+layer-rows · `2293144` fit-label font · `2ca7c3c` openlast-applies · `9fb0d92` New · `9e93338` Settings/Help menu items · `61ddf48` QFontDialog · `501fa6e` inject+fflush · `9368107` upload-armed-proven · `0a7fb8e` macro slots · `8bfe14e` modules · `09d2185` legacy deleted · `1dead4b` press-drain · `2028082` hold-ms roundtrip · `f9136d6` settings-tab anchor · `a0a6915` swatch sample.
-## Save-Undo-Path (2026-11-18, commit 2b5f0a3) — Claude's Review 2
 
-Claude flagged after deletion of gui_main.cpp that the file is no longer losslessly saved. All 4 points restored:
-
-1. **lossless save**: `f_save` now uses the DOM path — parse original, **refuse save if the byte-roundtrip is not lossless** (`SAVE BLOCKED: file not in supported pmap dialect` / `not lossless on save`), model applied via `dom_apply_model` (only changed texts), then **atomic write** (tmp+rename via `write_atomic`) and verification re-parse. `pmap_dom.cpp` is used by both GUIs — nothing was re-implemented.
-2. **Backup can no longer be bypassed**: write original bytes **before** the write, abort save on failure; wall-clock stamp `yyyyMMdd-HHmmss-zzz.pmap`; keep the 30 newest.
-3. **Undo**: in-memory stack `UndoSnap{path, pre, post}` (exact bytes); on restart a file backup restored from undoDir — and **the restored copy is deleted**, second Undo does not repeat it.
-4. **Gate**: new assert — tag counts `<Key>`, `<MSR>`, `<OCR>` before/after save equal (unmodeled tags preserved) → `dlg rc=0 / 0 FAIL`. Empirical: 131692 bytes = 131692 bytes, tag-count delta empty.
-
-### Pitfall-Section corrected (Qt 6.4 headers, verified on /usr/include/qt6)
-
-- QComboBox: **no** `findIndexOf`/`CaseInsensitive` (those are Qt5 names), but **`itemText(int)` exists** — I used the wrong widget (QListWidget has no itemText/appendItem → own `g_macro` list was correct)
-- QSpinBox: real name **`setSingleStep`** (exists), not `setStep`
-- QRect 6.4: only `adjusted`/`inset`; **`marginsModified` and `reduced` really do not exist** (Qt5 names)
-- QColorDialog: **no** `okBtn` — signal `currentFontChanged`/`colorSelected` are the API
-- QFont: `family()` exists, `familyName` does not
-- QToolButton::setDefaultAction exists — used for the Ribbon-QAction pairing (see next section below)
+## 2026-11-18 dark mode (commit 209fee1)
+- `QGuiApplication::styleHints()->setColorScheme(Qt::ColorScheme::Light)` — public property class in the fork (`QStyleHints`, Q_GUI_EXPORT)
+- **Pitfall:** `colorScheme()` getter stays platform-driven even after set (probe), signal doesn't fire → not assertable in gate; setter fixes native-control rendering only
