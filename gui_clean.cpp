@@ -30,6 +30,7 @@
 #include <QListWidget>
 #include <QMenu>
 #include <QMenuBar>
+#include <QMessageBox>
 #include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPainter>
@@ -952,6 +953,17 @@ int main(int argc, char **argv)
         QToolButton *b = qobject_cast<QToolButton *>(ch);
         if (b && b->objectName() == QStringLiteral("rib_settings"))
             b->connect(b, &QToolButton::clicked, [&]() { f_settings(); });
+    }
+    if (fmenus[3]) {
+        mk_item(fmenus[3], QStringLiteral("Settings …"), [&]{ f_settings(); });
+        mk_item(fmenus[3], QStringLiteral("Upload"), [&]{ if (g_up) { g_up->run_now(); uplbl->setText(g_up->status_text()); } });
+    }
+    if (fmenus[4]) {
+        mk_item(fmenus[4], QStringLiteral("About"), [&]{
+            QMessageBox::information(&win, QStringLiteral("PKT-Editor"),
+                QStringLiteral("PKT Mapper — Linux port (clean shell)\nDaemon: %1")
+                    .arg(pathlbl->text().contains("daemon: connected") ? QStringLiteral("connected") : QStringLiteral("off")));
+        });
     }
 
     auto f_winprobe = [&]() {
