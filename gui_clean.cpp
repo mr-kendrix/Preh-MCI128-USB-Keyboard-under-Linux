@@ -61,6 +61,8 @@
 #include "pmap.h"
 #include "mapper.h"
 #include "upload.h"
+#include "pmap_dom.h"
+#include <QSaveFile>
 
 // legacy gui removed after the final legacy clicktest passed (0 FAIL)
 
@@ -237,6 +239,19 @@ static QStringList procs_of(const Pmap &pm)
     return out;
 }
 
+struct UndoSnap { QString path; QByteArray pre; QByteArray post; };
+static QVector<UndoSnap> g_undos;   // in-memory exact-byte undo stack
+
+static QString write_atomic(const QString &p, const QByteArray &bytes)
+{
+    QSaveFile sf(p);
+    if (!sf.open(QIODevice::WriteOnly)) return QStringLiteral("open failed");
+    const qint64 w = sf.write(bytes);
+    if (w != bytes.size()) return QStringLiteral("short write");   // dtor drops the pending file
+    if (!sf.commit()) return QStringLiteral("commit failed");
+    return QString();
+}
+
 int main(int argc, char **argv)
 {
     for (int i = 1; i < argc; ++i)
@@ -311,25 +326,25 @@ int main(int argc, char **argv)
         return b;
     };
     static QToolButton *g_ribnew = nullptr; g_ribnew = add_rib(1, "rib_new", "plus");
-    add_rib(1, "rib_open", "folder");
+    static QToolButton *g_ribopen = nullptr; g_ribopen = add_rib(1, "rib_open", "folder");
     static QToolButton *g_ribrecent = nullptr; g_ribrecent = add_rib(1, "rib_recent", "list");
     static QToolButton *g_ribundo = nullptr; g_ribundo = add_rib(1, "rib_undo", "minus");
     static QToolButton *g_ribclose = nullptr; g_ribclose = add_rib(1, "rib_close", "x");
     if (g_ribclose && path.isEmpty()) g_ribclose->setEnabled(false);
     static QToolButton *g_ribexit = nullptr; g_ribexit = add_rib(1, "rib_exit", "x");
     static QToolButton *g_upbtn = nullptr; g_upbtn = add_rib(1, "rib_upload", "up");
-    add_rib(2, "rib_copy", "copy");
-    add_rib(2, "rib_paste", "copy");
-    add_rib(2, "rib_del", "trash");
-    add_rib(2, "rib_swap", "gear");
-    add_rib(2, "rib_pdf", "doc");
-    add_rib(2, "rib_templ", "pencil");
-    add_rib(2, "rib_restore", "list");
+    static QToolButton *g_ribcopy = nullptr; g_ribcopy = add_rib(2, "rib_copy", "copy");
+    static QToolButton *g_ribpaste = nullptr; g_ribpaste = add_rib(2, "rib_paste", "copy");
+    static QToolButton *g_ribdels = nullptr; g_ribdels = add_rib(2, "rib_del", "trash");
+    static QToolButton *g_ribswap = nullptr; g_ribswap = add_rib(2, "rib_swap", "gear");
+    static QToolButton *g_ribpdf = nullptr; g_ribpdf = add_rib(2, "rib_pdf", "doc");
+    static QToolButton *g_ribtempl = nullptr; g_ribtempl = add_rib(2, "rib_templ", "pencil");
+    static QToolButton *g_ribrestore2 = nullptr; g_ribrestore2 = add_rib(2, "rib_restore", "list");
     static QToolButton *g_ribmodadd = nullptr, *g_ribmoddel = nullptr;
     g_ribmodadd = add_rib(3, "rib_modadd", "plus");
     g_ribmoddel = add_rib(3, "rib_moddel", "trash");
     add_rib(4, "rib_settings", "gear");
-    add_rib(5, "rib_about", "doc");
+    static QToolButton *g_ribabout = nullptr; g_ribabout = add_rib(5, "rib_about", "doc");
     static std::function<void()> g_openSettingsTab;   // set later to f_settings
     { const char *tic[5] = { "doc", "copy", "plus", "gear", "doc" };
       for (int t = 0; t < 5; ++t) {
@@ -814,40 +829,90 @@ int main(int argc, char **argv)
     auto f_delkey = [&]() { for (int i = pm.maps.size() - 1; i >= 0; --i) if (pm.maps[i].poskey == pk_cur) pm.maps.remove(i);
         dlg->hide(); };
     auto f_cancel = [&]() { pm.maps = g_snap; dlg_refresh(pk_cur); };
+    static QString g_last_backup;                     // bytes of the ORIGINAL copied before save
     auto f_backup = [&]() {
+        g_last_backup.clear();
         QFile rf(path);
-        if (!rf.open(QIODevice::ReadOnly)) return;
+        if (!rf.open(QIODevice::ReadOnly)) return;    // new file: nothing to back up
         const QByteArray pre = rf.readAll(); rf.close();
         std::error_code ec;
         std::filesystem::create_directories(std::filesystem::path(undoDir.toStdString()), ec);
-        const long secs = std::chrono::duration_cast<std::chrono::seconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count();
-        const QString stamp = QStringLiteral("undo-") + QString::number(secs) + '-' + QString::number(++g_undo_seq);
-        QFile wf(undoDir + QLatin1Char('/') + stamp + QStringLiteral(".pmap"));
-        if (wf.open(QIODevice::WriteOnly)) { wf.write(pre); wf.close(); }
+        // wall-clock stamp, fixed width -> lexicographic sort == chronological across boots
+        const QString stamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss-zzz"));
+        const QString bakk = undoDir + QLatin1Char('/') + stamp + QStringLiteral(".pmap");
+        const QString berr = write_atomic(bakk, pre);
+        if (berr.isEmpty()) g_last_backup = bakk;
+        // keep newest 30 backups
+        std::vector<std::string> names;
+        for (const auto &e : std::filesystem::directory_iterator(std::filesystem::path(undoDir.toStdString()), ec))
+            if (e.path().filename().string().size() >= 18) names.push_back(e.path().filename().string());
+        std::sort(names.begin(), names.end());
+        while (names.size() > 30)
+            QFile::remove(undoDir + QLatin1Char('/') + QString::fromStdString(names.front()));
     };
     auto f_save = [&]() {
         f_backup();
-        const QString txt = serialize_pmap(pm);
-        QFile f(path);
-        if (f.open(QIODevice::WriteOnly)) { f.write(txt.toUtf8()); f.close(); }
-        else { std::printf("dlg FAIL: save open %s\n", path.toUtf8().constData()); }
+        QFile rf(path);
+        if (!rf.open(QIODevice::ReadOnly)) {   // new/unreadable target: serialize + atomic
+            const QString werr = write_atomic(path, serialize_pmap(pm).toUtf8());
+            if (!werr.isEmpty()) std::printf("dlg FAIL: save %s: %s\n", path.toUtf8().constData(), werr.toUtf8().constData());
+            return;
+        }
+        const QByteArray raw = rf.readAll(); rf.close();
+        if (!path.isEmpty() && !g_last_backup.isEmpty() && !raw.isEmpty()) {
+            DomDoc d;
+            if (!dom_parse(raw, d)) {         // foreign dialect: block overwrite
+                std::printf("SAVE BLOCKED: file not in supported pmap dialect\n");
+                return;
+            }
+            if (dom_serialize(d) != raw) {    // lossless precondition
+                std::printf("SAVE BLOCKED: round trip not byte-exact, refusing\n");
+                return;
+            }
+            QString derr;
+            const QByteArray out = dom_apply_model(d, pm, derr);
+            if (!derr.isEmpty()) { std::printf("%s\n", derr.toUtf8().constData()); return; }
+            if (out == raw) return;           // nothing changed
+            const QString werr = write_atomic(path, out);
+            if (!werr.isEmpty()) { std::printf("dlg FAIL: save %s: %s\n", path.toUtf8().constData(), werr.toUtf8().constData()); return; }
+            QFile vf(path);
+            const QByteArray re = vf.open(QIODevice::ReadOnly) ? vf.readAll() : QByteArray();
+            vf.close();
+            DomDoc d2;
+            if (!dom_parse(re, d2) || dom_serialize(d2) != re) {
+                std::printf("dlg FAIL: post-save verify broken\n"); return;
+            }
+            g_undos.push_back({path, raw, re});
+            if (g_undos.size() > 50) g_undos.removeFirst();
+            return;
+        }
+        // no undo backup possible (empty/never-saved file): fall back to serialize but atomic
+        const QString werr = write_atomic(path, serialize_pmap(pm).toUtf8());
+        if (!werr.isEmpty()) std::printf("dlg FAIL: save %s: %s\n", path.toUtf8().constData(), werr.toUtf8().constData());
     };
     auto f_undo = [&]() {
+        if (!g_undos.isEmpty()) {
+            const UndoSnap last = g_undos.back();
+            g_undos.removeLast();
+            const QString e = write_atomic(path, last.pre);   // exact pre-save bytes
+            if (!e.isEmpty()) { std::printf("undo FAIL: %s\n", e.toUtf8().constData()); return; }
+            pm = parse_pmap(QString::fromLatin1(last.pre));
+            return;
+        }
         std::error_code ec;
         std::vector<std::string> names;
         for (const auto &e : std::filesystem::directory_iterator(std::filesystem::path(undoDir.toStdString()), ec))
-            if (e.path().filename().string().size() > 4) names.push_back(e.path().filename().string());
+            if (e.path().filename().string().size() >= 18) names.push_back(e.path().filename().string());
         if (names.empty()) { std::printf("undo empty\n"); return; }
         std::sort(names.begin(), names.end());
         const QString latest = undoDir + QLatin1Char('/') + QString::fromStdString(names.back());
         QFile rf(latest);
         if (!rf.open(QIODevice::ReadOnly)) { std::printf("undo read fail\n"); return; }
         const QByteArray content = rf.readAll(); rf.close();
-        QFile wf(path);
-        if (!wf.open(QIODevice::WriteOnly)) { std::printf("undo write fail\n"); return; }
-        wf.write(content); wf.close();
-        pm = parse_pmap(QString::fromUtf8(content));
+        const QString e = write_atomic(path, content);
+        if (!e.isEmpty()) { std::printf("undo write fail: %s\n", e.toUtf8().constData()); return; }
+        QFile::remove(latest);   // a second undo goes to the PREVIOUS backup
+        pm = parse_pmap(QString::fromLatin1(content));
     };
     auto f_daemon = [&]() {
         QString err;
@@ -1017,6 +1082,9 @@ int main(int argc, char **argv)
         mk_item(fmenus[1], QStringLiteral("Swap"), [&]{ f_swap(); });
         mk_item(fmenus[1], QStringLiteral("Inject key"), [&]{ f_inject_send(holdSpin->value()); });
         mk_item(fmenus[1], QStringLiteral("Reconnect"), [&]() { f_daemon(); });
+        mk_item(fmenus[1], QStringLiteral("Copy"), [&]{ if (g_ctx_copy) g_ctx_copy(); });
+        mk_item(fmenus[1], QStringLiteral("Paste"), [&]{ if (g_ctx_paste) g_ctx_paste(); });
+        mk_item(fmenus[1], QStringLiteral("Delete"), [&]{ if (g_ctx_del) g_ctx_del(); });
         mk_item(fmenus[1], QStringLiteral("Export labels (PDF)"), [&]() { f_export(); });
     }
     undoBtn->connect(undoBtn, &QPushButton::clicked, [&]() { f_undo2(); });
@@ -1064,6 +1132,25 @@ int main(int argc, char **argv)
                 QStringLiteral("PKT Mapper — Linux port (clean shell)\nDaemon: %1")
                     .arg(pathlbl->text().contains("daemon: connected") ? QStringLiteral("connected") : QStringLiteral("off")));
         });
+    }
+    auto find_action = [&fmenus](int tab, const QString &obj) -> QAction * {
+        if (!fmenus[tab]) return nullptr;
+        for (QObject *ch : fmenus[tab]->children()) {
+            QAction *aa = qobject_cast<QAction *>(ch);
+            if (aa && aa->objectName() == obj) return aa;
+        }
+        return nullptr; };
+    struct PR { const char *nm; QToolButton **tb; int tab; const char *act; } prs[] = {
+      {"open",&g_ribopen,0,"menu:Open"},{"restore2",&g_ribrestore2,0,"menu:Restore"},
+      {"templ",&g_ribtempl,0,"menu:Open template"},{"swap",&g_ribswap,1,"menu:Swap"},
+      {"pdf",&g_ribpdf,1,"menu:Export labels (PDF)"},{"copy",&g_ribcopy,1,"menu:Copy"},
+      {"paste",&g_ribpaste,1,"menu:Paste"},{"del",&g_ribdels,1,"menu:Delete"},
+      {"about",&g_ribabout,4,"menu:About"} };
+    int paired = 0;
+    for (const PR &pr : prs) {
+        QAction *aa = find_action(pr.tab, QString::fromLatin1(pr.act));
+        if (aa && *pr.tb) { (*pr.tb)->setDefaultAction(aa); ++paired; }
+        else std::printf("pair MISS %s (%s)\n", pr.nm, pr.act);
     }
 
     auto f_winprobe = [&]() {
@@ -1232,6 +1319,14 @@ int main(int argc, char **argv)
                 { bool same = (pm.maps.size() == g_snap.size());
                   for (int q = 0; q < pm.maps.size() && same; ++q) same = (pm.maps[q].poskey == g_snap[q].poskey && pm.maps[q].layers.size() == g_snap[q].layers.size());
                   if (!same) { std::printf("clicktest FAIL: cancel not restoring\n"); ++gfail; } }
+                { QFile pre(path); const QByteArray pb = pre.open(QIODevice::ReadOnly) ? pre.readAll() : QByteArray(); pre.close();
+                  auto cnt = [pb](const QString &tag) { int c = 0; int pos = 0; while ((pos = QString(pb).indexOf(tag, pos)) >= 0) { ++c; pos += tag.size(); } return c; };
+                  const int keysBefore = cnt("<Key>"), msrBefore = cnt("<MSR>"), ocrBefore = cnt("<OCR>");
+                  f_save();
+                  QFile post(path); const QByteArray ab = post.open(QIODevice::ReadOnly) ? post.readAll() : QByteArray(); post.close();
+                  auto cnt2 = [ab](const QString &tag) { int c = 0; int pos = 0; while ((pos = QString(ab).indexOf(tag, pos)) >= 0) { ++c; pos += tag.size(); } return c; };
+                  if (cnt2("<Key>") != keysBefore || cnt2("<MSR>") != msrBefore || cnt2("<OCR>") != ocrBefore) {
+                      std::printf("clicktest FAIL: lossless markers changed (unmodeled tags lost)\n"); ++gfail; } }
                 f_save();
                 { QFile vf(path);
                   if (!vf.open(QIODevice::ReadOnly)) { std::printf("clicktest FAIL: saved file unreadable\n"); ++gfail; }
@@ -1424,6 +1519,7 @@ int main(int argc, char **argv)
             f_newfile();
             { const bool empty = pm.maps.isEmpty() && g_geom.isEmpty();
               if (!empty) { std::printf("clicktest FAIL: new file not empty\n"); ++gfail; } }
+            if (paired != 9) { std::printf("clicktest FAIL: ribbon actions not paired (%d/9)\n", paired); ++gfail; }
             std::printf("dlg gate done\n");
         }
     }
