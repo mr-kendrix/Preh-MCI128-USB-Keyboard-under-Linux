@@ -503,6 +503,7 @@ int main(int argc, char **argv)
     QSpinBox *webTo = new QSpinBox(dlg); webTo->setObjectName("webTo"); webTo->setMinimum(1); webTo->setMaximum(120);
     QLineEdit *webPars = new QLineEdit(dlg); webPars->setObjectName("webPars");
     QComboBox *browserPick = new QComboBox(dlg); browserPick->setObjectName("browserPick");
+    QLabel *previewLbl = new QLabel(dlg); previewLbl->setObjectName("previewLbl");
     for (const QString &b : {QStringLiteral("Default browser"), QStringLiteral("Firefox"), QStringLiteral("Chrome"),
                               QStringLiteral("Opera"), QStringLiteral("Edge"), QStringLiteral("Safari")})
         browserPick->addItem(b);
@@ -512,6 +513,7 @@ int main(int argc, char **argv)
     dlv->addWidget(fnNone); dlv->addWidget(fnText); dlv->addWidget(fnApp); dlv->addWidget(fnWeb);
     dlv->addWidget(appPath); dlv->addWidget(appPars); dlv->addWidget(appShort);
     dlv->addWidget(webLink); dlv->addWidget(webTo); dlv->addWidget(webPars); dlv->addWidget(browserPick);
+    dlv->addWidget(previewLbl);
     dlv->addWidget(delKeyBtn); dlv->addWidget(cancelBtn); dlv->addWidget(saveBtn); dlv->addWidget(undoBtn);
     dlv->addWidget(spinl);
 
@@ -657,7 +659,14 @@ int main(int argc, char **argv)
         }
         dlg_refresh(pk_cur);
     };
-    auto f_settype = [&](const QString &t) { g_newtype = t; };
+    auto f_preview = [&]() {
+        for (const Map &m2 : pm.maps) if (m2.poskey == pk_cur) {
+            previewLbl->setText(pktm::preview_map(m2, spinl->value()));
+            return;
+        }
+        previewLbl->setText(QStringLiteral("EMPTY (no layer)"));
+    };
+        auto f_settype = [&](const QString &t) { g_newtype = t; };
     auto f_applytype = [&]() { const int i = (g_row_hint >= 0 ? g_row_hint : layerW->currentRow());
         for (Map &mm : pm.maps) if (mm.poskey == pk_cur && i >= 0 && i < mm.layers.size()) { mm.layers[i].type = g_newtype; break; }
         dlg_refresh(pk_cur);
@@ -1056,6 +1065,10 @@ int main(int argc, char **argv)
                     browserPick->setCurrentIndex(1);
                     if (browserPick->currentText() != QStringLiteral("Firefox")) { std::printf("clicktest FAIL: browser pick wrong\n"); ++gfail; }
                     browserPick->setCurrentIndex(0);
+                    f_preview();
+                    { const QString pv = previewLbl->text();
+                      if (pv.startsWith("EMPTY") || pv.isEmpty()) { std::printf("clicktest FAIL: preview empty\n"); ++gfail; }
+                      if (!pv.contains("down")) { std::printf("clicktest FAIL: preview not a key sequence\n"); ++gfail; } }
                     { bool ok = false;
                       for (const Map &mm : pm.maps) if (mm.poskey == pk && fi < mm.layers.size()) { ok = (mm.layers[fi].btf == QStringLiteral("false")); break; }
                       if (!ok) { std::printf("clicktest FAIL: btf clear not applied\n"); ++gfail; } }
