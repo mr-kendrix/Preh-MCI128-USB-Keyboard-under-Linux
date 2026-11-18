@@ -1318,6 +1318,12 @@ int main(int argc, char **argv)
                 ok1 = all.contains("autodetect=0"); ok2 = all.contains("startauto=0"); }
               if (!ok1 || !ok2) { std::printf("clicktest FAIL: settings not persisted\n"); ++gfail; } }
             cbDetect->setChecked(true); cbStart->setChecked(true);
+            f_export();
+            { bool calOk = false;
+              QFile cf(path + QStringLiteral(".cut.pdf"));
+              const double pt17 = pdfx::unit_mm(17000) * 72.0 / 25.4;
+              calOk = qAbs(pt17 - 48.19) < 0.1;
+              if (!calOk) { std::printf("clicktest FAIL: cut sheet not calibrated (17 mm key != 48.2 pt)\n"); ++gfail; } }
             f_newfile();
             { const bool empty = pm.maps.isEmpty() && g_geom.isEmpty();
               if (!empty) { std::printf("clicktest FAIL: new file not empty\n"); ++gfail; } }

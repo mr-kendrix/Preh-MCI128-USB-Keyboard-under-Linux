@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 namespace pdfx {
+double unit_mm(double units) { return units / 1000.0; }
 // Vendor-style label sheet: cut-out cells sorted by key size, tiled on A4 pages
 QByteArray make_cut_sheet(const QHash<int, QString> &texts,
                                  const QHash<int, QString> &fonts)
@@ -36,7 +37,8 @@ QByteArray make_cut_sheet(const QHash<int, QString> &texts,
     auto flushPage = [&]() { pagesStreams << body.toLatin1(); body.clear(); cx = m; cy = m; rowH = 0; };
     for (int pk : keys) {
         const KeyGeom &k = g_geom.value(pk);
-        const double kw = qMax(24.0, k.w * 0.0022), kh = qMax(12.0, k.h * 0.0022); // board units (17000 = ~17 mm) -> pt
+        const double mmw = k.w / 1000.0, mmh = k.h / 1000.0;          // board units = 1/1000 mm (pitch 19000 = 19 mm = real PK pitch)
+        const double kw = qMax(12.0, mmw * 72.0 / 25.4), kh = qMax(8.0, mmh * 72.0 / 25.4);
         QString lbl = k.text;
         if (lbl.isEmpty()) lbl = texts.value(pk);
         if (lbl.isEmpty()) lbl = QStringLiteral("%1").arg(pk);
