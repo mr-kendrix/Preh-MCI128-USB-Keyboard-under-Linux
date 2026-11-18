@@ -191,6 +191,7 @@ public:
             const Fit f = fit_label(lab, c.rc.width(), c.rc.height(), 12.0);
             if (f.lines.isEmpty()) continue;
             pt.setPen(QColor(0x1f, 0x1f, 0x1f));
+            { QFont fo = pt.font(); fo.setPixelSize(qMax<int>(5, int(f.pt))); pt.setFont(fo); }
             const double lhh = f.pt * 1.2;
             double y = c.rc.y() + (c.rc.height() - f.lines.size() * lhh) / 2.0 + f.pt;
             for (const QString &ln : f.lines) {
