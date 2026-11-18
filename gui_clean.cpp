@@ -15,6 +15,8 @@
 #include <vector>
 #include <ctime>
 #include <chrono>
+#include <QAction>
+#include <functional>
 #include <QFile>
 #include <QHash>
 #include <QIcon>
@@ -244,8 +246,9 @@ int main(int argc, char **argv)
     QMenuBar *menu = new QMenuBar(&win);
     menu->setObjectName("menu");
     const char *caps[5] = {"File", "Edit", "Modules", "Settings", "Help"};
+    QMenu *fmenus[5] = { nullptr };
     for (int t = 0; t < 5; ++t)
-        menu->addMenu(QString::fromLatin1(caps[t]));
+        fmenus[t] = menu->addMenu(QString::fromLatin1(caps[t]));
     vwin->insertWidget(0, menu);
 
     QWidget *accent = new QWidget(&win);
@@ -432,6 +435,17 @@ int main(int argc, char **argv)
     dlv->addWidget(webLink); dlv->addWidget(webTo); dlv->addWidget(webPars);
     dlv->addWidget(delKeyBtn); dlv->addWidget(cancelBtn); dlv->addWidget(saveBtn); dlv->addWidget(undoBtn);
     dlv->addWidget(spinl);
+
+    // ---- Restore dialog: timestamped backups (vendor Restore folder list) ----
+    QWidget *rdlg = new QWidget(&win);
+    rdlg->setObjectName("rdlg");
+    rdlg->hide();
+    QVBoxLayout *rlv = new QVBoxLayout(rdlg);
+    QLabel *rHdr = new QLabel(rdlg); rHdr->setObjectName("rHdr");
+    QListWidget *rList = new QListWidget(rdlg); rList->setObjectName("rList");
+    static QStringList g_backups;                // names newest-first
+    QPushButton *rPick = new QPushButton(rdlg); rPick->setObjectName("rPick");
+    rlv->addWidget(rHdr); rlv->addWidget(rList); rlv->addWidget(rPick);
 
     QWidget *knewdlg = new QWidget(&win);
     knewdlg->setObjectName("knewdlg");
@@ -620,7 +634,49 @@ int main(int argc, char **argv)
         pm = parse_pmap(QString::fromUtf8(content));
     };
     auto f_app_applytype = [&]() { f_applytype(); };
+    auto f_refresh_backups = [&]() {
+        rList->clear();
+        std::error_code ec;
+        std::vector<std::string> names;
+        for (const auto &e : std::filesystem::directory_iterator(std::filesystem::path(undoDir.toStdString()), ec))
+            names.push_back(e.path().filename().string());
+        std::sort(names.begin(), names.end(), std::greater<std::string>());
+        g_backups.clear();
+        for (const auto &n : names) { g_backups << QString::fromStdString(n); rList->addItem(QString::fromStdString(n)); }
+        rHdr->setText(QStringLiteral("Restore (%1):").arg(rList->count()));
+    };
+    auto f_restore = [&]() {
+        const int i = rList->currentRow();
+        if (i < 0 || i >= g_backups.size()) return;
+        const QString latest = g_backups[i];
+        QFile rf(undoDir + QLatin1Char('/') + latest);
+        if (!rf.open(QIODevice::ReadOnly)) { std::printf("restore read fail\n"); return; }
+        const QByteArray content = rf.readAll(); rf.close();
+        QFile wf(path);
+        if (!wf.open(QIODevice::WriteOnly)) { std::printf("restore write fail\n"); return; }
+        wf.write(content); wf.close();
+        pm = parse_pmap(QString::fromUtf8(content));
+    };
+    rPick->connect(rPick, &QPushButton::clicked, [&]() { f_restore(); });
+    auto f_openrestore = [&]() {
+        f_refresh_backups();
+        rdlg->setGeometry(QRect(6, 6, qMin(420, win.width() - 12), 300));
+        rdlg->show();
+    };
+    auto f_close_restore = [&]() { rdlg->hide(); };
     auto f_undo2 = [&]() { f_undo(); };
+    auto mk_item = [&](QMenu *mnu, const QString &txt, const std::function<void()> &fn) {
+        QAction *a = new QAction(txt, mnu);
+        a->setObjectName(QStringLiteral("menu:") + txt);
+        QObject::connect(a, &QAction::triggered, [fn]{ if (fn) fn(); });
+    };
+    if (fmenus[0]) {
+        mk_item(fmenus[0], QStringLiteral("Restore"), [&]{ f_openrestore(); });
+        mk_item(fmenus[0], QStringLiteral("Close"), [&]{ if (dlg) dlg->hide(); });
+    }
+    if (fmenus[1]) {
+        mk_item(fmenus[1], QStringLiteral("Undo"), [&]{ f_undo2(); });
+    }
     undoBtn->connect(undoBtn, &QPushButton::clicked, [&]() { f_undo2(); });
     delKeyBtn->connect(delKeyBtn, &QPushButton::clicked, [&]() { f_delkey(); });
     cancelBtn->connect(cancelBtn, &QPushButton::clicked, [&]() { f_cancel(); });
@@ -835,6 +891,17 @@ int main(int argc, char **argv)
                 }
                 }
             }
+                f_openrestore();
+                if (rdlg->isHidden()) { std::printf("clicktest FAIL: restore dlg not shown\n"); ++gfail; }
+                if (rList->count() < 2) { std::printf("clicktest FAIL: restore list < 2\n"); ++gfail; }
+                rList->setCurrentRow(0);
+                f_restore();
+                { const QString newest = g_backups.isEmpty() ? QString() : g_backups[0];
+                  QFile bf(undoDir + QLatin1Char('/') + newest);
+                  QByteArray want; if (bf.open(QIODevice::ReadOnly)) { want = bf.readAll(); bf.close(); }
+                  QFile tf(path); QByteArray now; if (tf.open(QIODevice::ReadOnly)) { now = tf.readAll(); tf.close(); }
+                  if (want != now) { std::printf("clicktest FAIL: restore content mismatch\n"); ++gfail; } }
+                f_close_restore();
             f_winprobe();
             if (winW->count() < 1) { std::printf("clicktest FAIL: window list empty\n"); ++gfail; }
             {   // process selection recolors tiles
