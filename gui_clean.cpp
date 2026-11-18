@@ -502,12 +502,16 @@ int main(int argc, char **argv)
     QLineEdit *webLink = new QLineEdit(dlg); webLink->setObjectName("webLink");
     QSpinBox *webTo = new QSpinBox(dlg); webTo->setObjectName("webTo"); webTo->setMinimum(1); webTo->setMaximum(120);
     QLineEdit *webPars = new QLineEdit(dlg); webPars->setObjectName("webPars");
+    QComboBox *browserPick = new QComboBox(dlg); browserPick->setObjectName("browserPick");
+    for (const QString &b : {QStringLiteral("Default browser"), QStringLiteral("Firefox"), QStringLiteral("Chrome"),
+                              QStringLiteral("Opera"), QStringLiteral("Edge"), QStringLiteral("Safari")})
+        browserPick->addItem(b);
     dlv->addWidget(appearLbl);
     dlv->addWidget(capFld); dlv->addWidget(forePick); dlv->addWidget(backPick);
     dlv->addWidget(btfFld); dlv->addWidget(repFld); dlv->addWidget(slwFld);
     dlv->addWidget(fnNone); dlv->addWidget(fnText); dlv->addWidget(fnApp); dlv->addWidget(fnWeb);
     dlv->addWidget(appPath); dlv->addWidget(appPars); dlv->addWidget(appShort);
-    dlv->addWidget(webLink); dlv->addWidget(webTo); dlv->addWidget(webPars);
+    dlv->addWidget(webLink); dlv->addWidget(webTo); dlv->addWidget(webPars); dlv->addWidget(browserPick);
     dlv->addWidget(delKeyBtn); dlv->addWidget(cancelBtn); dlv->addWidget(saveBtn); dlv->addWidget(undoBtn);
     dlv->addWidget(spinl);
 
@@ -715,15 +719,18 @@ int main(int argc, char **argv)
         pktipc::send_line(fd, pktipc::mk_reload_req(), err);
         int rules = -1;
         pktipc::LineBuf in;
+        bool any = false;
         for (int k = 0; k < 24 && rules < 0; ++k) {
             QString line;
             if (pktipc::recv_line(fd, in, line, err)) {
+                any = true;
                 pktipc::Msg m; QString why;
                 if (pktipc::parse_line(line, m, why) && m.t == QLatin1String("reload"))
                     rules = m.o.value("rules").toInteger();
             } else usleep(40000);
         }
         ::close(fd);
+        if (!any) { pathlbl->setText(path + QStringLiteral(" — daemon: off (stale)")); return; }
         pathlbl->setText(rules >= 0 ? path + QStringLiteral(" — daemon: connected (%1 rules)").arg(rules)
                                     : path + QStringLiteral(" — daemon: connected"));
     };
@@ -1037,6 +1044,9 @@ int main(int argc, char **argv)
                           linkIn = all.contains(to_hex_cp1252(want)); }
                       if (!linkIn) { std::printf("clicktest FAIL: link not serialized\n"); ++gfail; }
                     }
+                    browserPick->setCurrentIndex(1);
+                    if (browserPick->currentText() != QStringLiteral("Firefox")) { std::printf("clicktest FAIL: browser pick wrong\n"); ++gfail; }
+                    browserPick->setCurrentIndex(0);
                     { bool ok = false;
                       for (const Map &mm : pm.maps) if (mm.poskey == pk && fi < mm.layers.size()) { ok = (mm.layers[fi].btf == QStringLiteral("false")); break; }
                       if (!ok) { std::printf("clicktest FAIL: btf clear not applied\n"); ++gfail; } }
