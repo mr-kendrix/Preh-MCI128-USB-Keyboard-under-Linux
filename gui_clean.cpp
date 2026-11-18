@@ -6,6 +6,7 @@
 // reachable via --legacy-gui until it can be deleted.
 #include <QApplication>
 #include <QChar>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QFile>
 #include <QHash>
@@ -328,6 +329,29 @@ int main(int argc, char **argv)
     sbar->addWidget(zout); sbar->addWidget(zoomlbl); sbar->addWidget(zin); sbar->addWidget(pathlbl);
     vwin->addWidget(statusbar);
 
+    // ---- Settings tab content (vendor §2): 4 checkboxes + date format + language ----
+    struct St { bool autodetect = true, startauto = true, minauto = true, openlast = true;
+                QString datefmt = QStringLiteral("DD.MM.YYYY"); int lang = 1; } st;
+    QWidget *setdlg = new QWidget(&win);
+    setdlg->setObjectName("setdlg");
+    setdlg->hide();
+    QVBoxLayout *setlay = new QVBoxLayout(setdlg);
+    QLabel *setHdr = new QLabel(QStringLiteral("Settings"), setdlg);
+    QCheckBox *cbDetect = new QCheckBox(setdlg); cbDetect->setObjectName("cbDetect");
+    QCheckBox *cbStart  = new QCheckBox(setdlg); cbStart->setObjectName("cbStart");
+    QCheckBox *cbMin    = new QCheckBox(setdlg); cbMin->setObjectName("cbMin");
+    QCheckBox *cbOpen   = new QCheckBox(setdlg); cbOpen->setObjectName("cbOpen");
+    QLabel *dateLbl = new QLabel(setdlg); dateLbl->setObjectName("dateLbl");
+    QComboBox *dateCombo = new QComboBox(setdlg); dateCombo->setObjectName("dateCombo");
+    dateCombo->addItems({QStringLiteral("DD.MM.YYYY"), QStringLiteral("MM/DD/YYYY"), QStringLiteral("YYYY-MM-DD")});
+    QRadioButton *langDe = new QRadioButton(QStringLiteral("Deutsch"), setdlg);
+    QRadioButton *langEn = new QRadioButton(QStringLiteral("English"), setdlg);
+    setlay->addWidget(setHdr);
+    setlay->addWidget(cbDetect); setlay->addWidget(cbStart); setlay->addWidget(cbMin); setlay->addWidget(cbOpen);
+    setlay->addWidget(dateLbl); setlay->addWidget(dateCombo);
+    setlay->addWidget(langDe); setlay->addWidget(langEn);
+    dateLbl->setText(QStringLiteral("Date format: %1").arg(st.datefmt));
+
     // ---- dialogs (overlays, not part of the main window layout) ----
     QWidget *dlg = new QWidget(&win);
     dlg->setObjectName("dlg");
@@ -424,6 +448,18 @@ int main(int argc, char **argv)
         dlg_refresh(pk);
     };
     knNext->connect(knNext, &QPushButton::clicked, [&]() { f_knnext(); });
+    auto f_settings = [&]() {
+        st.datefmt = dateCombo->currentText();
+        st.lang = langEn->isChecked() ? 0 : 1;
+        dateLbl->setText(QStringLiteral("Date format: %1").arg(st.datefmt));
+        setdlg->setGeometry(QRect(6, 6, qMin(420, win.width() - 12), 320));
+        setdlg->show();
+    };
+    for (QObject *ch : ribgrp[3]->children()) {
+        QToolButton *b = qobject_cast<QToolButton *>(ch);
+        if (b && b->objectName() == QStringLiteral("rib_settings"))
+            b->connect(b, &QToolButton::clicked, [&]() { f_settings(); });
+    }
 
     auto f_winprobe = [&]() {
         winW->clear();
@@ -480,6 +516,7 @@ int main(int argc, char **argv)
         for (const Sh &sh : shs) {
             win.resize(sh.w, sh.h);
             setmin();
+            if (getenv("PKT_SHOW_SETTINGS")) { setdlg->setGeometry(QRect(6, 6, qMin(420, sh.w - 12), 320)); setdlg->show(); }
             const QPixmap img = win.grab();
             if (!img.isNull() && img.save(sh.f)) std::printf("shot ok %s\n", sh.f);
         }
@@ -504,6 +541,12 @@ int main(int argc, char **argv)
             if (!renbtn->isHidden() || !delbtn->isHidden()) { std::printf("clicktest FAIL: Always guard broken\n"); ++gfail; }
             f_winprobe();
             if (winW->count() < 1) { std::printf("clicktest FAIL: window list empty\n"); ++gfail; }
+            st.datefmt = QStringLiteral("YYYY-MM-DD");
+            dateCombo->setCurrentIndex(2);
+            f_settings();
+            if (setdlg->isHidden()) { std::printf("clicktest FAIL: settings dialog not shown\n"); ++gfail; }
+            if (dateLbl->text() != QStringLiteral("Date format: YYYY-MM-DD")) { std::printf("clicktest FAIL: date format not applied\n"); ++gfail; }
+            setdlg->hide();
             std::printf("dlg gate done\n");
         }
     }
