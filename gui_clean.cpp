@@ -127,6 +127,7 @@ static QString processName(int pid)
 struct CellRC { int poskey = 0; QRect rc; };
 static const Pmap *g_pm = nullptr;     // live model for tile coloring
 static int g_ctx_pk = -1;              // right-clicked poskey
+static QSet<int> g_pressed;                 // poskeys with a pending daemon press
 static int g_ctx_count = 0;            // right-click counter (gate)
 static QMenu *g_ctx_menu = nullptr;    // context menu
 static QVector<Layer> g_clip;          // clipboard for context copy/paste
@@ -190,6 +191,7 @@ public:
             pt.setBrush(brush);
             pt.setPen(QColor(0x3c, 0x3f, 0x45));
             pt.drawRoundedRect(c.rc, 2, 2);
+            if (g_pressed.contains(c.poskey)) { pt.setBrush(QColor(0,0,0,0)); pt.setPen(QPen(QColor(0xc0,0x20,0x20), 2)); pt.drawRoundedRect(QRect(c.rc.x() + 3, c.rc.y() + 3, c.rc.width() - 6, c.rc.height() - 6), 2, 2); }
             const QString lab = g_labels.value(c.poskey);
             if (lab.isEmpty()) continue;
             const Fit f = fit_label(lab, c.rc.width(), c.rc.height(), 12.0);
@@ -839,10 +841,25 @@ int main(int argc, char **argv)
                     rules = m.o.value("rules").toInteger();
             } else usleep(40000);
         }
+        // drain burst after the reload ack: press + inject status lines update physical key state
+        g_pressed.clear();
+        for (int k = 0; k < 8; ++k) {
+            QString line2;
+            if (!pktipc::recv_line(fd, in, line2, err)) break;
+            pktipc::Msg m2; QString why2;
+            if (pktipc::parse_line(line2, m2, why2) && m2.t == QLatin1String("press")) {
+                const int pk2 = m2.o.value("poskey").toInteger();
+                const bool d2 = m2.o.value("down").toBool();
+                if (d2) g_pressed.insert(pk2); else g_pressed.remove(pk2);
+            }
+        }
         ::close(fd);
         if (!any) { pathlbl->setText(path + QStringLiteral(" — daemon: off (stale)")); return; }
-        pathlbl->setText(rules >= 0 ? path + QStringLiteral(" — daemon: connected (%1 rules)").arg(rules)
-                                    : path + QStringLiteral(" — daemon: connected"));
+        QString dtxt;
+        if (!g_pressed.isEmpty()) { QStringList q; for (int pk2 : g_pressed) q << QString::number(pk2);
+            dtxt = QStringLiteral(" | pressed: %1").arg(q.join(',')); }
+        pathlbl->setText((rules >= 0 ? path + QStringLiteral(" — daemon: connected (%1 rules)").arg(rules)
+                                    : path + QStringLiteral(" — daemon: connected")) + dtxt);
     };
     f_daemon();
     auto f_app_applytype = [&]() { f_applytype(); };
@@ -1306,6 +1323,7 @@ int main(int argc, char **argv)
               std::system("b2/fakekd >/tmp/fkd2.log 2>&1 & sleep 0.6");
               f_daemon();
               if (!pathlbl->text().contains("3 rules")) { std::printf("clicktest FAIL: reconnect failed\n"); ++gfail; }
+              if (!pathlbl->text().contains("pressed")) { std::printf("clicktest FAIL: press burst not drained\n"); ++gfail; }
               if (!f_push_reload()) { std::printf("clicktest FAIL: reload not delivered\n"); ++gfail; }
               std::system("(b2/fakekd >> /tmp/fkd2.log 2>&1 &) ; sleep 0.5");   // fresh daemon: old one idle-exits after 3 s
               f_daemon();
