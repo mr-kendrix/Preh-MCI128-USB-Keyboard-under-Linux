@@ -10,6 +10,7 @@
 #include <QDialog>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QTextEdit>
 #include <QDateTime>
 #include <filesystem>
 #include <QDir>
@@ -558,6 +559,7 @@ int main(int argc, char **argv)
         macroPick->addItem(QLatin1String(t));
     QListWidget *macroSlots = new QListWidget(dlg); macroSlots->setObjectName("macroSlots");
     QLabel *previewLbl = new QLabel(dlg); previewLbl->setObjectName("previewLbl");
+    QTextEdit *previewBox = new QTextEdit(dlg); previewBox->setObjectName("previewBox");
     for (const QString &b : {QStringLiteral("Default browser"), QStringLiteral("Firefox"), QStringLiteral("Chrome"),
                               QStringLiteral("Opera"), QStringLiteral("Edge"), QStringLiteral("Safari")})
         browserPick->addItem(b);
@@ -573,6 +575,7 @@ int main(int argc, char **argv)
     dlv->addWidget(macroPick);
     dlv->addWidget(macroSlots);
     dlv->addWidget(previewLbl);
+    dlv->addWidget(previewBox);
     dlv->addWidget(delKeyBtn); dlv->addWidget(cancelBtn); dlv->addWidget(saveBtn); dlv->addWidget(undoBtn);
     dlv->addWidget(spinl);
 
@@ -755,10 +758,14 @@ int main(int argc, char **argv)
         };
         auto f_preview = [&]() {
         for (const Map &m2 : pm.maps) if (m2.poskey == pk_cur) {
-            previewLbl->setText(pktm::preview_map(m2, spinl->value()));
+            const QString pv1 = pktm::preview_map(m2, spinl->value());
+            previewLbl->setText(pv1);
+            previewBox->setPlainText(pv1);
+            
             return;
         }
         previewLbl->setText(QStringLiteral("EMPTY (no layer)"));
+        previewBox->setPlainText(QStringLiteral("EMPTY (no layer)"));
     };
         auto f_settype = [&](const QString &t) { g_newtype = t; };
     auto f_applytype = [&]() { const int i = (g_row_hint >= 0 ? g_row_hint : layerW->currentRow());
@@ -1238,7 +1245,8 @@ int main(int argc, char **argv)
                     macroPick->setCurrentIndex(2);  f_addmacro();   // slot: N2  -> value {UP}{N2}
                     f_preview();
                     { const QString pv3 = previewLbl->text();
-                      if (pv3.contains("REJECTED") || pv3.count("down") < 2) { std::printf("clicktest FAIL: two-slot macro not expanded\n"); ++gfail; } }
+                      const QString bx = previewBox->toPlainText();
+                      if (pv3.contains("REJECTED") || pv3.count("down") < 2 || !bx.contains("TYPES")) { std::printf("clicktest FAIL: two-slot macro not expanded\n"); ++gfail; } }
                     g_macro.clear(); macroSlots->clear();
                     { bool ok = false;
                       for (const Map &mm : pm.maps) if (mm.poskey == pk && fi < mm.layers.size()) { ok = (mm.layers[fi].btf == QStringLiteral("false")); break; }
