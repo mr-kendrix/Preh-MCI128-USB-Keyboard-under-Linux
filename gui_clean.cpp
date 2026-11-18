@@ -550,6 +550,7 @@ int main(int argc, char **argv)
     for (const char *t : {"N0","N1","N2","N3","N4","N5","N6","N7","N8","N9","BS","DEL","ESC","TAB","SPACE","ENTER",
                           "UP","DOWN","LEFT","RIGHT","PGUP","PGDN","SHIFT","CTRL","ALT","CAPS","NUMLOCK","SCROLL-LOCK"})
         macroPick->addItem(QLatin1String(t));
+    QListWidget *macroSlots = new QListWidget(dlg); macroSlots->setObjectName("macroSlots");
     QLabel *previewLbl = new QLabel(dlg); previewLbl->setObjectName("previewLbl");
     for (const QString &b : {QStringLiteral("Default browser"), QStringLiteral("Firefox"), QStringLiteral("Chrome"),
                               QStringLiteral("Opera"), QStringLiteral("Edge"), QStringLiteral("Safari")})
@@ -564,6 +565,7 @@ int main(int argc, char **argv)
     dlv->addWidget(appPath); dlv->addWidget(appPars); dlv->addWidget(appShort);
     dlv->addWidget(webLink); dlv->addWidget(webTo); dlv->addWidget(webPars); dlv->addWidget(browserPick);
     dlv->addWidget(macroPick);
+    dlv->addWidget(macroSlots);
     dlv->addWidget(previewLbl);
     dlv->addWidget(delKeyBtn); dlv->addWidget(cancelBtn); dlv->addWidget(saveBtn); dlv->addWidget(undoBtn);
     dlv->addWidget(spinl);
@@ -736,6 +738,15 @@ int main(int argc, char **argv)
         }
         dlg_refresh(pk_cur);
     };
+        static QStringList g_macro;                  // macro slot tokens (max 16)
+        auto f_addmacro = [&]() { if (g_macro.size() >= 16) return;
+            g_macro << macroPick->currentText();
+            QString v; for (const QString &t : g_macro) v += QLatin1Char('{') + t + QLatin1Char('}');
+            const int i = (g_row_hint >= 0 ? g_row_hint : layerW->currentRow());
+            if (pk_cur >= 0 && i >= 0) for (Map &mm : pm.maps) if (mm.poskey == pk_cur && i < mm.layers.size()) { mm.layers[i].value = v; break; }
+            macroSlots->clear(); macroSlots->addItems(g_macro);
+            dlg_refresh(pk_cur);
+        };
         auto f_preview = [&]() {
         for (const Map &m2 : pm.maps) if (m2.poskey == pk_cur) {
             previewLbl->setText(pktm::preview_map(m2, spinl->value()));
@@ -1210,6 +1221,13 @@ int main(int argc, char **argv)
                     f_preview();
                     { const QString pv2 = previewLbl->text();
                       if (!pv2.contains("down") || pv2.contains("REJECTED")) { std::printf("clicktest FAIL: macro preview invalid\n"); ++gfail; } }
+                    g_macro.clear(); macroSlots->clear();
+                    macroPick->setCurrentIndex(16); f_addmacro();   // slot: UP
+                    macroPick->setCurrentIndex(2);  f_addmacro();   // slot: N2  -> value {UP}{N2}
+                    f_preview();
+                    { const QString pv3 = previewLbl->text();
+                      if (pv3.contains("REJECTED") || pv3.count("down") < 2) { std::printf("clicktest FAIL: two-slot macro not expanded\n"); ++gfail; } }
+                    g_macro.clear(); macroSlots->clear();
                     { bool ok = false;
                       for (const Map &mm : pm.maps) if (mm.poskey == pk && fi < mm.layers.size()) { ok = (mm.layers[fi].btf == QStringLiteral("false")); break; }
                       if (!ok) { std::printf("clicktest FAIL: btf clear not applied\n"); ++gfail; } }
