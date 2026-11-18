@@ -562,6 +562,8 @@ int main(int argc, char **argv)
     QListWidget *macroSlots = new QListWidget(dlg); macroSlots->setObjectName("macroSlots");
     QLabel *previewLbl = new QLabel(dlg); previewLbl->setObjectName("previewLbl");
     QTextEdit *previewBox = new QTextEdit(dlg); previewBox->setObjectName("previewBox");
+    QSpinBox *holdSpin = new QSpinBox(dlg); holdSpin->setObjectName("holdSpin");
+    holdSpin->setMinimum(100); holdSpin->setMaximum(200); holdSpin->setValue(120); holdSpin->setSuffix(" ms");
     for (const QString &b : {QStringLiteral("Default browser"), QStringLiteral("Firefox"), QStringLiteral("Chrome"),
                               QStringLiteral("Opera"), QStringLiteral("Edge"), QStringLiteral("Safari")})
         browserPick->addItem(b);
@@ -570,13 +572,13 @@ int main(int argc, char **argv)
     dlv->addWidget(appearLbl);
     dlv->addWidget(capFld); dlv->addWidget(foreLbl); dlv->addWidget(forePick); dlv->addWidget(backLbl); dlv->addWidget(backPick);
     dlv->addWidget(fontBtn); dlv->addWidget(fontSz);
+    dlv->addWidget(previewLbl); dlv->addWidget(holdSpin);
     dlv->addWidget(btfFld); dlv->addWidget(repFld); dlv->addWidget(slwFld);
     dlv->addWidget(fnNone); dlv->addWidget(fnText); dlv->addWidget(fnApp); dlv->addWidget(fnWeb);
     dlv->addWidget(appPath); dlv->addWidget(appPars); dlv->addWidget(appShort);
     dlv->addWidget(webLink); dlv->addWidget(webTo); dlv->addWidget(webPars); dlv->addWidget(browserPick);
     dlv->addWidget(macroPick);
     dlv->addWidget(macroSlots);
-    dlv->addWidget(previewLbl);
     dlv->addWidget(previewBox);
     dlv->addWidget(delKeyBtn); dlv->addWidget(cancelBtn); dlv->addWidget(saveBtn); dlv->addWidget(undoBtn);
     dlv->addWidget(spinl);
@@ -946,6 +948,12 @@ int main(int argc, char **argv)
         ::close(fd);
         return ok;
     };
+    auto f_inject_send = [&](int ms) {
+        QString err; const int fd = pktipc::try_connect_nb(err);
+        if (fd < 0) return;
+        pktipc::send_line(fd, pktipc::mk_inject(pk_cur >= 0 ? pk_cur : 1, QStringLiteral("click"), QStringLiteral("K1"), ms), err);
+        ::close(fd);
+    };
     if (fmenus[0]) {
         mk_item(fmenus[0], QStringLiteral("Restore"), [&]{ f_openrestore(); });
         mk_item(fmenus[0], QStringLiteral("Open template"), [&]{ if (!g_template.isEmpty()) do_open_file(g_template); });
@@ -984,12 +992,7 @@ int main(int argc, char **argv)
     if (fmenus[1]) {
         mk_item(fmenus[1], QStringLiteral("Undo"), [&]{ f_undo2(); });
         mk_item(fmenus[1], QStringLiteral("Swap"), [&]{ f_swap(); });
-        mk_item(fmenus[1], QStringLiteral("Inject key"), [&]{
-            QString err; const int fd = pktipc::try_connect_nb(err);
-            if (fd < 0) return;
-            pktipc::send_line(fd, pktipc::mk_inject(pk_cur >= 0 ? pk_cur : 1, QStringLiteral("click"), QStringLiteral("K1"), 0), err);
-            ::close(fd);
-        });
+        mk_item(fmenus[1], QStringLiteral("Inject key"), [&]{ f_inject_send(holdSpin->value()); });
         mk_item(fmenus[1], QStringLiteral("Reconnect"), [&]() { f_daemon(); });
         mk_item(fmenus[1], QStringLiteral("Export labels (PDF)"), [&]() { f_export(); });
     }
@@ -1326,15 +1329,16 @@ int main(int argc, char **argv)
               if (!pathlbl->text().contains("pressed")) { std::printf("clicktest FAIL: press burst not drained\n"); ++gfail; }
               if (!f_push_reload()) { std::printf("clicktest FAIL: reload not delivered\n"); ++gfail; }
               std::system("(b2/fakekd >> /tmp/fkd2.log 2>&1 &) ; sleep 0.5");   // fresh daemon: old one idle-exits after 3 s
-              f_daemon();
-              { QString err; const int fd = pktipc::try_connect_nb(err);
-                if (fd < 0) { std::printf("clicktest FAIL: no daemon for inject\n"); ++gfail; }
-                else { pktipc::send_line(fd, pktipc::mk_inject(1, QStringLiteral("click"), QStringLiteral("K1"), 0), err); ::close(fd); } }
-              std::system("sleep 0.3; grep -c inject /tmp/fkd2.log >/dev/null 2>&1 && echo OK >/dev/null");
+              holdSpin->setValue(175);
+              f_inject_send(175);
+              std::system("sleep 0.3");
               { bool got = false;
                 QFile lf(QStringLiteral("/tmp/fkd2.log"));
-                if (lf.open(QIODevice::ReadOnly)) { got = lf.readAll().contains("inject"); lf.close(); }
+                if (lf.open(QIODevice::ReadOnly)) { const QString all = lf.readAll(); got = all.contains("\"ms\":175"); lf.close(); }
                 if (!got) { std::printf("clicktest FAIL: inject not received\n"); ++gfail; } }
+              f_daemon();
+              if (!pathlbl->text().contains("3 rules")) { std::printf("clicktest FAIL: reconnect failed\n"); ++gfail; }
+              if (!pathlbl->text().contains("pressed")) { std::printf("clicktest FAIL: press burst not drained\n"); ++gfail; }
               std::system("pkill -x fakekd >/dev/null 2>&1");
               g_up->run_now();
               if (g_up->status_text().isEmpty()) { std::printf("clicktest FAIL: upload status empty\n"); ++gfail; }
