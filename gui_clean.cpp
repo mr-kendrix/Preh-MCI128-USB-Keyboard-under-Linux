@@ -77,6 +77,7 @@ static QIcon mkicon(const char *kind)
     else if (k == "x") { pt.drawLine(8, 8, 24, 24); pt.drawLine(24, 8, 8, 24); }
     else if (k == "copy") { pt.drawRect(8, 8, 10, 14); pt.drawRect(14, 12, 10, 14); }
     else if (k == "trash") { pt.drawRect(10, 10, 12, 16); pt.drawLine(8, 8, 24, 8); }
+    else if (k == "up") { pt.drawLine(16, 26, 16, 8); pt.drawLine(16, 8, 10, 14); pt.drawLine(16, 8, 22, 14); pt.drawLine(8, 28, 24, 28); }
     else if (k == "gear") { pt.drawEllipse(16, 16, 10, 10); pt.drawEllipse(16, 16, 3, 3); }
     else if (k == "pencil") { pt.drawLine(8, 24, 24, 8); }
     else if (k == "doc") { pt.drawRect(9, 7, 14, 18); pt.drawLine(12, 12, 20, 12); pt.drawLine(12, 17, 20, 17); }
@@ -369,6 +370,7 @@ int main(int argc, char **argv)
     {   auto mkctx = [&](const QString &t, std::function<void()> fn) {
             QAction *a = new QAction(t, g_ctx_menu);
             a->setObjectName(QStringLiteral("ctx:") + t);
+            g_ctx_menu->addAction(a);
             a->connect(a, &QAction::triggered, [fn]{ if (fn) fn(); });
         };
         auto eEdit = [&]{ if (g_openDlg && g_ctx_pk >= 0) g_openDlg(g_ctx_pk); };
@@ -830,6 +832,7 @@ int main(int argc, char **argv)
     auto mk_item = [&](QMenu *mnu, const QString &txt, const std::function<void()> &fn) {
         QAction *a = new QAction(txt, mnu);
         a->setObjectName(QStringLiteral("menu:") + txt);
+        mnu->addAction(a);
         QObject::connect(a, &QAction::triggered, [fn]{ if (fn) fn(); });
     };
     load_recent();
@@ -1211,5 +1214,6 @@ int main(int argc, char **argv)
             std::printf("dlg gate done\n");
         }
     }
+    if (!shot && !hard && !dlgategate) return app.exec();   // real run: event loop
     return gfail ? 1 : 0;
 }
