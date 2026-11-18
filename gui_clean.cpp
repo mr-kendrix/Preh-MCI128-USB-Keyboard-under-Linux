@@ -237,13 +237,14 @@ int main(int argc, char **argv)
         if (QString(argv[i]) == "--legacy-gui")
             return gui_legacy_main(argc - 1, argv + 1);
 
-    bool shot = false, hard = false, dlgategate = false, dbg = false;
+    bool shot = false, hard = false, dlgategate = false, olastgate = false, dbg = false;
     QString path;
     for (int i = 1; i < argc; ++i) {
         const QString a = argv[i];
         if (a == "--shot") shot = true;
         else if (a == "--layout-hard") hard = true;
         else if (a == "--dlg-gate") dlgategate = true;
+        else if (a == "--openlast-gate") olastgate = true;
         else if (a == "--debug") dbg = true;
         else if (!a.startsWith("--")) path = a;
     }
@@ -870,6 +871,7 @@ int main(int argc, char **argv)
     };
     load_recent();
     if (!path.isEmpty()) push_recent(path);
+    if (st.openlast && path.isEmpty() && !g_recent.isEmpty()) do_open_file(g_recent.first());  // settings have effect
     auto f_openfile = [&]() { if (!g_recent.isEmpty()) do_open_file(g_recent.first()); };
     auto f_closefile = [&]() { g_snap.clear(); g_recent.removeAll(path); if (path.isEmpty()) win.close(); };
         auto f_swap = [&]() {
@@ -1263,6 +1265,11 @@ int main(int argc, char **argv)
             cbDetect->setChecked(true); cbStart->setChecked(true);
             std::printf("dlg gate done\n");
         }
+    }
+    if (olastgate) {
+        if (path.isEmpty()) { std::printf("openlast FAIL: no file opened\n"); return 2; }
+        std::printf("openlast ok: %s\n", path.toUtf8().constData());
+        return 0;
     }
     if (!shot && !hard && !dlgategate) return app.exec();   // real run: event loop
     return gfail ? 1 : 0;
