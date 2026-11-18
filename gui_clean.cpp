@@ -392,14 +392,19 @@ int main(int argc, char **argv)
     QPushButton *winBtn = new QPushButton(dproc); winBtn->setObjectName("winprobe");
     dpv->addWidget(winW); dpv->addWidget(procPick); dpv->addWidget(winBtn);
 
+    static int pk_cur = -1;                      // key of the open dialog
+    static QVector<Layer> g_layers;              // view of the open dialog's layers
+    static QStringList g_deps;                   // parallel: dependency per layer
     auto dlg_refresh = [&](int pk) {
         int cur = 0;
         for (const Map &mm : pm.maps) if (mm.poskey == pk) cur = mm.layers.size();
         dlgTitle->setText(QStringLiteral("POSKEY %1 - layers (%2):").arg(pk).arg(cur));
         QStringList rows;
+        g_layers.clear(); g_deps.clear();
         for (const Map &mm : pm.maps) if (mm.poskey == pk)
             for (int i = 0; i < mm.layers.size(); ++i) {
                 const Layer &l = mm.layers[i];
+                g_layers << l; g_deps << l.dependency;
                 QString row = l.dependency.isEmpty()
                     ? QStringLiteral("Always '%1'").arg(l.value)
                     : QStringLiteral("%1 DEP=%2").arg(l.dependency).arg(l.value);
@@ -422,6 +427,7 @@ int main(int argc, char **argv)
     };
     auto open_dialog = [&](int pk) {
         g_pending_pk = pk;
+        pk_cur = pk;
         bool has = false;
         for (const Map &mm : pm.maps) if (mm.poskey == pk && !mm.layers.isEmpty()) has = true;
         if (!has) {
@@ -448,6 +454,23 @@ int main(int argc, char **argv)
         dlg_refresh(pk);
     };
     knNext->connect(knNext, &QPushButton::clicked, [&]() { f_knnext(); });
+    static QString g_copy;                       // vendor: copy still pending
+    static int g_row_hint = -1;                  // gate: explicit layer index
+    auto f_copy = [&]() { const int i = layerW->currentRow();
+        if (i >= 0 && i < g_layers.size()) g_copy = g_layers[i].value; };
+    auto f_rename = [&]() { const int i = (g_row_hint >= 0 ? g_row_hint : layerW->currentRow());
+        if (pk_cur >= 0 && i >= 0) for (Map &mm : pm.maps) if (mm.poskey == pk_cur && i < mm.layers.size()) { mm.layers[i].value = edit->text(); break; }
+        dlg_refresh(pk_cur); };
+    auto f_delete = [&]() { const int i = (g_row_hint >= 0 ? g_row_hint : layerW->currentRow());
+        if (pk_cur >= 0 && i >= 0) for (Map &mm : pm.maps) if (mm.poskey == pk_cur && i < mm.layers.size()) { mm.layers.remove(i); break; }
+        dlg_refresh(pk_cur); };
+    auto f_addlayer = [&]() { if (pk_cur < 0) return; Layer nl; nl.value = edit->text();
+        for (Map &mm : pm.maps) if (mm.poskey == pk_cur) { mm.layers << nl; break; }
+        dlg_refresh(pk_cur); };
+    addbtn->connect(addbtn, &QToolButton::clicked, [&]() { f_addlayer(); });
+    renbtn->connect(renbtn, &QToolButton::clicked, [&]() { f_rename(); });
+    delbtn->connect(delbtn, &QToolButton::clicked, [&]() { f_delete(); });
+    cpybtn->connect(cpybtn, &QToolButton::clicked, [&]() { f_copy(); });
     auto f_settings = [&]() {
         st.datefmt = dateCombo->currentText();
         st.lang = langEn->isChecked() ? 0 : 1;
@@ -539,6 +562,32 @@ int main(int argc, char **argv)
             spinl->setValue(1);
             dlg_refresh(pk);
             if (!renbtn->isHidden() || !delbtn->isHidden()) { std::printf("clicktest FAIL: Always guard broken\n"); ++gfail; }
+            {   // vendor: rename a dependency layer works when spin > 1
+                for (Map &mm : pm.maps) if (mm.poskey == pk && mm.layers.size() > 1) break;
+                // ensure a dependency layer exists: add one via the question flow again
+                g_pending_pk = pk;
+                knProc->setChecked(true);
+                procFld->setText(QStringLiteral("Notepad"));
+                f_knnext();
+                dlg_refresh(pk);
+                if (!g_layers.isEmpty()) layerW->setCurrentRow(g_layers.size() - 1);
+                const int row = qBound(0, layerW->currentRow(), g_layers.size() - 1);
+                if (g_layers.isEmpty()) { std::printf("clicktest FAIL: no layers\\n"); ++gfail; }
+                else {
+                const QString before = g_layers[row].value;
+                Q_UNUSED(before);
+                edit->setText(QStringLiteral("Renamed"));
+                g_row_hint = row;
+                f_rename();
+
+                if (g_layers.isEmpty() || g_layers[qBound(0, row, g_layers.size() - 1)].value != QStringLiteral("Renamed")) { std::printf("clicktest FAIL: rename not applied\n"); ++gfail; }
+                Q_UNUSED(before);
+                g_row_hint = row;
+                f_delete();
+                dlg_refresh(pk);
+                if (layerW->count() != g_layers.size()) { std::printf("clicktest FAIL: delete not mirrored\n"); ++gfail; }
+                }
+            }
             f_winprobe();
             if (winW->count() < 1) { std::printf("clicktest FAIL: window list empty\n"); ++gfail; }
             st.datefmt = QStringLiteral("YYYY-MM-DD");
