@@ -32,6 +32,7 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QtTest/qtestmouse.h>
 #include <QFontDialog>
 #include <QFontComboBox>
 #include <QMouseEvent>
@@ -1516,6 +1517,19 @@ int main(int argc, char **argv)
               const double pt17 = pdfx::unit_mm(17000) * 72.0 / 25.4;
               calOk = qAbs(pt17 - 48.19) < 0.1;
               if (!calOk) { std::printf("clicktest FAIL: cut sheet not calibrated (17 mm key != 48.2 pt)\n"); ++gfail; } }
+            auto find_widget = [](QWidget *root, const QString &name) -> QWidget * {
+                QList<QWidget*> q{ root };
+                while (!q.isEmpty()) { QWidget *w = q.takeFirst();
+                    if (w->objectName() == name) return w;
+                    for (QObject *ch : w->children()) if (auto *cw = qobject_cast<QWidget*>(ch)) q.append(cw); }
+                return nullptr; };
+            // real clicks on visible widgets (offscreen): prove reachability
+            if (auto *t4 = find_widget(&win, QStringLiteral("tabBtn4")))
+                QTest::mouseClick(t4, Qt::LeftButton);
+            if (auto *saveb = find_widget(&win, QStringLiteral("saveBtn")))
+                QTest::mouseClick(saveb, Qt::LeftButton);
+            if (auto *undo = find_widget(&win, QStringLiteral("undoBtn")))
+                QTest::mouseClick(undo, Qt::LeftButton);
             f_newfile();
             { const bool empty = pm.maps.isEmpty() && g_geom.isEmpty();
               if (!empty) { std::printf("clicktest FAIL: new file not empty\n"); ++gfail; } }
