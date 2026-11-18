@@ -330,6 +330,7 @@ int main(int argc, char **argv)
     g_ribmoddel = add_rib(3, "rib_moddel", "trash");
     add_rib(4, "rib_settings", "gear");
     add_rib(5, "rib_about", "doc");
+    static std::function<void()> g_openSettingsTab;   // set later to f_settings
     { const char *tic[5] = { "doc", "copy", "plus", "gear", "doc" };
       for (int t = 0; t < 5; ++t) {
           QToolButton *tb = new QToolButton(tabstrip);
@@ -340,7 +341,7 @@ int main(int argc, char **argv)
           tl->setObjectName(QStringLiteral("tabLbl%1").arg(t + 1));
           tl->setText(QString::fromLatin1(caps[t]));
           th->addWidget(tb); th->addWidget(tl);
-          tb->connect(tb, &QToolButton::clicked, [t, &rib_sync]{ g_tab = t + 1; rib_sync(); });
+          tb->connect(tb, &QToolButton::clicked, [t, &rib_sync]{ g_tab = t + 1; rib_sync(); if (g_openSettingsTab && t == 3) g_openSettingsTab(); });
       } }
     rib_sync();
     vwin->insertWidget(2, ribbon);
@@ -1015,7 +1016,8 @@ int main(int argc, char **argv)
         st.datefmt = dateCombo->currentText();
         st.lang = langEn->isChecked() ? 0 : 1;
         dateLbl->setText(QStringLiteral("Date format: %1").arg(st.datefmt));
-        setdlg->setGeometry(QRect(6, 6, qMin(420, win.width() - 12), 320));
+        setdlg->setGeometry(QRect(6, ribbon->geometry().bottom() + 4, qMin(420, win.width() - 12),
+                                 qMin(420, win.height() - ribbon->geometry().bottom() - 16)));
         setdlg->show();
     };
     for (QObject *ch : ribgrp[3]->children()) {
@@ -1023,6 +1025,7 @@ int main(int argc, char **argv)
         if (b && b->objectName() == QStringLiteral("rib_settings"))
             b->connect(b, &QToolButton::clicked, [&]() { f_settings(); });
     }
+    g_openSettingsTab = f_settings;
     if (fmenus[3]) {
         mk_item(fmenus[3], QStringLiteral("Settings …"), [&]{ f_settings(); });
         mk_item(fmenus[3], QStringLiteral("Upload"), [&]{ if (g_up) { g_up->run_now(); uplbl->setText(g_up->status_text()); } });
