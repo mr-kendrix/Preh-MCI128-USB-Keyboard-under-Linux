@@ -31,6 +31,7 @@
 #include <QListWidget>
 #include <QMenu>
 #include <QMenuBar>
+#include <QStyleHints>
 #include <QMessageBox>
 #include <QtTest/qtestmouse.h>
 #include <QFontDialog>
@@ -289,6 +290,7 @@ int main(int argc, char **argv)
     win.setObjectName("win");
     win.resize(1100, 640);
     win.setStyleSheet("#win{background-color:#eceef2;}");
+    if (auto *sh = QGuiApplication::styleHints()) sh->setColorScheme(Qt::ColorScheme::Light);   // fork 6.12 API: menus/dialogs render light even on a dark desktop
     QVBoxLayout *vwin = new QVBoxLayout(&win);
 
     QMenuBar *menu = new QMenuBar(&win);
@@ -1535,6 +1537,8 @@ int main(int argc, char **argv)
             f_newfile();
             { const bool empty = pm.maps.isEmpty() && g_geom.isEmpty();
               if (!empty) { std::printf("clicktest FAIL: new file not empty\n"); ++gfail; } }
+            // NOTE: QStyleHints::colorScheme() getter returns the PLATFORM value also after setColorScheme in this fork (probed) —
+            //       the setter affects native-control rendering only, so no runtime assert here; API call is compile-proven.
             if (paired != 9) { std::printf("clicktest FAIL: ribbon actions not paired (%d/9)\n", paired); ++gfail; }
             std::printf("dlg gate done\n");
         }
