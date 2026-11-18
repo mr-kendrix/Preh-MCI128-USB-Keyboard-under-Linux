@@ -365,6 +365,9 @@ int main(int argc, char **argv)
     QPushButton *delbtn = new QPushButton(dlg); delbtn->setObjectName("delbtn");
     QPushButton *renbtn = new QPushButton(dlg); renbtn->setObjectName("renbtn");
     QPushButton *cpybtn = new QPushButton(dlg); cpybtn->setObjectName("cpybtn");
+    QPushButton *delKeyBtn = new QPushButton(dlg); delKeyBtn->setObjectName("delKeyBtn");
+    QPushButton *cancelBtn = new QPushButton(dlg); cancelBtn->setObjectName("cancelBtn");
+    QPushButton *saveBtn  = new QPushButton(dlg); saveBtn->setObjectName("saveBtn");
     QSpinBox *spinl = new QSpinBox(dlg); spinl->setObjectName("spinl");
     // vendor §5 right column: Appearance (Key/Caption color, caption, font) + Function radios
     QLineEdit *capFld = new QLineEdit(dlg); capFld->setObjectName("capFld");
@@ -380,6 +383,7 @@ int main(int argc, char **argv)
     dlv->addWidget(appearLbl);
     dlv->addWidget(capFld); dlv->addWidget(forePick); dlv->addWidget(backPick);
     dlv->addWidget(fnNone); dlv->addWidget(fnText); dlv->addWidget(fnApp); dlv->addWidget(fnWeb);
+    dlv->addWidget(delKeyBtn); dlv->addWidget(cancelBtn); dlv->addWidget(saveBtn);
     dlv->addWidget(spinl);
 
     QWidget *knewdlg = new QWidget(&win);
@@ -404,6 +408,7 @@ int main(int argc, char **argv)
     QPushButton *winBtn = new QPushButton(dproc); winBtn->setObjectName("winprobe");
     dpv->addWidget(winW); dpv->addWidget(procPick); dpv->addWidget(winBtn);
 
+    static QVector<Map> g_snap;                   // snapshot for Cancel
     static int pk_cur = -1;                      // key of the open dialog
     static QVector<Layer> g_layers;              // view of the open dialog's layers
     static QStringList g_deps;                   // parallel: dependency per layer
@@ -440,6 +445,7 @@ int main(int argc, char **argv)
     auto open_dialog = [&](int pk) {
         g_pending_pk = pk;
         pk_cur = pk;
+        g_snap = pm.maps;
         bool has = false;
         for (const Map &mm : pm.maps) if (mm.poskey == pk && !mm.layers.isEmpty()) has = true;
         if (!has) {
@@ -504,7 +510,20 @@ int main(int argc, char **argv)
     fnApp->connect(fnApp, &QRadioButton::clicked, [&]() { f_settype(QStringLiteral("APPLICATION")); });
     fnWeb->connect(fnWeb, &QRadioButton::clicked, [&]() { f_settype(QStringLiteral("WEBSITE")); });
     auto f_app_appear = [&]() { f_appear(); };
+    auto f_delkey = [&]() { for (int i = pm.maps.size() - 1; i >= 0; --i) if (pm.maps[i].poskey == pk_cur) pm.maps.remove(i);
+        dlg->hide(); };
+    auto f_cancel = [&]() { pm.maps = g_snap; dlg_refresh(pk_cur); };
+    auto f_save = [&]() {
+        const QString txt = serialize_pmap(pm);
+        QFile f(path);
+        if (f.open(QIODevice::WriteOnly)) { f.write(txt.toUtf8()); f.close(); }
+        else { std::printf("dlg FAIL: save open %s\n", path.toUtf8().constData()); }
+    };
     auto f_app_applytype = [&]() { f_applytype(); };
+    delKeyBtn->connect(delKeyBtn, &QPushButton::clicked, [&]() { f_delkey(); });
+    cancelBtn->connect(cancelBtn, &QPushButton::clicked, [&]() { f_cancel(); });
+    saveBtn->connect(saveBtn, &QPushButton::clicked, [&]() { f_save(); });
+
     auto f_settings = [&]() {
         st.datefmt = dateCombo->currentText();
         st.lang = langEn->isChecked() ? 0 : 1;
@@ -636,6 +655,25 @@ int main(int argc, char **argv)
                 for (const Map &mm : pm.maps) if (mm.poskey == pk) { webOk = (!mm.layers.isEmpty() && mm.layers.last().type == QStringLiteral("WEBSITE")); break; }
                 if (!webOk) { std::printf("clicktest FAIL: web layer type not stored\n"); ++gfail; }
                 g_newtype.clear();
+                // footer: Delete-all removes the key, Cancel restores the snapshot, Save round-trips
+                bool found = false;
+                for (const Map &mm : pm.maps) if (mm.poskey == pk) found = true;
+                if (!found) { std::printf("clicktest FAIL: key already gone\n"); ++gfail; }
+                pk_cur = pk;
+                f_delkey();
+                bool still = false;
+                for (const Map &mm : pm.maps) if (mm.poskey == pk) still = true;
+                if (still) { std::printf("clicktest FAIL: delete-all not removing\n"); ++gfail; }
+                f_cancel();
+                { bool same = (pm.maps.size() == g_snap.size());
+                  for (int q = 0; q < pm.maps.size() && same; ++q) same = (pm.maps[q].poskey == g_snap[q].poskey && pm.maps[q].layers.size() == g_snap[q].layers.size());
+                  if (!same) { std::printf("clicktest FAIL: cancel not restoring\n"); ++gfail; } }
+                f_save();
+                { QFile vf(path);
+                  if (!vf.open(QIODevice::ReadOnly)) { std::printf("clicktest FAIL: saved file unreadable\n"); ++gfail; }
+                  else { const Pmap bk = parse_pmap(vf.readAll()); vf.close();
+                         if (bk.maps.size() != pm.maps.size()) { std::printf("clicktest FAIL: save roundtrip count differs\n"); ++gfail; } }
+                }
                 }
             }
             f_winprobe();
