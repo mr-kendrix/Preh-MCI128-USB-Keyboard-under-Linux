@@ -307,8 +307,11 @@ int main(int argc, char **argv)
     sidebar->setMaximumWidth(260);
     static QString undoDir;                      // undo/<timestamp>.pmap copies
     static int g_undo_seq = 0;                   // same-second saves stay distinct
+    static QString recentFile;                   // recent list persisted here
+    static QStringList g_recent;                 // newest first, max 8
     g_pm = &pm;
     undoDir = QDir(QDir::homePath()).filePath(QStringLiteral(".local/share/pkteditor/undo"));
+    recentFile = QDir(QDir::homePath()).filePath(QStringLiteral(".local/share/pkteditor/recent.txt"));
     QVBoxLayout *sv = new QVBoxLayout(sidebar);
     QLabel *logo = new QLabel(sidebar);
     logo->setObjectName("logo");
@@ -664,15 +667,50 @@ int main(int argc, char **argv)
         rdlg->show();
     };
     auto f_close_restore = [&]() { rdlg->hide(); };
+    auto load_recent = [&]() {
+        QFile rf(recentFile);
+        if (rf.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            g_recent.clear();
+            while (!rf.atEnd()) { const QString l = QString::fromUtf8(rf.readLine()).trimmed(); if (!l.isEmpty()) g_recent << l; }
+            rf.close();
+        }
+    };
+    auto save_recent = [&]() {
+        QFile rf(recentFile);
+        if (!rf.open(QIODevice::WriteOnly | QIODevice::Text)) return;
+        for (int i = 0; i < g_recent.size() && i < 8; ++i) rf.write((g_recent[i] + "\n").toUtf8());
+        rf.close();
+    };
+    auto push_recent = [&](const QString &p) {
+        g_recent.removeAll(p);
+        g_recent.prepend(p);
+        save_recent();
+    };
+    auto do_open_file = [&](const QString &p) {
+        QFile of(p);
+        if (!of.open(QIODevice::ReadOnly)) return;
+        pm = parse_pmap(of.readAll()); of.close();
+        path = p;
+        g_pm = &pm;
+        pathlbl->setText(path);
+        grid->relayout();
+    };
     auto f_undo2 = [&]() { f_undo(); };
     auto mk_item = [&](QMenu *mnu, const QString &txt, const std::function<void()> &fn) {
         QAction *a = new QAction(txt, mnu);
         a->setObjectName(QStringLiteral("menu:") + txt);
         QObject::connect(a, &QAction::triggered, [fn]{ if (fn) fn(); });
     };
+    load_recent();
+    if (!path.isEmpty()) push_recent(path);
     if (fmenus[0]) {
         mk_item(fmenus[0], QStringLiteral("Restore"), [&]{ f_openrestore(); });
         mk_item(fmenus[0], QStringLiteral("Close"), [&]{ if (dlg) dlg->hide(); });
+        for (const QString &rp : g_recent) {
+            const QString disp = rp.section(QChar('/'), -1);
+            const QString actual = rp;
+            mk_item(fmenus[0], disp, [&]{ do_open_file(actual); });
+        }
     }
     if (fmenus[1]) {
         mk_item(fmenus[1], QStringLiteral("Undo"), [&]{ f_undo2(); });
@@ -902,6 +940,13 @@ int main(int argc, char **argv)
                   QFile tf(path); QByteArray now; if (tf.open(QIODevice::ReadOnly)) { now = tf.readAll(); tf.close(); }
                   if (want != now) { std::printf("clicktest FAIL: restore content mismatch\n"); ++gfail; } }
                 f_close_restore();
+                { int qacts = 0;
+                  for (QObject *ch : fmenus[0]->children()) if (qobject_cast<QAction *>(ch)) ++qacts;
+                  if (qacts < 3) { std::printf("clicktest FAIL: File menu items %d < 3\n", qacts); ++gfail; }
+                  QFile rf(recentFile); bool hasP = false;
+                  if (rf.open(QIODevice::ReadOnly)) { hasP = rf.readAll().contains(path.toUtf8()); rf.close(); }
+                  if (!hasP) { std::printf("clicktest FAIL: recent list lacks current file\n"); ++gfail; }
+                }
             f_winprobe();
             if (winW->count() < 1) { std::printf("clicktest FAIL: window list empty\n"); ++gfail; }
             {   // process selection recolors tiles
