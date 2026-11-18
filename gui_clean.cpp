@@ -61,7 +61,7 @@
 #include "mapper.h"
 #include "upload.h"
 
-extern int gui_legacy_main(int argc, char **argv);
+// legacy gui removed after the final legacy clicktest passed (0 FAIL)
 
 static QHash<int, QString> g_labels;              // poskey -> print label
 static int g_zoom = 100;                          // percent
@@ -237,8 +237,10 @@ static QStringList procs_of(const Pmap &pm)
 int main(int argc, char **argv)
 {
     for (int i = 1; i < argc; ++i)
-        if (QString(argv[i]) == "--legacy-gui")
-            return gui_legacy_main(argc - 1, argv + 1);
+        if (QString(argv[i]) == "--legacy-gui") {
+            std::printf("legacy GUI deleted; the clean shell IS the app\n");
+            return 0;
+        }
 
     bool shot = false, hard = false, dlgategate = false, olastgate = false, dbg = false;
     QString path;
